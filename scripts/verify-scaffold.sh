@@ -21,27 +21,26 @@ section "Project Structure"
 
 # Core files
 for f in pyproject.toml README.md LICENSE CHANGELOG.md CONTRIBUTING.md \
-         CODE_OF_CONDUCT.md .gitignore .envrc .env.example \
-         .copier-answers.yml .markdownlint.yaml .pre-commit-config.yaml \
-         mkdocs.yml main.py; do
+         CODE_OF_CONDUCT.md SECURITY.md .gitignore .envrc .env.example \
+         .copier-answers.yml .pre-commit-config.yaml .editorconfig \
+         .markdownlint.yaml .lychee.toml mkdocs.yml; do
     if [[ -f "$f" ]]; then pass "$f exists"; else fail "$f missing"; fi
 done
 
+# Read copier answers for conditional checks
+project_type=$(grep 'project_type' .copier-answers.yml 2>/dev/null | sed 's/.*: *//' || echo "unknown")
+repo_provider=$(grep 'repository_provider' .copier-answers.yml 2>/dev/null | sed 's/.*: *//' || echo "github.com")
+
+# App entry point (only for app project type)
+if [[ "$project_type" == "app" ]]; then
+    if [[ -f "main.py" ]]; then pass "main.py exists (app entry point)"; else fail "main.py missing"; fi
+fi
+
 # Source package
-pkg_name=$(grep '^name' pyproject.toml | head -1 | sed 's/.*"\(.*\)".*/\1/')
+pkg_name=$(grep '^name' pyproject.toml | head -1 | sed 's/.*"\(.*\)".*/\1/' | tr '-' '_')
 if [[ -d "src/$pkg_name" ]]; then pass "src/$pkg_name/ package dir exists"; else fail "src/$pkg_name/ missing"; fi
 if [[ -f "src/$pkg_name/__init__.py" ]]; then pass "__init__.py exists"; else fail "__init__.py missing"; fi
 if [[ -f "src/$pkg_name/py.typed" ]]; then pass "py.typed marker exists"; else fail "py.typed missing"; fi
-
-# App entry point
-project_type=$(grep 'project_type' .copier-answers.yml 2>/dev/null | sed 's/.*: *//' || echo "unknown")
-if [[ "$project_type" == "app" ]]; then
-    if [[ -f "src/$pkg_name/__main__.py" ]]; then
-        pass "__main__.py exists (python -m $pkg_name support)"
-    else
-        fail "__main__.py missing — app project should support 'python -m $pkg_name'"
-    fi
-fi
 
 # Tests
 if [[ -f "tests/__init__.py" ]]; then pass "tests/__init__.py exists"; else fail "tests/__init__.py missing"; fi
@@ -53,19 +52,18 @@ for f in docs/index.md docs/changelog.md docs/contributing.md docs/license.md \
     if [[ -f "$f" ]]; then pass "$f exists"; else fail "$f missing"; fi
 done
 
-# Scripts
-if [[ -f "scripts/reset-and-adopt.sh" ]]; then pass "reset-and-adopt.sh exists"; else fail "reset-and-adopt.sh missing"; fi
-
-# GitHub
-for f in .github/workflows/ci.yml .github/workflows/release.yml \
-         .github/workflows/copier-update.yml .github/dependabot.yml \
-         .github/FUNDING.yml .github/actionlint.yaml; do
-    if [[ -f "$f" ]]; then pass "$f exists"; else fail "$f missing"; fi
-done
-
-if [[ -d ".github/ISSUE_TEMPLATE" ]]; then pass "Issue templates dir exists"; else fail "Issue templates missing"; fi
-if [[ -f ".github/pull_request_template.md" ]]; then pass "PR template exists"; else fail "PR template missing — .github/pull_request_template.md"; fi
-if [[ -f ".editorconfig" ]]; then pass ".editorconfig exists"; else fail ".editorconfig missing — universal editor settings"; fi
+# Provider-specific files
+if [[ "$repo_provider" == "github.com" ]]; then
+    for f in .github/workflows/ci.yml .github/workflows/release.yml \
+             .github/workflows/copier-update.yml .github/dependabot.yml \
+             .github/FUNDING.yml .github/actionlint.yaml; do
+        if [[ -f "$f" ]]; then pass "$f exists"; else fail "$f missing"; fi
+    done
+    if [[ -d ".github/ISSUE_TEMPLATE" ]]; then pass "Issue templates dir exists"; else fail "Issue templates missing"; fi
+    if [[ -f ".github/pull_request_template.md" ]]; then pass "PR template exists"; else fail "PR template missing"; fi
+elif [[ "$repo_provider" == "gitlab.com" ]]; then
+    if [[ -f ".gitlab-ci.yml" ]]; then pass ".gitlab-ci.yml exists"; else fail ".gitlab-ci.yml missing"; fi
+fi
 
 # ---------------------------------------------------------------------------
 section "Security"
@@ -173,7 +171,7 @@ section "Pre-commit Hooks"
 for hook in trailing-whitespace end-of-file-fixer check-yaml check-toml \
             check-json check-added-large-files check-merge-conflict \
             mixed-line-ending detect-private-key gitleaks ruff ruff-format \
-            uv-lock shellcheck actionlint typos markdownlint \
+            uv-lock shellcheck typos markdownlint \
             conventional-pre-commit; do
     if grep -q "$hook" .pre-commit-config.yaml; then
         pass "Hook: $hook"
@@ -181,6 +179,15 @@ for hook in trailing-whitespace end-of-file-fixer check-yaml check-toml \
         fail "Hook missing: $hook"
     fi
 done
+
+# GitHub-only hooks
+if [[ "$repo_provider" == "github.com" ]]; then
+    if grep -q 'actionlint' .pre-commit-config.yaml; then
+        pass "Hook: actionlint"
+    else
+        fail "Hook missing: actionlint"
+    fi
+fi
 
 # Local hooks
 if grep -q 'ty check' .pre-commit-config.yaml; then
@@ -252,7 +259,7 @@ section "Poe Tasks"
 # ---------------------------------------------------------------------------
 
 for task in setup lint format typecheck test test-all test-cov check fix \
-            docs docs-build docs-deploy prek; do
+            docs docs-build prek; do
     if grep -q "^$task " pyproject.toml || grep -q "^$task = " pyproject.toml; then
         pass "Poe task: $task"
     else
@@ -315,10 +322,10 @@ section "Ruff Check (quick)"
 if command -v ruff &>/dev/null || [[ -f ".venv/bin/ruff" ]]; then
     ruff_bin="${VIRTUAL_ENV:-$PWD/.venv}/bin/ruff"
     if [[ ! -x "$ruff_bin" ]]; then ruff_bin="ruff"; fi
-    ruff_errors=$("$ruff_bin" check src tests main.py 2>&1 || true)
-    if [[ -z "$ruff_errors" ]]; then
-        pass "ruff check passes on src/ tests/ main.py"
+    if "$ruff_bin" check src tests &>/dev/null; then
+        pass "ruff check passes on src/ tests/"
     else
+        ruff_errors=$("$ruff_bin" check src tests 2>&1 || true)
         fail "ruff errors found:"
         echo "$ruff_errors" | head -20 | sed 's/^/       /'
     fi
