@@ -1,8 +1,6 @@
-propcom: Show unresolved PR review comments for AI code review workflows
-
-#!/bin/bash
-# Show unresolved PR review comments (e.g., from CodeRabbit)
-# Usage: pr-open-comments [PR_NUMBER]
+#!/usr/bin/env bash
+# propcom: Show unresolved PR review comments for AI code review workflows
+# Usage: propcom [PR_NUMBER]
 
 set -e
 
@@ -14,7 +12,7 @@ get_repo_info() {
         echo "Error: Not in a git repository or no origin remote" >&2
         exit 1
     }
-    
+
     if [[ "$remote_url" =~ github\.com[:/]([^/]+)/([^/.]+)(\.git)?$ ]]; then
         echo "${BASH_REMATCH[1]} ${BASH_REMATCH[2]}"
     else
@@ -27,20 +25,21 @@ get_pr_number() {
     local owner="$1" repo="$2"
     local branch
     branch=$(git branch --show-current 2>/dev/null)
-    
+
     [[ -z "$branch" ]] && { echo "Error: Could not determine current branch" >&2; exit 1; }
-    
+
     local pr_num
     pr_num=$(gh pr list -R "$owner/$repo" --head "$branch" --json number -q '.[0].number' 2>/dev/null)
-    
+
     [[ -z "$pr_num" ]] && { echo "Error: No PR found for branch '$branch'" >&2; exit 1; }
-    
+
     echo "$pr_num"
 }
 
 read -r OWNER REPO <<< "$(get_repo_info)"
 [[ -z "$PR_NUMBER" ]] && PR_NUMBER=$(get_pr_number "$OWNER" "$REPO")
 
+# shellcheck disable=SC2016
 result=$(gh api graphql -f query='
 query($owner: String!, $repo: String!, $pr: Int!) {
   repository(owner: $owner, name: $repo) {
@@ -87,14 +86,14 @@ echo ""
 
 if [[ "$unresolved" -gt 0 ]]; then
     echo "$result" | jq -r '
-.data.repository.pullRequest.reviewThreads.nodes[] 
-| select(.isResolved == false) 
+.data.repository.pullRequest.reviewThreads.nodes[]
+| select(.isResolved == false)
 | "📍 \(.comments.nodes[0].path):\(.comments.nodes[0].line // "?")\n👤 \(.comments.nodes[0].author.login)\n\n\(.comments.nodes[0].body | split("\n")[0:20] | join("\n"))\n\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"'
 fi
 
 if [[ "$review_comments" -gt 0 ]]; then
     echo "$result" | jq -r '
-.data.repository.pullRequest.reviews.nodes[] 
+.data.repository.pullRequest.reviews.nodes[]
 | select(.state == "COMMENTED" and (.body | length) > 0)
 | .body |= (
     # Remove HTML tags

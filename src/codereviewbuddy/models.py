@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime  # noqa: TC003 - Pydantic needs this at runtime
 from enum import StrEnum
+from typing import TypedDict
 
 from pydantic import BaseModel, Field
 
@@ -53,3 +54,10 @@ class StackStatus(BaseModel):
     prs: list[StackPR] = Field(default_factory=list, description="PRs in the stack, bottom to top")
     total_unresolved: int = Field(default=0, description="Total unresolved threads across all PRs")
     stack_tool: str = Field(default="none", description="Stack tool detected (graphite, git-town, none)")
+
+
+class ResolveStaleResult(TypedDict):
+    """Result of bulk-resolving stale review threads."""
+
+    resolved_count: int
+    resolved_thread_ids: list[str]
