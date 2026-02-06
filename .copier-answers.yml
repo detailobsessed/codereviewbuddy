@@ -1,0 +1,18 @@
+# Changes here will be overwritten by Copier.
+_commit: 0.10.0
+_src_path: gh:detailobsessed/copier-uv-bleeding
+author_email: ismart@gmail.com
+author_fullname: Ismar Iljazovic
+author_username: ichoosetoaccept
+copyright_license: ISC
+is_existing_project: false
+project_description: codereview buddy helps your AI agent interact with AI code review--smoothly!
+project_name: codereviewbuddy
+project_type: app
+publish_to_pypi: true
+repository_namespace: detailobsessed
+repository_provider: github.com
+use_blacksmith_runners: true
+use_ci: true
+use_polar: false
+use_semantic_release: true

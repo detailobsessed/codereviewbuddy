@@ -1,0 +1,54 @@
+name: release
+
+"on":
+  workflow_run:
+    workflows: [ci]
+    types: [completed]
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  id-token: write
+
+jobs:
+  release:
+    if: ${{ github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success' }}
+    runs-on: blacksmith-4vcpu-ubuntu-2404
+    concurrency: release
+    environment: pypi
+
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v6
+      with:
+        fetch-depth: 0
+        fetch-tags: true
+
+    - name: Setup uv and Python
+      uses: astral-sh/setup-uv@v7.1.5
+      with:
+        python-version: "3.14"
+        enable-cache: true
+
+    - name: Install dependencies
+      run: uv sync --group maintain
+
+    - name: Semantic Release
+      env:
+        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      run: uv run semantic-release version --changelog --push --tag --vcs-release
+
+    - name: Check if release artifacts exist
+      id: dist
+      shell: bash
+      run: |
+        if compgen -G "dist/*" > /dev/null; then
+          echo "has_dist=true" >> "$GITHUB_OUTPUT"
+        else
+          echo "has_dist=false" >> "$GITHUB_OUTPUT"
+        fi
+
+    - name: Publish to PyPI
+      if: steps.dist.outputs.has_dist == 'true'
+      run: uv publish
