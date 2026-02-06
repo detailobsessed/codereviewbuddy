@@ -33,6 +33,7 @@ This document captures my experience as an AI coding agent (Cascade/Windsurf) wo
 **Problem**: After fixing issues and pushing, Unblocked's old comments remain "unresolved." I cannot programmatically resolve them via the GitHub API without knowing the exact comment node IDs. `propcom` shows comments but doesn't expose their GraphQL node IDs.
 
 **What I need from the MCP server**:
+
 - `resolve_comment(pr_number, comment_id)` — resolve/dismiss a specific review comment
 - `resolve_all_stale(pr_number)` — bulk-resolve comments on lines that have changed since the review
 - `list_comments(pr_number, status="unresolved")` — list with actionable IDs, not just display text
@@ -42,6 +43,7 @@ This document captures my experience as an AI coding agent (Cascade/Windsurf) wo
 **Problem**: Devin auto-re-reviews on push. Unblocked does not — I have to manually leave a PR comment like `@unblocked please re-review`. This is easy to forget and adds a manual step per PR.
 
 **What I need**:
+
 - `request_rereview(pr_number, reviewer="unblocked")` — trigger re-review for a specific AI reviewer
 - Or better: `request_rereview(pr_number)` that knows which reviewers need manual triggering vs which auto-trigger
 
@@ -50,6 +52,7 @@ This document captures my experience as an AI coding agent (Cascade/Windsurf) wo
 **Problem**: Many AI review comments are false positives or apply to stacked PR context (e.g., "this file doesn't exist" when it's added in the next PR up the stack). I spend significant time evaluating each comment's legitimacy.
 
 **What would help**:
+
 - `comment.files_in_pr` — which files the comment references, so I can check if they exist in this PR vs another
 - `comment.is_stale` — whether the commented lines have been modified since the review
 - `comment.reviewer` — which tool generated it (to calibrate trust — Devin tends to be more precise, Unblocked sometimes flags already-fixed issues)
@@ -60,6 +63,7 @@ This document captures my experience as an AI coding agent (Cascade/Windsurf) wo
 **Problem**: I have to manually `gt up` → `propcom` → fix → `gt modify` → repeat for each PR. With 5 PRs in a stack, this is 5 cycles of the same loop.
 
 **What I need**:
+
 - `review_stack()` — fetch all unresolved comments across all PRs in the current stack in one call
 - `stack_status()` — summary showing which PRs have unresolved comments, which are clean, which need re-review
 
@@ -68,6 +72,7 @@ This document captures my experience as an AI coding agent (Cascade/Windsurf) wo
 **Problem**: To minimize/resolve a comment, I need the comment's GraphQL node ID (`minimizeComment` mutation). `propcom` and `gh` CLI don't expose these IDs in an agent-friendly way. I tried and failed to resolve comments programmatically during this session.
 
 **What I need**:
+
 - The MCP server should abstract this entirely. I should never need to know about GraphQL node IDs.
 - Simple: `resolve_comment(pr=66, comment_index=1)` or `resolve_comment(pr=66, file="pyproject.toml.jinja", line=7)`
 
@@ -78,7 +83,7 @@ This document captures my experience as an AI coding agent (Cascade/Windsurf) wo
 ### Core Tools
 
 | Tool | Description |
-|------|-------------|
+| ------ | ------------- |
 | `list_prs` | List open PRs for the current repo (or current stack) |
 | `get_review_comments` | Get all review comments for a PR, with status, reviewer, staleness |
 | `resolve_comment` | Resolve/dismiss a specific comment by ID |
@@ -90,7 +95,7 @@ This document captures my experience as an AI coding agent (Cascade/Windsurf) wo
 ### Nice-to-Have Tools
 
 | Tool | Description |
-|------|-------------|
+| ------ | ------------- |
 | `get_comment_diff_context` | Show the current state of the code a comment references (has it changed?) |
 | `batch_resolve` | Resolve multiple comments at once with a reason |
 | `get_reviewer_config` | Which reviewers are configured, which auto-trigger, which need manual re-review |
@@ -141,6 +146,7 @@ Each comment should include:
 **Recommendation**: Shell out to `gh` CLI for all GitHub API calls rather than managing tokens directly.
 
 **Why this is the best approach**:
+
 - Most developers already have `gh` installed and authenticated (`gh auth login`)
 - No token management, no `.env` files, no secret storage
 - `gh api` supports both REST and GraphQL natively: `gh api graphql -f query='...'`
@@ -148,16 +154,38 @@ Each comment should include:
 - The agent already has `run_command` access — `gh` is the path of least resistance
 
 **What we discovered works**:
+
 ```bash
-# REST: List PR review comments with node IDs
-gh api repos/{owner}/{repo}/pulls/{pr}/comments --jq '.[] | {id: .node_id, user: .user.login, path: .path, body: .body[:80]}'
+# Fetch all unresolved review threads for a PR (with thread IDs for resolution)
+gh api graphql -f query='query {
+  repository(owner: "OWNER", name: "REPO") {
+    pullRequest(number: 66) {
+      reviewThreads(first: 50) {
+        nodes { id isResolved comments(first: 1) { nodes { author { login } body } } }
+      }
+    }
+  }
+}' --jq '.data.repository.pullRequest.reviewThreads.nodes[] | select(.isResolved == false)'
 
-# GraphQL: Minimize (resolve) a comment
-gh api graphql -f query='mutation { minimizeComment(input: {subjectId: "PRRC_kwDO...", classifier: OUTDATED}) { minimizedComment { isMinimized } } }'
+# Resolve review threads (batch multiple in one call using aliases)
+gh api graphql -f query='mutation {
+  a: resolveReviewThread(input: {threadId: "PRRT_kwDO..."}) { thread { isResolved } }
+  b: resolveReviewThread(input: {threadId: "PRRT_kwDO..."}) { thread { isResolved } }
+}'
 
-# REST: Post a PR comment (for re-review triggers)
+# Batch-fetch unresolved threads across multiple PRs in one call
+gh api graphql -f query='query {
+  repository(owner: "OWNER", name: "REPO") {
+    pr66: pullRequest(number: 66) { reviewThreads(first: 50) { nodes { id isResolved ... } } }
+    pr67: pullRequest(number: 67) { reviewThreads(first: 50) { nodes { id isResolved ... } } }
+  }
+}'
+
+# Post a PR comment (for re-review triggers)
 gh pr comment {pr} --repo {owner}/{repo} --body "@unblocked please re-review"
 ```
+
+**Critical distinction**: `minimizeComment` (hides a comment visually) is NOT the same as `resolveReviewThread` (closes the thread). Thread IDs have prefix `PRRT_`, comment IDs have prefix `PRRC_`. The MCP server must use `resolveReviewThread` — that's what actually closes review threads.
 
 **MCP server implementation**: The server should wrap these `gh` calls internally. The agent should never construct raw GraphQL — the MCP tools should accept simple parameters (`pr_number`, `comment_index`) and handle the API details.
 
@@ -188,6 +216,7 @@ MCP Server
 ```
 
 Each reviewer adapter should define:
+
 - `needs_manual_rereview: bool`
 - `auto_resolves_comments: bool`
 - `rereview_trigger(pr_number)` — how to request re-review
@@ -231,3 +260,10 @@ We considered whether Windsurf Skills (`.windsurf/workflows/*.md` files that enc
 - **~5 false positives** (stale comments, stack dependencies, Python 3.10 concern on 3.14+ project)
 - **2 full prreview cycles** through the entire stack
 - **Estimated time on review management vs actual fixes**: ~60% review management, ~40% actual coding
+
+---
+
+## Additional Agent Learnings
+
+- **Always use project-defined task runners** (e.g., `poe`, `make`) instead of raw commands. This catches missing tasks and ensures the agent follows the same workflow as human developers. Example: use `uv run poe test` not `uv run pytest tests/`, use `uv run poe lint-templates` not `uv run python scripts/lint_templates.py`.
+- **`resolveReviewThread` ≠ `minimizeComment`** — Minimizing hides a comment visually but does NOT resolve the review thread. Thread IDs use `PRRT_` prefix; comment IDs use `PRRC_`. The MCP server must use `resolveReviewThread` to properly close threads.
