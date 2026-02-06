@@ -1,0 +1,214 @@
+"""Tests for comment tools."""
+
+from __future__ import annotations
+
+from unittest.mock import patch
+
+import pytest
+
+from codereviewbuddy.gh import GhError
+from codereviewbuddy.tools.comments import (
+    _get_changed_files,
+    _parse_threads,
+    list_review_comments,
+    resolve_comment,
+    resolve_stale_comments,
+)
+
+# ---------------------------------------------------------------------------
+# Fixture data
+# ---------------------------------------------------------------------------
+
+SAMPLE_THREAD_NODE = {
+    "id": "PRRT_kwDOtest123",
+    "isResolved": False,
+    "comments": {
+        "nodes": [
+            {
+                "author": {"login": "unblocked[bot]"},
+                "body": "Consider adding error handling here.",
+                "createdAt": "2026-02-06T10:00:00Z",
+                "path": "src/codereviewbuddy/gh.py",
+                "line": 42,
+            }
+        ]
+    },
+}
+
+SAMPLE_RESOLVED_THREAD = {
+    "id": "PRRT_kwDOresolved",
+    "isResolved": True,
+    "comments": {
+        "nodes": [
+            {
+                "author": {"login": "devin-ai-integration[bot]"},
+                "body": "Looks good now.",
+                "createdAt": "2026-02-06T11:00:00Z",
+                "path": "main.py",
+                "line": 5,
+            }
+        ]
+    },
+}
+
+SAMPLE_GRAPHQL_RESPONSE = {
+    "data": {
+        "repository": {
+            "pullRequest": {
+                "title": "Test PR",
+                "url": "https://github.com/owner/repo/pull/42",
+                "reviewThreads": {"nodes": [SAMPLE_THREAD_NODE, SAMPLE_RESOLVED_THREAD]},
+            }
+        }
+    },
+}
+
+SAMPLE_DIFF_RESPONSE = {
+    "data": {
+        "repository": {
+            "pullRequest": {
+                "files": {
+                    "nodes": [
+                        {"path": "src/codereviewbuddy/gh.py", "additions": 5, "deletions": 2, "changeType": "MODIFIED"},
+                        {"path": "README.md", "additions": 1, "deletions": 0, "changeType": "MODIFIED"},
+                    ]
+                }
+            }
+        }
+    },
+}
+
+
+# ---------------------------------------------------------------------------
+# Tests
+# ---------------------------------------------------------------------------
+
+
+class TestParseThreads:
+    def test_basic_parsing(self):
+        threads = _parse_threads([SAMPLE_THREAD_NODE], pr_number=42)
+        assert len(threads) == 1
+        t = threads[0]
+        assert t.thread_id == "PRRT_kwDOtest123"
+        assert t.pr_number == 42
+        assert t.status == "unresolved"
+        assert t.file == "src/codereviewbuddy/gh.py"
+        assert t.line == 42
+        assert t.reviewer == "unblocked"
+        assert len(t.comments) == 1
+        assert t.comments[0].author == "unblocked[bot]"
+
+    def test_staleness_detection(self):
+        changed = {"src/codereviewbuddy/gh.py"}
+        threads = _parse_threads([SAMPLE_THREAD_NODE], pr_number=42, changed_files=changed)
+        assert threads[0].is_stale is True
+
+    def test_not_stale_when_file_unchanged(self):
+        changed = {"README.md"}
+        threads = _parse_threads([SAMPLE_THREAD_NODE], pr_number=42, changed_files=changed)
+        assert threads[0].is_stale is False
+
+    def test_empty_comments_skipped(self):
+        node = {"id": "PRRT_empty", "isResolved": False, "comments": {"nodes": []}}
+        threads = _parse_threads([node], pr_number=42)
+        assert len(threads) == 0
+
+    def test_resolved_status(self):
+        threads = _parse_threads([SAMPLE_RESOLVED_THREAD], pr_number=42)
+        assert threads[0].status == "resolved"
+        assert threads[0].reviewer == "devin"
+
+
+class TestGetChangedFiles:
+    def test_extracts_paths(self):
+        with patch("codereviewbuddy.tools.comments.gh.graphql", return_value=SAMPLE_DIFF_RESPONSE):
+            files = _get_changed_files("owner", "repo", 42)
+            assert files == {"src/codereviewbuddy/gh.py", "README.md"}
+
+
+class TestListReviewComments:
+    def test_returns_all_threads(self):
+        with (
+            patch("codereviewbuddy.tools.comments.gh.graphql", return_value=SAMPLE_GRAPHQL_RESPONSE),
+            patch("codereviewbuddy.tools.comments.gh.get_repo_info", return_value=("owner", "repo")),
+            patch("codereviewbuddy.tools.comments._get_changed_files", return_value=set()),
+        ):
+            threads = list_review_comments(42)
+            assert len(threads) == 2
+
+    def test_filter_unresolved(self):
+        with (
+            patch("codereviewbuddy.tools.comments.gh.graphql", return_value=SAMPLE_GRAPHQL_RESPONSE),
+            patch("codereviewbuddy.tools.comments.gh.get_repo_info", return_value=("owner", "repo")),
+            patch("codereviewbuddy.tools.comments._get_changed_files", return_value=set()),
+        ):
+            threads = list_review_comments(42, status="unresolved")
+            assert len(threads) == 1
+            assert threads[0].status == "unresolved"
+
+    def test_filter_resolved(self):
+        with (
+            patch("codereviewbuddy.tools.comments.gh.graphql", return_value=SAMPLE_GRAPHQL_RESPONSE),
+            patch("codereviewbuddy.tools.comments.gh.get_repo_info", return_value=("owner", "repo")),
+            patch("codereviewbuddy.tools.comments._get_changed_files", return_value=set()),
+        ):
+            threads = list_review_comments(42, status="resolved")
+            assert len(threads) == 1
+            assert threads[0].status == "resolved"
+
+    def test_explicit_repo(self):
+        with (
+            patch("codereviewbuddy.tools.comments.gh.graphql", return_value=SAMPLE_GRAPHQL_RESPONSE),
+            patch("codereviewbuddy.tools.comments._get_changed_files", return_value=set()),
+        ):
+            threads = list_review_comments(42, repo="myorg/myrepo")
+            assert len(threads) == 2
+
+
+class TestResolveComment:
+    def test_success(self):
+        response = {"data": {"resolveReviewThread": {"thread": {"id": "PRRT_test", "isResolved": True}}}}
+        with patch("codereviewbuddy.tools.comments.gh.graphql", return_value=response):
+            result = resolve_comment(42, "PRRT_test")
+            assert "Resolved" in result
+
+    def test_failure(self):
+        response = {"data": {"resolveReviewThread": {"thread": {"id": "PRRT_test", "isResolved": False}}}}
+        with patch("codereviewbuddy.tools.comments.gh.graphql", return_value=response), pytest.raises(GhError, match="Failed to resolve"):
+            resolve_comment(42, "PRRT_test")
+
+
+class TestResolveStaleComments:
+    def test_resolves_stale(self):
+        stale_thread = SAMPLE_THREAD_NODE.copy()
+
+        graphql_responses = [
+            SAMPLE_GRAPHQL_RESPONSE,  # list_review_comments → threads query
+            SAMPLE_DIFF_RESPONSE,  # list_review_comments → changed files
+            {"data": {"t0": {"thread": {"id": stale_thread["id"], "isResolved": True}}}},  # batch resolve
+        ]
+        call_count = 0
+
+        def mock_graphql(*_args, **_kwargs):
+            nonlocal call_count
+            response = graphql_responses[call_count]
+            call_count += 1
+            return response
+
+        with (
+            patch("codereviewbuddy.tools.comments.gh.graphql", side_effect=mock_graphql),
+            patch("codereviewbuddy.tools.comments.gh.get_repo_info", return_value=("owner", "repo")),
+        ):
+            result = resolve_stale_comments(42)
+            assert result["resolved_count"] == 1
+            assert "PRRT_kwDOtest123" in result["resolved_thread_ids"]
+
+    def test_nothing_to_resolve(self):
+        # No changed files → nothing is stale
+        no_diff = {"data": {"repository": {"pullRequest": {"files": {"nodes": []}}}}}
+        with (
+            patch("codereviewbuddy.tools.comments.gh.graphql", side_effect=[SAMPLE_GRAPHQL_RESPONSE, no_diff]),
+            patch("codereviewbuddy.tools.comments.gh.get_repo_info", return_value=("owner", "repo")),
+        ):
+            result = resolve_stale_comments(42)
+            assert result["resolved_count"] == 0

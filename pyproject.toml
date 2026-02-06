@@ -25,6 +25,7 @@ classifiers = [
     "Typing :: Typed",
 ]
 dependencies = [
+    "fastmcp>=2.14.5",
 ]
 
 [project.urls]
