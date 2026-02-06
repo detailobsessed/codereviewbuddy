@@ -7,11 +7,15 @@ Authentication is handled by the `gh` CLI — no tokens needed.
 from __future__ import annotations
 
 import logging
+from typing import TYPE_CHECKING
 
 from fastmcp import FastMCP
 
 from codereviewbuddy import gh
 from codereviewbuddy.tools import comments, rereview
+
+if TYPE_CHECKING:
+    from codereviewbuddy.models import ResolveStaleResult
 
 logger = logging.getLogger(__name__)
 
@@ -65,7 +69,7 @@ def resolve_comment(
 def resolve_stale_comments(
     pr_number: int,
     repo: str | None = None,
-) -> dict:
+) -> ResolveStaleResult:
     """Bulk-resolve all unresolved threads on files that changed since the review.
 
     Compares each comment's file against the PR's current diff. If the file

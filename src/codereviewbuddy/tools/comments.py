@@ -6,7 +6,7 @@ import logging
 from typing import TYPE_CHECKING
 
 from codereviewbuddy import gh
-from codereviewbuddy.models import CommentStatus, ReviewComment, ReviewThread
+from codereviewbuddy.models import CommentStatus, ResolveStaleResult, ReviewComment, ReviewThread
 from codereviewbuddy.reviewers import identify_reviewer
 
 if TYPE_CHECKING:
@@ -184,7 +184,7 @@ def resolve_stale_comments(
     pr_number: int,
     repo: str | None = None,
     cwd: str | None = None,
-) -> dict[str, int | list[str]]:
+) -> ResolveStaleResult:
     """Bulk-resolve all unresolved threads on lines that changed since the review.
 
     Args:

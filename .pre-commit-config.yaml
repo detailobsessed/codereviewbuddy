@@ -33,13 +33,13 @@ repos:
         priority: 0
 
   - repo: https://github.com/gitleaks/gitleaks
-    rev: ""  # prek autoupdate will fill this
+    rev: "v8.30.0"  # prek autoupdate will fill this
     hooks:
       - id: gitleaks
         priority: 1
 
   - repo: https://github.com/astral-sh/ruff-pre-commit
-    rev: ""  # prek autoupdate will fill this
+    rev: "v0.15.0"  # prek autoupdate will fill this
     hooks:
       - id: ruff
         args: [--fix]
@@ -48,38 +48,38 @@ repos:
         priority: 1
 
   - repo: https://github.com/astral-sh/uv-pre-commit
-    rev: ""  # prek autoupdate will fill this
+    rev: "0.10.0"  # prek autoupdate will fill this
     hooks:
       - id: uv-lock
         priority: 1
 
   - repo: https://github.com/shellcheck-py/shellcheck-py
-    rev: ""  # prek autoupdate will fill this
+    rev: "v0.11.0.1"  # prek autoupdate will fill this
     hooks:
       - id: shellcheck
         priority: 1
 
   - repo: https://github.com/rhysd/actionlint
-    rev: ""  # prek autoupdate will fill this
+    rev: "v1.7.10"  # prek autoupdate will fill this
     hooks:
       - id: actionlint
         priority: 1
 
   - repo: https://github.com/crate-ci/typos
-    rev: ""  # prek autoupdate will fill this
+    rev: "v1.43.3"  # prek autoupdate will fill this
     hooks:
       - id: typos
         priority: 1
 
   - repo: https://github.com/igorshubovych/markdownlint-cli
-    rev: ""  # prek autoupdate will fill this
+    rev: "v0.47.0"  # prek autoupdate will fill this
     hooks:
       - id: markdownlint
         args: ["--fix"]
         priority: 1
 
   - repo: https://github.com/lycheeverse/lychee.git
-    rev: ""  # prek autoupdate will fill this
+    rev: "nightly"  # prek autoupdate will fill this
     hooks:
       - id: lychee
         args: [--config, .lychee.toml]
@@ -113,7 +113,7 @@ repos:
         stages: [pre-push]
 
   - repo: https://github.com/compilerla/conventional-pre-commit
-    rev: ""  # prek autoupdate will fill this
+    rev: "v4.3.0"  # prek autoupdate will fill this
     hooks:
       - id: conventional-pre-commit
         stages: [commit-msg]
