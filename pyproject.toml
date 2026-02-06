@@ -93,6 +93,13 @@ select = [
     "PIE",  # flake8-pie - misc improvements
     "RET",  # flake8-return - return statement issues
     "RUF",  # Ruff-specific rules
+    "FA",   # flake8-future-annotations
+    "ISC",  # flake8-implicit-str-concat - catch missing commas
+    "ICN",  # flake8-import-conventions
+    "TID",  # flake8-tidy-imports - absolute imports
+    "TC",   # flake8-type-checking - TYPE_CHECKING imports
+    "PTH",  # flake8-use-pathlib - prefer pathlib over os.path
+    "FURB", # refurb - modernize and simplify code
 
     # Performance
     "PERF", # Perflint - performance anti-patterns
@@ -120,6 +127,7 @@ select = [
 
 [tool.ruff.lint.per-file-ignores]
 "tests/**" = ["S101"]  # Allow assert in tests
+"tests/__init__.py" = ["RUF067"]  # Allow test constants (TESTS_DIR, FIXTURES_DIR)
 
 [tool.ruff.lint.flake8-pytest-style]
 fixture-parentheses = false
@@ -186,8 +194,8 @@ docs-deploy = "mkdocs gh-deploy"
 # Pre-commit
 prek = "prek run --all-files"
 
-# Template
-reset-and-adopt = "bash scripts/reset-and-adopt.sh"
+# Template dev
+verify-scaffold = "bash scripts/verify-scaffold.sh"
 
 # Git utilities
 tags = "sh -c 'git fetch --tags && git tag --sort=-version:refname'"
