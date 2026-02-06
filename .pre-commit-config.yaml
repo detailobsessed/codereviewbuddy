@@ -79,7 +79,7 @@ repos:
         priority: 1
 
   - repo: https://github.com/lycheeverse/lychee.git
-    rev: "nightly"  # prek autoupdate will fill this
+    rev: "lychee-v0.22.0"
     hooks:
       - id: lychee
         args: [--config, .lychee.toml]
