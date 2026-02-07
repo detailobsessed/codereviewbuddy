@@ -1,3 +1,4 @@
+<!-- mcp-name: io.github.detailobsessed/codereviewbuddy -->
 # codereviewbuddy
 
 [![ci](https://github.com/detailobsessed/codereviewbuddy/workflows/ci/badge.svg)](https://github.com/detailobsessed/codereviewbuddy/actions?query=workflow%3Aci)
