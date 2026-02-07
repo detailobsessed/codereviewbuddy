@@ -65,6 +65,29 @@ def list_review_comments(
 
 
 @mcp.tool
+def list_stack_review_comments(
+    pr_numbers: list[int],
+    repo: str | None = None,
+    status: str | None = None,
+) -> dict[int, list[dict]]:
+    """List review threads for multiple PRs in a stack, grouped by PR number.
+
+    Collapses N tool calls into 1 for the common stacked-PR review workflow.
+    Gives the agent a full picture of the review state before deciding what to fix.
+
+    Args:
+        pr_numbers: List of PR numbers to fetch comments for.
+        repo: Repository in "owner/repo" format. Auto-detected from git remote if not provided.
+        status: Filter by "resolved" or "unresolved". Returns all if not set.
+
+    Returns:
+        Dict mapping each PR number to its list of review threads.
+    """
+    results = comments.list_stack_review_comments(pr_numbers, repo=repo, status=status)
+    return {pr: [t.model_dump(mode="json") for t in threads] for pr, threads in results.items()}
+
+
+@mcp.tool
 def resolve_comment(
     pr_number: int,
     thread_id: str,
