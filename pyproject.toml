@@ -202,18 +202,18 @@ releases = "gh release list --limit 10"
 runs = "gh run list --limit 10"
 watch = "gh run watch"
 
-# Testing — PYTHON_GIL=0 needed for Python 3.14t (lupa/fakeredis GIL compat)
+# Testing — conditionally set PYTHON_GIL=0 only on freethreaded builds (3.14t)
 [tool.poe.tasks.test]
-cmd = "pytest -m 'not slow'"
-env = {PYTHON_GIL = "0"}
+shell = "python -c 'import sys; exit(0 if \"t\" in sys.abiflags else 1)' 2>/dev/null && export PYTHON_GIL=0; pytest -m 'not slow'"
+interpreter = "bash"
 
 [tool.poe.tasks.test-all]
-cmd = "pytest"
-env = {PYTHON_GIL = "0"}
+shell = "python -c 'import sys; exit(0 if \"t\" in sys.abiflags else 1)' 2>/dev/null && export PYTHON_GIL=0; pytest"
+interpreter = "bash"
 
 [tool.poe.tasks.test-cov]
-cmd = "pytest --cov=src --cov-report=term-missing --cov-report=html"
-env = {PYTHON_GIL = "0"}
+shell = "python -c 'import sys; exit(0 if \"t\" in sys.abiflags else 1)' 2>/dev/null && export PYTHON_GIL=0; pytest --cov=src --cov-report=term-missing --cov-report=html"
+interpreter = "bash"
 
 [tool.semantic_release]
 version_toml = ["pyproject.toml:project.version"]

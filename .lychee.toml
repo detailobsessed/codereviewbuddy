@@ -8,8 +8,11 @@ exclude = [
     '^https://pypi\.org/project/my-',
     '^https://codecov\.io/gh/your-',
     '^mailto:',
-    # Private repo — CI badges and actions URLs 404 without auth
-    '^https://github\.com/detailobsessed/codereviewbuddy/(workflows|actions)',
+    # Private repo — various URLs 404 without auth
+    '^https://github\.com/detailobsessed/codereviewbuddy',
+    '^https://detailobsessed\.github\.io/codereviewbuddy',
+    # Local dev server referenced in CONTRIBUTING.md
+    '^http://localhost',
 ]
 
 # Exclude local/private addresses
@@ -27,8 +30,8 @@ timeout = 30
 # Max concurrent requests
 max_concurrency = 16
 
-# Don't check the lychee config file itself (contains regex patterns that look like URLs)
-exclude_path = [".lychee.toml"]
+# Don't check files with fake/test URLs
+exclude_path = [".lychee.toml", "tests/"]
 
 # Don't show progress bar (cleaner CI output)
 no_progress = true
