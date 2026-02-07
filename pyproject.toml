@@ -47,7 +47,6 @@ ci = [
     "pytest>=8",
     "pytest-cov>=6",
     "pytest-randomly>=3.15",
-    "pytest-xdist>=3.5",
     "ty>=0.0.14",
     "poethepoet>=0.32",
 ]
@@ -150,7 +149,6 @@ markers = [
 filterwarnings = [
     "error",
     "error::EncodingWarning",
-    "ignore:.*rsyncdir:DeprecationWarning:xdist",
 ]
 
 [tool.coverage.run]
@@ -205,6 +203,7 @@ tags = "sh -c 'git fetch --tags && git tag --sort=-version:refname'"
 releases = "gh release list --limit 10"
 runs = "gh run list --limit 10"
 watch = "gh run watch"
+
 [tool.semantic_release]
 version_toml = ["pyproject.toml:project.version"]
 branch = "main"
