@@ -60,7 +60,10 @@ SAMPLE_GRAPHQL_RESPONSE = {
             "pullRequest": {
                 "title": "Test PR",
                 "url": "https://github.com/owner/repo/pull/42",
-                "reviewThreads": {"nodes": [SAMPLE_THREAD_NODE, SAMPLE_RESOLVED_THREAD]},
+                "reviewThreads": {
+                    "pageInfo": {"hasNextPage": False, "endCursor": None},
+                    "nodes": [SAMPLE_THREAD_NODE, SAMPLE_RESOLVED_THREAD],
+                },
             }
         }
     },
@@ -71,9 +74,10 @@ SAMPLE_DIFF_RESPONSE = {
         "repository": {
             "pullRequest": {
                 "files": {
+                    "pageInfo": {"hasNextPage": False, "endCursor": None},
                     "nodes": [
                         {"path": "src/codereviewbuddy/gh.py", "additions": 5, "deletions": 2, "changeType": "MODIFIED"},
-                    ]
+                    ],
                 }
             }
         }
@@ -83,13 +87,7 @@ SAMPLE_DIFF_RESPONSE = {
 RESOLVE_SUCCESS = {"data": {"resolveReviewThread": {"thread": {"id": "PRRT_kwDOtest123", "isResolved": True}}}}
 
 REPLY_THREAD_QUERY_RESPONSE = {
-    "data": {
-        "node": {
-            "comments": {
-                "nodes": [{"databaseId": 12345}]
-            }
-        }
-    },
+    "data": {"node": {"comments": {"nodes": [{"databaseId": 12345}]}}},
 }
 
 REPLY_REST_RESPONSE = {"id": 99999, "body": "Fixed!"}

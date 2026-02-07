@@ -35,7 +35,7 @@ jobs:
       uses: lycheeverse/lychee-action@v2
       with:
         fail: true
-        args: --no-progress .
+        args: --no-progress --config .lychee.toml .
 
   quality:
     strategy:
