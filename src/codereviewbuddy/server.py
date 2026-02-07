@@ -4,18 +4,13 @@ Exposes tools for managing AI code review comments on GitHub PRs.
 Authentication is handled by the `gh` CLI — no tokens needed.
 """
 
-from __future__ import annotations
-
 import logging
-from typing import TYPE_CHECKING
 
 from fastmcp import FastMCP
 
 from codereviewbuddy import gh
+from codereviewbuddy.models import ResolveStaleResult  # noqa: TC001 - runtime import needed for FastMCP schema generation
 from codereviewbuddy.tools import comments, rereview
-
-if TYPE_CHECKING:
-    from codereviewbuddy.models import ResolveStaleResult
 
 logger = logging.getLogger(__name__)
 
