@@ -14,14 +14,15 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-# GraphQL query to fetch all review threads for a PR
+# GraphQL query to fetch review threads for a PR (paginated)
 _THREADS_QUERY = """
-query($owner: String!, $repo: String!, $pr: Int!) {
+query($owner: String!, $repo: String!, $pr: Int!, $cursor: String) {
   repository(owner: $owner, name: $repo) {
     pullRequest(number: $pr) {
       title
       url
-      reviewThreads(first: 100) {
+      reviewThreads(first: 100, after: $cursor) {
+        pageInfo { hasNextPage endCursor }
         nodes {
           id
           isResolved
@@ -50,12 +51,13 @@ mutation($threadId: ID!) {
 }
 """
 
-# GraphQL query to get the diff for staleness detection
+# GraphQL query to get the diff for staleness detection (paginated)
 _DIFF_QUERY = """
-query($owner: String!, $repo: String!, $pr: Int!) {
+query($owner: String!, $repo: String!, $pr: Int!, $cursor: String) {
   repository(owner: $owner, name: $repo) {
     pullRequest(number: $pr) {
-      files(first: 100) {
+      files(first: 100, after: $cursor) {
+        pageInfo { hasNextPage endCursor }
         nodes {
           path
           additions
@@ -112,9 +114,26 @@ def _parse_threads(raw_threads: list[dict[str, Any]], pr_number: int, changed_fi
 
 def _get_changed_files(owner: str, repo: str, pr_number: int, cwd: str | None = None) -> set[str]:
     """Get the set of files changed in the latest push of a PR."""
-    result = gh.graphql(_DIFF_QUERY, variables={"owner": owner, "repo": repo, "pr": pr_number}, cwd=cwd)
-    files = result.get("data", {}).get("repository", {}).get("pullRequest", {}).get("files", {}).get("nodes", [])
-    return {f["path"] for f in files if f.get("path")}
+    all_files: list[dict[str, Any]] = []
+    cursor = None
+
+    while True:
+        variables: dict[str, Any] = {"owner": owner, "repo": repo, "pr": pr_number}
+        if cursor:
+            variables["cursor"] = cursor
+
+        result = gh.graphql(_DIFF_QUERY, variables=variables, cwd=cwd)
+        pr_data = result.get("data", {}).get("repository", {}).get("pullRequest") or {}
+        files_data = pr_data.get("files", {})
+        all_files.extend(files_data.get("nodes", []))
+
+        page_info = files_data.get("pageInfo", {})
+        if page_info.get("hasNextPage") and page_info.get("endCursor"):
+            cursor = page_info["endCursor"]
+        else:
+            break
+
+    return {f["path"] for f in all_files if f.get("path")}
 
 
 def list_review_comments(
@@ -139,11 +158,27 @@ def list_review_comments(
     else:
         owner, repo_name = gh.get_repo_info(cwd=cwd)
 
-    # Fetch threads and changed files in parallel-ish (sequential for now)
-    result = gh.graphql(_THREADS_QUERY, variables={"owner": owner, "repo": repo_name, "pr": pr_number}, cwd=cwd)
-    changed_files = _get_changed_files(owner, repo_name, pr_number, cwd=cwd)
+    # Fetch threads (paginated) and changed files
+    raw_threads: list[dict[str, Any]] = []
+    cursor = None
 
-    raw_threads = result.get("data", {}).get("repository", {}).get("pullRequest", {}).get("reviewThreads", {}).get("nodes", [])
+    while True:
+        variables: dict[str, Any] = {"owner": owner, "repo": repo_name, "pr": pr_number}
+        if cursor:
+            variables["cursor"] = cursor
+
+        result = gh.graphql(_THREADS_QUERY, variables=variables, cwd=cwd)
+        pr_data = result.get("data", {}).get("repository", {}).get("pullRequest") or {}
+        threads_data = pr_data.get("reviewThreads", {})
+        raw_threads.extend(threads_data.get("nodes", []))
+
+        page_info = threads_data.get("pageInfo", {})
+        if page_info.get("hasNextPage") and page_info.get("endCursor"):
+            cursor = page_info["endCursor"]
+        else:
+            break
+
+    changed_files = _get_changed_files(owner, repo_name, pr_number, cwd=cwd)
 
     threads = _parse_threads(raw_threads, pr_number, changed_files)
 
