@@ -143,6 +143,12 @@ def request_rereview(
     return rereview.request_rereview(pr_number, reviewer=reviewer, repo=repo)
 
 
+def main() -> None:
+    """Run the codereviewbuddy MCP server."""
+    check_prerequisites()
+    mcp.run()
+
+
 def check_prerequisites() -> None:
     """Verify that gh CLI is installed and authenticated."""
     try:
