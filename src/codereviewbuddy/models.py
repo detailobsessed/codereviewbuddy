@@ -35,6 +35,7 @@ class ReviewThread(BaseModel):
     reviewer: str = Field(description="Which reviewer posted this (e.g. unblocked, devin, coderabbit)")
     comments: list[ReviewComment] = Field(default_factory=list, description="Comments in this thread")
     is_stale: bool = Field(default=False, description="Whether the commented lines changed since review")
+    is_pr_review: bool = Field(default=False, description="True for PR-level reviews (PRR_ IDs) — not resolvable via resolveReviewThread")
 
 
 class StackPR(BaseModel):
