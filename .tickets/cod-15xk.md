@@ -1,6 +1,6 @@
 ---
 id: cod-15xk
-status: in_progress
+status: closed
 deps: []
 links: []
 created: 2026-02-07T00:31:13Z
@@ -12,4 +12,3 @@ tags: [testing, mcp]
 # MCP integration tests with FastMCP Client
 
 Add async integration tests using fastmcp.Client with in-memory transport. Test all 5 tools through the MCP protocol (schema validation, serialization, error handling). Add pytest-asyncio dev dep.
-

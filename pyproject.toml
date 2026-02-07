@@ -179,11 +179,6 @@ lint = "ruff check src tests"
 format = "ruff format src tests"
 typecheck = "ty check src tests"
 
-# Testing
-test = "pytest -m 'not slow'"
-test-all = "pytest"
-test-cov = "pytest --cov=src/codereviewbuddy --cov-report=term-missing --cov-report=html"
-
 # Combined tasks
 check = ["lint", "typecheck"]
 fix = ["lint --fix", "format"]
@@ -206,6 +201,19 @@ tags = "sh -c 'git fetch --tags && git tag --sort=-version:refname'"
 releases = "gh release list --limit 10"
 runs = "gh run list --limit 10"
 watch = "gh run watch"
+
+# Testing — PYTHON_GIL=0 needed for Python 3.14t (lupa/fakeredis GIL compat)
+[tool.poe.tasks.test]
+cmd = "pytest -m 'not slow'"
+env = {PYTHON_GIL = "0"}
+
+[tool.poe.tasks.test-all]
+cmd = "pytest"
+env = {PYTHON_GIL = "0"}
+
+[tool.poe.tasks.test-cov]
+cmd = "pytest --cov=src --cov-report=term-missing --cov-report=html"
+env = {PYTHON_GIL = "0"}
 
 [tool.semantic_release]
 version_toml = ["pyproject.toml:project.version"]
