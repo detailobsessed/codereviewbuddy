@@ -16,10 +16,31 @@ logger = logging.getLogger(__name__)
 
 mcp = FastMCP(
     "codereviewbuddy",
-    instructions=(
-        "AI code review buddy — fetch, resolve, and manage PR review comments "
-        "across Unblocked, Devin, and CodeRabbit with staleness detection."
-    ),
+    instructions="""\
+AI code review buddy — fetch, resolve, and manage PR review comments
+across Unblocked, Devin, and CodeRabbit with staleness detection.
+
+## Typical workflow after pushing a fix
+
+1. Call `list_review_comments` to see all threads with staleness info.
+2. For threads on files you changed, call `resolve_stale_comments` to batch-resolve them.
+3. Reply to non-stale threads with `reply_to_comment` if you addressed them differently.
+4. Call `request_rereview` to trigger a fresh review cycle.
+
+## Reviewer behavior differences
+
+- **Unblocked**: Does NOT auto-review on new pushes. You MUST call `request_rereview`
+  (which posts "@unblocked please re-review") after pushing fixes.
+- **Devin**: Auto-triggers a new review on every push. No action needed, but you can
+  still call `request_rereview` if you want to force one.
+- **CodeRabbit**: Auto-triggers on push. Same as Devin — no action needed.
+
+## Staleness
+
+A comment is "stale" when the file it references has been modified in the latest push.
+Stale comments are safe to batch-resolve with `resolve_stale_comments` since the code
+they reviewed has changed.
+""",
 )
 
 

@@ -60,7 +60,10 @@ SAMPLE_GRAPHQL_RESPONSE = {
             "pullRequest": {
                 "title": "Test PR",
                 "url": "https://github.com/owner/repo/pull/42",
-                "reviewThreads": {"nodes": [SAMPLE_THREAD_NODE, SAMPLE_RESOLVED_THREAD]},
+                "reviewThreads": {
+                    "pageInfo": {"hasNextPage": False, "endCursor": None},
+                    "nodes": [SAMPLE_THREAD_NODE, SAMPLE_RESOLVED_THREAD],
+                },
             }
         }
     },
@@ -71,10 +74,11 @@ SAMPLE_DIFF_RESPONSE = {
         "repository": {
             "pullRequest": {
                 "files": {
+                    "pageInfo": {"hasNextPage": False, "endCursor": None},
                     "nodes": [
                         {"path": "src/codereviewbuddy/gh.py", "additions": 5, "deletions": 2, "changeType": "MODIFIED"},
                         {"path": "README.md", "additions": 1, "deletions": 0, "changeType": "MODIFIED"},
-                    ]
+                    ],
                 }
             }
         }
@@ -157,6 +161,32 @@ class TestListReviewComments:
         assert len(threads) == 2
 
 
+class TestNonExistentPR:
+    def test_list_comments_returns_empty_for_null_pr(self, mocker: MockerFixture):
+        """Regression: pullRequest=null must not crash with AttributeError."""
+        null_pr_response = {
+            "data": {"repository": {"pullRequest": None}},
+        }
+        mocker.patch(
+            "codereviewbuddy.tools.comments.gh.graphql",
+            return_value=null_pr_response,
+        )
+        mocker.patch("codereviewbuddy.tools.comments.gh.get_repo_info", return_value=("owner", "repo"))
+
+        threads = list_review_comments(42)
+        assert threads == []
+
+    def test_get_changed_files_returns_empty_for_null_pr(self, mocker: MockerFixture):
+        """Regression: pullRequest=null must not crash with AttributeError."""
+        null_pr_response = {
+            "data": {"repository": {"pullRequest": None}},
+        }
+        mocker.patch("codereviewbuddy.tools.comments.gh.graphql", return_value=null_pr_response)
+
+        result = _get_changed_files("owner", "repo", 99999)
+        assert result == set()
+
+
 class TestResolveComment:
     def test_success(self, mocker: MockerFixture):
         response = {"data": {"resolveReviewThread": {"thread": {"id": "PRRT_test", "isResolved": True}}}}
@@ -192,7 +222,18 @@ class TestResolveStaleComments:
         assert "PRRT_kwDOtest123" in result["resolved_thread_ids"]
 
     def test_nothing_to_resolve(self, mocker: MockerFixture):
-        no_diff = {"data": {"repository": {"pullRequest": {"files": {"nodes": []}}}}}
+        no_diff = {
+            "data": {
+                "repository": {
+                    "pullRequest": {
+                        "files": {
+                            "pageInfo": {"hasNextPage": False, "endCursor": None},
+                            "nodes": [],
+                        }
+                    }
+                }
+            }
+        }
         mocker.patch(
             "codereviewbuddy.tools.comments.gh.graphql",
             side_effect=[SAMPLE_GRAPHQL_RESPONSE, no_diff],
@@ -201,3 +242,111 @@ class TestResolveStaleComments:
 
         result = resolve_stale_comments(42)
         assert result["resolved_count"] == 0
+
+
+class TestThreadsPagination:
+    def test_fetches_multiple_pages(self, mocker: MockerFixture):
+        page1 = {
+            "data": {
+                "repository": {
+                    "pullRequest": {
+                        "title": "Test PR",
+                        "url": "https://github.com/owner/repo/pull/42",
+                        "reviewThreads": {
+                            "pageInfo": {"hasNextPage": True, "endCursor": "cursor_abc"},
+                            "nodes": [SAMPLE_THREAD_NODE],
+                        },
+                    }
+                }
+            },
+        }
+        page2 = {
+            "data": {
+                "repository": {
+                    "pullRequest": {
+                        "title": "Test PR",
+                        "url": "https://github.com/owner/repo/pull/42",
+                        "reviewThreads": {
+                            "pageInfo": {"hasNextPage": False, "endCursor": None},
+                            "nodes": [SAMPLE_RESOLVED_THREAD],
+                        },
+                    }
+                }
+            },
+        }
+        mock_graphql = mocker.patch(
+            "codereviewbuddy.tools.comments.gh.graphql",
+            side_effect=[page1, page2, SAMPLE_DIFF_RESPONSE],
+        )
+        mocker.patch("codereviewbuddy.tools.comments.gh.get_repo_info", return_value=("owner", "repo"))
+
+        threads = list_review_comments(42)
+        assert len(threads) == 2
+        # Verify cursor was passed on second call
+        second_call = mock_graphql.call_args_list[1]
+        variables = second_call.kwargs.get("variables", {})
+        assert variables.get("cursor") == "cursor_abc"
+
+    def test_stops_on_null_end_cursor(self, mocker: MockerFixture):
+        """Regression: hasNextPage=true + endCursor=null must not infinite-loop."""
+        malformed_page = {
+            "data": {
+                "repository": {
+                    "pullRequest": {
+                        "title": "Test PR",
+                        "url": "https://github.com/owner/repo/pull/42",
+                        "reviewThreads": {
+                            "pageInfo": {"hasNextPage": True, "endCursor": None},
+                            "nodes": [SAMPLE_THREAD_NODE],
+                        },
+                    }
+                }
+            },
+        }
+        mocker.patch(
+            "codereviewbuddy.tools.comments.gh.graphql",
+            side_effect=[malformed_page, SAMPLE_DIFF_RESPONSE],
+        )
+        mocker.patch("codereviewbuddy.tools.comments.gh.get_repo_info", return_value=("owner", "repo"))
+
+        threads = list_review_comments(42)
+        assert len(threads) == 1
+
+
+class TestChangedFilesPagination:
+    def test_fetches_multiple_pages(self, mocker: MockerFixture):
+        diff_page1 = {
+            "data": {
+                "repository": {
+                    "pullRequest": {
+                        "files": {
+                            "pageInfo": {"hasNextPage": True, "endCursor": "file_cursor_1"},
+                            "nodes": [
+                                {"path": "src/codereviewbuddy/gh.py", "additions": 5, "deletions": 2, "changeType": "MODIFIED"},
+                            ],
+                        }
+                    }
+                }
+            },
+        }
+        diff_page2 = {
+            "data": {
+                "repository": {
+                    "pullRequest": {
+                        "files": {
+                            "pageInfo": {"hasNextPage": False, "endCursor": None},
+                            "nodes": [
+                                {"path": "README.md", "additions": 1, "deletions": 0, "changeType": "MODIFIED"},
+                            ],
+                        }
+                    }
+                }
+            },
+        }
+        mocker.patch(
+            "codereviewbuddy.tools.comments.gh.graphql",
+            side_effect=[diff_page1, diff_page2],
+        )
+
+        files = _get_changed_files("owner", "repo", 42)
+        assert files == {"src/codereviewbuddy/gh.py", "README.md"}
