@@ -16,6 +16,7 @@ jobs:
     if: ${{ github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success' }}
     uses: detailobsessed/ci-components/.github/workflows/semantic-release-uv.yml@main
     with:
+      python-version: "3.14"
       pypi-publish: "false"
     secrets: inherit
 
@@ -44,6 +45,8 @@ jobs:
 
       - name: Setup uv
         uses: astral-sh/setup-uv@v7
+        with:
+          python-version: "3.14"
 
       - name: Build package
         run: uv build

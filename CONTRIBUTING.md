@@ -25,7 +25,7 @@ uv sync
 
 You now have the dependencies installed.
 
-You can run the application with `uv run python main.py`.
+You can run the application with `uv run codereviewbuddy`.
 
 Run `poe --help` to see all the available tasks!
 

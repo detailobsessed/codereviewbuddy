@@ -76,7 +76,7 @@ Add to `.cursor/mcp.json` in your project:
   "mcpServers": {
     "codereviewbuddy": {
       "command": "uv",
-      "args": ["run", "--directory", "/path/to/codereviewbuddy", "python", "main.py"]
+      "args": ["run", "--directory", "/path/to/codereviewbuddy", "codereviewbuddy"]
     }
   }
 }

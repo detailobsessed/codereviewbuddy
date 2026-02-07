@@ -33,7 +33,11 @@ repo_provider=$(grep 'repository_provider' .copier-answers.yml 2>/dev/null | sed
 
 # App entry point (only for app project type)
 if [[ "$project_type" == "app" ]]; then
-    if [[ -f "main.py" ]]; then pass "main.py exists (app entry point)"; else fail "main.py missing"; fi
+    if [[ -f "main.py" ]] || grep -q '\[project\.scripts\]' pyproject.toml; then
+        pass "App entry point exists (main.py or project.scripts)"
+    else
+        fail "App entry point missing (no main.py or project.scripts)"
+    fi
 fi
 
 # Source package
