@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
-from unittest.mock import patch
+from typing import TYPE_CHECKING
 
 import pytest
+
+if TYPE_CHECKING:
+    from pytest_mock import MockerFixture
 
 from codereviewbuddy.gh import GhError
 from codereviewbuddy.tools.comments import (
@@ -120,66 +123,56 @@ class TestParseThreads:
 
 
 class TestGetChangedFiles:
-    def test_extracts_paths(self):
-        with patch("codereviewbuddy.tools.comments.gh.graphql", return_value=SAMPLE_DIFF_RESPONSE):
-            files = _get_changed_files("owner", "repo", 42)
-            assert files == {"src/codereviewbuddy/gh.py", "README.md"}
+    def test_extracts_paths(self, mocker: MockerFixture):
+        mocker.patch("codereviewbuddy.tools.comments.gh.graphql", return_value=SAMPLE_DIFF_RESPONSE)
+        files = _get_changed_files("owner", "repo", 42)
+        assert files == {"src/codereviewbuddy/gh.py", "README.md"}
 
 
 class TestListReviewComments:
+    @pytest.fixture(autouse=True)
+    def _mock_gh(self, mocker: MockerFixture):
+        mocker.patch("codereviewbuddy.tools.comments.gh.graphql", return_value=SAMPLE_GRAPHQL_RESPONSE)
+        mocker.patch("codereviewbuddy.tools.comments.gh.get_repo_info", return_value=("owner", "repo"))
+        mocker.patch("codereviewbuddy.tools.comments._get_changed_files", return_value=set())
+
     def test_returns_all_threads(self):
-        with (
-            patch("codereviewbuddy.tools.comments.gh.graphql", return_value=SAMPLE_GRAPHQL_RESPONSE),
-            patch("codereviewbuddy.tools.comments.gh.get_repo_info", return_value=("owner", "repo")),
-            patch("codereviewbuddy.tools.comments._get_changed_files", return_value=set()),
-        ):
-            threads = list_review_comments(42)
-            assert len(threads) == 2
+        threads = list_review_comments(42)
+        assert len(threads) == 2
 
     def test_filter_unresolved(self):
-        with (
-            patch("codereviewbuddy.tools.comments.gh.graphql", return_value=SAMPLE_GRAPHQL_RESPONSE),
-            patch("codereviewbuddy.tools.comments.gh.get_repo_info", return_value=("owner", "repo")),
-            patch("codereviewbuddy.tools.comments._get_changed_files", return_value=set()),
-        ):
-            threads = list_review_comments(42, status="unresolved")
-            assert len(threads) == 1
-            assert threads[0].status == "unresolved"
+        threads = list_review_comments(42, status="unresolved")
+        assert len(threads) == 1
+        assert threads[0].status == "unresolved"
 
     def test_filter_resolved(self):
-        with (
-            patch("codereviewbuddy.tools.comments.gh.graphql", return_value=SAMPLE_GRAPHQL_RESPONSE),
-            patch("codereviewbuddy.tools.comments.gh.get_repo_info", return_value=("owner", "repo")),
-            patch("codereviewbuddy.tools.comments._get_changed_files", return_value=set()),
-        ):
-            threads = list_review_comments(42, status="resolved")
-            assert len(threads) == 1
-            assert threads[0].status == "resolved"
+        threads = list_review_comments(42, status="resolved")
+        assert len(threads) == 1
+        assert threads[0].status == "resolved"
 
-    def test_explicit_repo(self):
-        with (
-            patch("codereviewbuddy.tools.comments.gh.graphql", return_value=SAMPLE_GRAPHQL_RESPONSE),
-            patch("codereviewbuddy.tools.comments._get_changed_files", return_value=set()),
-        ):
-            threads = list_review_comments(42, repo="myorg/myrepo")
-            assert len(threads) == 2
+    def test_explicit_repo(self, mocker: MockerFixture):
+        mocker.patch("codereviewbuddy.tools.comments.gh.graphql", return_value=SAMPLE_GRAPHQL_RESPONSE)
+        mocker.patch("codereviewbuddy.tools.comments._get_changed_files", return_value=set())
+        threads = list_review_comments(42, repo="myorg/myrepo")
+        assert len(threads) == 2
 
 
 class TestResolveComment:
-    def test_success(self):
+    def test_success(self, mocker: MockerFixture):
         response = {"data": {"resolveReviewThread": {"thread": {"id": "PRRT_test", "isResolved": True}}}}
-        with patch("codereviewbuddy.tools.comments.gh.graphql", return_value=response):
-            result = resolve_comment(42, "PRRT_test")
-            assert "Resolved" in result
+        mocker.patch("codereviewbuddy.tools.comments.gh.graphql", return_value=response)
+        result = resolve_comment(42, "PRRT_test")
+        assert "Resolved" in result
 
-    def test_failure(self):
+    def test_failure(self, mocker: MockerFixture):
         response = {"data": {"resolveReviewThread": {"thread": {"id": "PRRT_test", "isResolved": False}}}}
-        with patch("codereviewbuddy.tools.comments.gh.graphql", return_value=response), pytest.raises(GhError, match="Failed to resolve"):
+        mocker.patch("codereviewbuddy.tools.comments.gh.graphql", return_value=response)
+        with pytest.raises(GhError, match="Failed to resolve"):
             resolve_comment(42, "PRRT_test")
 
 
 class TestResolveStaleComments:
-    def test_resolves_stale(self):
+    def test_resolves_stale(self, mocker: MockerFixture):
         stale_thread = SAMPLE_THREAD_NODE.copy()
 
         graphql_responses = [
@@ -187,28 +180,24 @@ class TestResolveStaleComments:
             SAMPLE_DIFF_RESPONSE,  # list_review_comments → changed files
             {"data": {"t0": {"thread": {"id": stale_thread["id"], "isResolved": True}}}},  # batch resolve
         ]
-        call_count = 0
 
-        def mock_graphql(*_args, **_kwargs):
-            nonlocal call_count
-            response = graphql_responses[call_count]
-            call_count += 1
-            return response
+        mocker.patch(
+            "codereviewbuddy.tools.comments.gh.graphql",
+            side_effect=graphql_responses,
+        )
+        mocker.patch("codereviewbuddy.tools.comments.gh.get_repo_info", return_value=("owner", "repo"))
 
-        with (
-            patch("codereviewbuddy.tools.comments.gh.graphql", side_effect=mock_graphql),
-            patch("codereviewbuddy.tools.comments.gh.get_repo_info", return_value=("owner", "repo")),
-        ):
-            result = resolve_stale_comments(42)
-            assert result["resolved_count"] == 1
-            assert "PRRT_kwDOtest123" in result["resolved_thread_ids"]
+        result = resolve_stale_comments(42)
+        assert result["resolved_count"] == 1
+        assert "PRRT_kwDOtest123" in result["resolved_thread_ids"]
 
-    def test_nothing_to_resolve(self):
-        # No changed files → nothing is stale
+    def test_nothing_to_resolve(self, mocker: MockerFixture):
         no_diff = {"data": {"repository": {"pullRequest": {"files": {"nodes": []}}}}}
-        with (
-            patch("codereviewbuddy.tools.comments.gh.graphql", side_effect=[SAMPLE_GRAPHQL_RESPONSE, no_diff]),
-            patch("codereviewbuddy.tools.comments.gh.get_repo_info", return_value=("owner", "repo")),
-        ):
-            result = resolve_stale_comments(42)
-            assert result["resolved_count"] == 0
+        mocker.patch(
+            "codereviewbuddy.tools.comments.gh.graphql",
+            side_effect=[SAMPLE_GRAPHQL_RESPONSE, no_diff],
+        )
+        mocker.patch("codereviewbuddy.tools.comments.gh.get_repo_info", return_value=("owner", "repo"))
+
+        result = resolve_stale_comments(42)
+        assert result["resolved_count"] == 0
