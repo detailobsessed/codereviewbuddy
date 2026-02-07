@@ -97,7 +97,7 @@ repos:
 
       - id: pytest-cov
         name: pytest with coverage
-        entry: uv run pytest --cov=src/codereviewbuddy --cov-fail-under=90 --cov-report=term-missing:skip-covered -q
+        entry: bash -c 'PYTHON_GIL=0 uv run pytest --cov=src/codereviewbuddy --cov-fail-under=90 --cov-report=term-missing:skip-covered -q'
         language: system
         types: [python]
         pass_filenames: false
