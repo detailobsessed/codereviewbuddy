@@ -15,6 +15,9 @@
 .env.*
 !.env.example
 
+# mcp-publisher tokens
+.mcpregistry_*
+
 # tools
 .coverage*
 /.pdm-build/
