@@ -1,14 +1,12 @@
 # Agent Instructions
 
-This project uses **tk** (ticket) for issue tracking. Tickets are markdown files in `.tickets/`.
+This project uses **GitHub Issues** for issue tracking.
 
 ## Quick Reference
 
 ```bash
-tk list               # List all open tickets
-tk ready              # List tickets with deps resolved
-tk show <id>          # View ticket details
-tk start <id>         # Claim work (set to in_progress)
-tk close <id>         # Complete work
-tk create "title"     # Create a new ticket
+gh issue list                        # List open issues
+gh issue view <number>               # View issue details
+gh issue create --title "title"      # Create a new issue
+gh issue close <number>              # Close an issue
 ```
