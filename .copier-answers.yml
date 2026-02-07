@@ -1,5 +1,5 @@
 # Changes here will be overwritten by Copier.
-_commit: 0.16.1
+_commit: 0.16.2
 _src_path: gh:detailobsessed/copier-uv-bleeding
 author_email: ismart@gmail.com
 author_fullname: Ismar Iljazovic
@@ -16,3 +16,4 @@ use_blacksmith_runners: true
 use_ci: true
 use_polar: false
 use_semantic_release: true
+
