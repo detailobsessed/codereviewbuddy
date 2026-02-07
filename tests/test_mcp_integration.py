@@ -161,6 +161,7 @@ class TestToolRegistration:
 class TestListReviewCommentsMCP:
     async def test_returns_serialized_threads(self, client: Client, mocker: MockerFixture):
         mocker.patch("codereviewbuddy.tools.comments.gh.graphql", return_value=SAMPLE_GRAPHQL_RESPONSE)
+        mocker.patch("codereviewbuddy.tools.comments.gh.rest", return_value=[])
         mocker.patch("codereviewbuddy.tools.comments.gh.get_repo_info", return_value=("owner", "repo"))
         mocker.patch("codereviewbuddy.tools.comments._get_changed_files", return_value=set())
 
@@ -171,6 +172,7 @@ class TestListReviewCommentsMCP:
 
     async def test_with_status_filter(self, client: Client, mocker: MockerFixture):
         mocker.patch("codereviewbuddy.tools.comments.gh.graphql", return_value=SAMPLE_GRAPHQL_RESPONSE)
+        mocker.patch("codereviewbuddy.tools.comments.gh.rest", return_value=[])
         mocker.patch("codereviewbuddy.tools.comments.gh.get_repo_info", return_value=("owner", "repo"))
         mocker.patch("codereviewbuddy.tools.comments._get_changed_files", return_value=set())
 
@@ -179,6 +181,7 @@ class TestListReviewCommentsMCP:
 
     async def test_with_explicit_repo(self, client: Client, mocker: MockerFixture):
         mocker.patch("codereviewbuddy.tools.comments.gh.graphql", return_value=SAMPLE_GRAPHQL_RESPONSE)
+        mocker.patch("codereviewbuddy.tools.comments.gh.rest", return_value=[])
         mocker.patch("codereviewbuddy.tools.comments._get_changed_files", return_value=set())
 
         result = await client.call_tool("list_review_comments", {"pr_number": 42, "repo": "myorg/myrepo"})
@@ -208,6 +211,7 @@ class TestResolveStaleCommentsMCP:
             {"data": {"t0": {"thread": {"id": "PRRT_kwDOtest123", "isResolved": True}}}},
         ]
         mocker.patch("codereviewbuddy.tools.comments.gh.graphql", side_effect=graphql_responses)
+        mocker.patch("codereviewbuddy.tools.comments.gh.rest", return_value=[])
         mocker.patch("codereviewbuddy.tools.comments.gh.get_repo_info", return_value=("owner", "repo"))
 
         result = await client.call_tool("resolve_stale_comments", {"pr_number": 42})

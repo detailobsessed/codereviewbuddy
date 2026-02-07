@@ -80,7 +80,7 @@ def _parse_threads(raw_threads: list[dict[str, Any]], pr_number: int, changed_fi
             continue
 
         first_comment = comments_raw[0]
-        author = first_comment.get("author", {}).get("login", "unknown")
+        author = (first_comment.get("author") or {}).get("login", "unknown")
         file_path = first_comment.get("path")
 
         # Staleness: if the file has been modified since the review, it's stale
@@ -90,7 +90,7 @@ def _parse_threads(raw_threads: list[dict[str, Any]], pr_number: int, changed_fi
 
         comments = [
             ReviewComment(
-                author=c.get("author", {}).get("login", "unknown"),
+                author=(c.get("author") or {}).get("login", "unknown"),
                 body=c.get("body", ""),
                 created_at=c.get("createdAt"),
             )
@@ -107,6 +107,68 @@ def _parse_threads(raw_threads: list[dict[str, Any]], pr_number: int, changed_fi
                 reviewer=identify_reviewer(author),
                 comments=comments,
                 is_stale=is_stale,
+            )
+        )
+    return threads
+
+
+# Map GitHub review states to our comment status
+_REVIEW_STATE_MAP: dict[str, CommentStatus] = {
+    "APPROVED": CommentStatus.RESOLVED,
+    "DISMISSED": CommentStatus.RESOLVED,
+    "CHANGES_REQUESTED": CommentStatus.UNRESOLVED,
+    "COMMENTED": CommentStatus.UNRESOLVED,
+}
+
+
+def _get_pr_reviews(
+    owner: str,
+    repo: str,
+    pr_number: int,
+    cwd: str | None = None,
+) -> list[ReviewThread]:
+    """Fetch PR-level reviews from known AI reviewers.
+
+    These are review summaries posted by AI tools (e.g. Devin's "N potential issues"
+    or Unblocked's "N issues found") that appear on the PR conversation tab but are
+    NOT inline code threads. Without this, reviewers like Devin that don't create
+    inline threads are completely invisible.
+    """
+    result = gh.rest(f"/repos/{owner}/{repo}/pulls/{pr_number}/reviews", cwd=cwd)
+    if not result:
+        return []
+
+    threads: list[ReviewThread] = []
+    for review in result:
+        login = (review.get("user") or {}).get("login", "unknown")
+        reviewer = identify_reviewer(login)
+        if reviewer == "unknown":
+            continue
+
+        body = (review.get("body") or "").strip()
+        if not body:
+            continue
+
+        state = review.get("state", "COMMENTED")
+        status = _REVIEW_STATE_MAP.get(state, CommentStatus.UNRESOLVED)
+
+        threads.append(
+            ReviewThread(
+                thread_id=review.get("node_id", ""),
+                pr_number=pr_number,
+                status=status,
+                file=None,
+                line=None,
+                reviewer=reviewer,
+                comments=[
+                    ReviewComment(
+                        author=login,
+                        body=body,
+                        created_at=review.get("submitted_at"),
+                    ),
+                ],
+                is_stale=False,
+                is_pr_review=True,
             )
         )
     return threads
@@ -182,6 +244,10 @@ def list_review_comments(
 
     threads = _parse_threads(raw_threads, pr_number, changed_files)
 
+    # Include PR-level reviews from AI reviewers (e.g. Devin summaries)
+    pr_reviews = _get_pr_reviews(owner, repo_name, pr_number, cwd=cwd)
+    threads.extend(pr_reviews)
+
     # Filter by status if requested
     if status:
         target = CommentStatus(status)
@@ -231,7 +297,7 @@ def resolve_stale_comments(
         Dict with "resolved_count" and "resolved_thread_ids".
     """
     threads = list_review_comments(pr_number, repo=repo, status="unresolved", cwd=cwd)
-    stale = [t for t in threads if t.is_stale]
+    stale = [t for t in threads if t.is_stale and not t.is_pr_review]
 
     if not stale:
         return {"resolved_count": 0, "resolved_thread_ids": []}
