@@ -1,0 +1,22 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "io.github.detailobsessed/codereviewbuddy",
+  "description": "MCP server that helps AI coding agents interact with AI code reviewers on GitHub PRs",
+  "repository": {
+    "url": "https://github.com/detailobsessed/codereviewbuddy",
+    "source": "github"
+  },
+  "version": "0.1.1",
+  "packages": [
+    {
+      "registryType": "pypi",
+      "identifier": "codereviewbuddy",
+      "version": "0.1.1",
+      "runtimeHint": "uvx",
+      "transport": {
+        "type": "stdio"
+      },
+      "environmentVariables": []
+    }
+  ]
+}
