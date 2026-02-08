@@ -1,4 +1,4 @@
-"""codereviewbuddy package.
+"""codereviewbuddy.
 
 codereview buddy helps your AI agent interact with AI code review--smoothly!
 """
