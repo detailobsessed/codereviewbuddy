@@ -17,10 +17,10 @@ from codereviewbuddy.models import (  # noqa: TC001 - runtime imports needed for
     CreateIssueResult,
     RereviewResult,
     ResolveStaleResult,
-    ReviewThread,
+    ReviewSummary,
     UpdateCheckResult,
 )
-from codereviewbuddy.tools import comments, issues, rereview, version
+from codereviewbuddy.tools import comments, issues, rereview, version, wait
 
 logger = logging.getLogger(__name__)
 
@@ -33,9 +33,20 @@ across Unblocked, Devin, and CodeRabbit with staleness detection.
 ## Typical workflow after pushing a fix
 
 1. Call `list_review_comments` to see all threads with staleness info.
-2. For threads on files you changed, call `resolve_stale_comments` to batch-resolve them.
-3. Reply to non-stale threads with `reply_to_comment` if you addressed them differently.
-4. Call `request_rereview` to trigger a fresh review cycle.
+   - Check `reviews_in_progress` — if true, reviewers haven't finished yet.
+   - Check `reviewer_statuses` for per-reviewer detail.
+2. If reviews are still pending, call `wait_for_reviews` to poll until they complete.
+3. For threads on files you changed, call `resolve_stale_comments` to batch-resolve them.
+4. Reply to non-stale threads with `reply_to_comment` if you addressed them differently.
+5. Call `request_rereview` to trigger a fresh review cycle.
+
+## Review status detection
+
+`list_review_comments` automatically detects whether AI reviewers have finished reviewing
+the latest push. It compares each reviewer's most recent comment timestamp against the
+PR's latest commit timestamp. If a reviewer posted before the latest push, their status
+is "pending". Only reviewers that have actually commented on the PR are tracked — we
+don't assume which reviewers are installed.
 
 ## Reviewer behavior differences
 
@@ -84,7 +95,7 @@ async def list_review_comments(
     pr_number: int,
     repo: str | None = None,
     status: str | None = None,
-) -> list[ReviewThread]:
+) -> ReviewSummary:
     """List all review threads for a PR with reviewer identification and staleness.
 
     Args:
@@ -104,7 +115,7 @@ async def list_stack_review_comments(
     pr_numbers: list[int],
     repo: str | None = None,
     status: str | None = None,
-) -> dict[int, list[ReviewThread]]:
+) -> dict[int, ReviewSummary]:
     """List review threads for multiple PRs in a stack, grouped by PR number.
 
     Collapses N tool calls into 1 for the common stacked-PR review workflow.
@@ -235,6 +246,38 @@ def create_issue_from_comment(
         title,
         labels=labels,
         repo=repo,
+    )
+
+
+@mcp.tool
+async def wait_for_reviews(
+    pr_number: int,
+    repo: str | None = None,
+    timeout: int = 300,
+    poll_interval: int = 30,
+) -> ReviewSummary:
+    """Wait for AI reviewers to finish reviewing the latest push on a PR.
+
+    Polls review status at regular intervals and returns when all known reviewers
+    have completed, or when the timeout is reached. Only tracks reviewers that have
+    previously commented on this PR.
+
+    Args:
+        pr_number: PR number to monitor.
+        repo: Repository in "owner/repo" format. Auto-detected if not provided.
+        timeout: Maximum seconds to wait (default 300 = 5 minutes).
+        poll_interval: Seconds between polls (default 30).
+
+    Returns:
+        Final ReviewSummary. Check reviews_in_progress — if still true, timeout was reached.
+    """
+    ctx = get_context()
+    return await wait.wait_for_reviews(
+        pr_number,
+        repo=repo,
+        timeout=timeout,
+        poll_interval=poll_interval,
+        ctx=ctx,
     )
 
 

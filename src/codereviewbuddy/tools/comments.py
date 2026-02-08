@@ -7,10 +7,11 @@ from typing import TYPE_CHECKING
 from fastmcp.utilities.async_utils import call_sync_fn_in_threadpool
 
 from codereviewbuddy import gh
-from codereviewbuddy.models import CommentStatus, ResolveStaleResult, ReviewComment, ReviewThread
+from codereviewbuddy.models import CommentStatus, ResolveStaleResult, ReviewComment, ReviewerStatus, ReviewSummary, ReviewThread
 from codereviewbuddy.reviewers import get_reviewer, identify_reviewer
 
 if TYPE_CHECKING:
+    from datetime import datetime
     from typing import Any
 
     from fastmcp.server.context import Context
@@ -257,14 +258,114 @@ def _get_changed_files(owner: str, repo: str, pr_number: int, cwd: str | None = 
     return {f["path"] for f in all_files if f.get("path")}
 
 
+def _get_latest_push_time(
+    owner: str,
+    repo: str,
+    pr_number: int,
+    cwd: str | None = None,
+) -> datetime | None:
+    """Get the timestamp of the latest commit on a PR.
+
+    Uses the PR commits endpoint and returns the committer date of the last commit.
+    """
+    from datetime import datetime
+
+    result = gh.rest(f"/repos/{owner}/{repo}/pulls/{pr_number}/commits", cwd=cwd)
+    if not result:
+        return None
+
+    last_commit = result[-1]
+    date_str = last_commit.get("commit", {}).get("committer", {}).get("date")
+    if not date_str:
+        return None
+
+    return datetime.fromisoformat(date_str)
+
+
+def _build_reviewer_statuses(
+    threads: list[ReviewThread],
+    last_push_at: datetime | None,
+) -> list[ReviewerStatus]:
+    """Build per-reviewer status by comparing review timestamps against latest push.
+
+    Only reports on reviewers that have actually posted on this PR (data-driven).
+    """
+    from datetime import UTC
+
+    # Collect the latest comment timestamp per known reviewer
+    reviewer_latest: dict[str, datetime] = {}
+    for thread in threads:
+        if thread.reviewer == "unknown":
+            continue
+        # Only track known AI reviewers (skip generic bot names like "codecov[bot]")
+        adapter = get_reviewer(thread.reviewer)
+        if adapter is None:
+            continue
+        for comment in thread.comments:
+            if comment.created_at is None:
+                continue
+            # Only count comments actually posted by the reviewer, not human replies
+            if not adapter.identify(comment.author):
+                continue
+            ts = comment.created_at
+            if ts.tzinfo is None:
+                ts = ts.replace(tzinfo=UTC)
+            if thread.reviewer not in reviewer_latest or ts > reviewer_latest[thread.reviewer]:
+                reviewer_latest[thread.reviewer] = ts
+
+    if not reviewer_latest:
+        return []
+
+    statuses: list[ReviewerStatus] = []
+    for reviewer_name, latest_review in reviewer_latest.items():
+        if last_push_at is None:
+            statuses.append(
+                ReviewerStatus(
+                    reviewer=reviewer_name,
+                    status="completed",
+                    detail="Could not determine push time; assuming completed",
+                    last_review_at=latest_review,
+                    last_push_at=None,
+                )
+            )
+            continue
+
+        push_at = last_push_at
+        if push_at.tzinfo is None:
+            push_at = push_at.replace(tzinfo=UTC)
+
+        if latest_review >= push_at:
+            statuses.append(
+                ReviewerStatus(
+                    reviewer=reviewer_name,
+                    status="completed",
+                    detail=f"{reviewer_name} reviewed after latest push",
+                    last_review_at=latest_review,
+                    last_push_at=push_at,
+                )
+            )
+        else:
+            statuses.append(
+                ReviewerStatus(
+                    reviewer=reviewer_name,
+                    status="pending",
+                    detail=f"{reviewer_name} has not reviewed since latest push",
+                    last_review_at=latest_review,
+                    last_push_at=push_at,
+                )
+            )
+
+    return statuses
+
+
 async def list_review_comments(
     pr_number: int,
     repo: str | None = None,
     status: str | None = None,
     cwd: str | None = None,
     ctx: Context | None = None,
-) -> list[ReviewThread]:
-    """List all review threads for a PR with reviewer identification and staleness detection.
+) -> ReviewSummary:
+    """List all review threads for a PR with reviewer identification, staleness, and reviewer status.
 
     Args:
         pr_number: The PR number to fetch comments for.
@@ -274,7 +375,7 @@ async def list_review_comments(
         ctx: FastMCP context for progress reporting. Injected by server tools.
 
     Returns:
-        List of ReviewThread objects.
+        ReviewSummary with threads, per-reviewer statuses, and reviews_in_progress flag.
     """
     if repo:
         owner, repo_name = repo.split("/", 1)
@@ -319,15 +420,33 @@ async def list_review_comments(
     bot_comments = await call_sync_fn_in_threadpool(_get_pr_issue_comments, owner, repo_name, pr_number, cwd=cwd)
     threads.extend(bot_comments)
 
-    # Filter by status if requested
+    # Build reviewer statuses (timestamp heuristic)
+    last_push_at = await call_sync_fn_in_threadpool(
+        _get_latest_push_time,
+        owner,
+        repo_name,
+        pr_number,
+        cwd=cwd,
+    )
+    reviewer_statuses = _build_reviewer_statuses(threads, last_push_at)
+    reviews_in_progress = any(s.status == "pending" for s in reviewer_statuses)
+
+    # Filter threads by status if requested (after building reviewer statuses from all threads)
     if status:
         target = CommentStatus(status)
         threads = [t for t in threads if t.status == target]
 
     if ctx:
         await ctx.info(f"Found {len(threads)} review threads for PR #{pr_number}")
+        if reviews_in_progress:
+            pending = [s.reviewer for s in reviewer_statuses if s.status == "pending"]
+            await ctx.warning(f"⚠️ Reviews still pending from: {', '.join(pending)}")
 
-    return threads
+    return ReviewSummary(
+        threads=threads,
+        reviewer_statuses=reviewer_statuses,
+        reviews_in_progress=reviews_in_progress,
+    )
 
 
 async def list_stack_review_comments(
@@ -336,7 +455,7 @@ async def list_stack_review_comments(
     status: str | None = None,
     cwd: str | None = None,
     ctx: Context | None = None,
-) -> dict[int, list[ReviewThread]]:
+) -> dict[int, ReviewSummary]:
     """List review threads for multiple PRs in a stack, grouped by PR number.
 
     Collapses N tool calls into 1 for the common stacked-PR review workflow.
@@ -349,9 +468,9 @@ async def list_stack_review_comments(
         ctx: FastMCP context for progress reporting. Injected by server tools.
 
     Returns:
-        Dict mapping each PR number to its list of ReviewThread objects.
+        Dict mapping each PR number to its ReviewSummary.
     """
-    results: dict[int, list[ReviewThread]] = {}
+    results: dict[int, ReviewSummary] = {}
     total = len(pr_numbers)
     for i, pr_number in enumerate(pr_numbers):
         if ctx:
@@ -408,8 +527,8 @@ async def resolve_stale_comments(
     Returns:
         Dict with "resolved_count" and "resolved_thread_ids".
     """
-    threads = await list_review_comments(pr_number, repo=repo, status="unresolved", cwd=cwd, ctx=ctx)
-    stale = [t for t in threads if t.is_stale and not t.is_pr_review]
+    summary = await list_review_comments(pr_number, repo=repo, status="unresolved", cwd=cwd, ctx=ctx)
+    stale = [t for t in summary.threads if t.is_stale and not t.is_pr_review]
     # Skip threads from reviewers that auto-resolve (e.g. Devin, CodeRabbit)
     skipped = [t for t in stale if _reviewer_auto_resolves(t.reviewer)]
     stale = [t for t in stale if not _reviewer_auto_resolves(t.reviewer)]

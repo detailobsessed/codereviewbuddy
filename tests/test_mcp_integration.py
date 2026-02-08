@@ -119,6 +119,7 @@ class TestToolRegistration:
         "request_rereview",
         "check_for_updates",
         "create_issue_from_comment",
+        "wait_for_reviews",
     })
 
     async def test_all_tools_registered(self, client: Client):
@@ -128,7 +129,7 @@ class TestToolRegistration:
 
     async def test_tool_count(self, client: Client):
         tools = await client.list_tools()
-        assert len(tools) == 8
+        assert len(tools) == 9
 
     async def test_list_review_comments_schema(self, client: Client):
         tools = await client.list_tools()

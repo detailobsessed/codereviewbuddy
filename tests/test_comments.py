@@ -11,7 +11,9 @@ if TYPE_CHECKING:
 
 from codereviewbuddy.gh import GhError
 from codereviewbuddy.tools.comments import (
+    _build_reviewer_statuses,
     _get_changed_files,
+    _get_latest_push_time,
     _get_pr_issue_comments,
     _get_pr_reviews,
     _parse_threads,
@@ -158,34 +160,70 @@ class TestGetChangedFiles:
         assert files == {"src/codereviewbuddy/gh.py", "README.md"}
 
 
+SAMPLE_COMMITS_RESPONSE = [
+    {
+        "sha": "abc123",
+        "commit": {
+            "committer": {
+                "date": "2026-02-06T12:00:00Z",
+            }
+        },
+    },
+]
+
+
 class TestListReviewComments:
     @pytest.fixture(autouse=True)
     def _mock_gh(self, mocker: MockerFixture):
         mocker.patch("codereviewbuddy.tools.comments.gh.graphql", return_value=SAMPLE_GRAPHQL_RESPONSE)
-        mocker.patch("codereviewbuddy.tools.comments.gh.rest", return_value=[])
+        mocker.patch(
+            "codereviewbuddy.tools.comments.gh.rest",
+            side_effect=[
+                [],  # _get_pr_reviews
+                [],  # _get_pr_issue_comments
+                SAMPLE_COMMITS_RESPONSE,  # _get_latest_push_time
+            ],
+        )
         mocker.patch("codereviewbuddy.tools.comments.gh.get_repo_info", return_value=("owner", "repo"))
         mocker.patch("codereviewbuddy.tools.comments._get_changed_files", return_value=set())
 
     async def test_returns_all_threads(self):
-        threads = await list_review_comments(42)
-        assert len(threads) == 2
+        summary = await list_review_comments(42)
+        assert len(summary.threads) == 2
 
     async def test_filter_unresolved(self):
-        threads = await list_review_comments(42, status="unresolved")
-        assert len(threads) == 1
-        assert threads[0].status == "unresolved"
+        summary = await list_review_comments(42, status="unresolved")
+        assert len(summary.threads) == 1
+        assert summary.threads[0].status == "unresolved"
 
     async def test_filter_resolved(self):
-        threads = await list_review_comments(42, status="resolved")
-        assert len(threads) == 1
-        assert threads[0].status == "resolved"
+        summary = await list_review_comments(42, status="resolved")
+        assert len(summary.threads) == 1
+        assert summary.threads[0].status == "resolved"
 
     async def test_explicit_repo(self, mocker: MockerFixture):
         mocker.patch("codereviewbuddy.tools.comments.gh.graphql", return_value=SAMPLE_GRAPHQL_RESPONSE)
-        mocker.patch("codereviewbuddy.tools.comments.gh.rest", return_value=[])
+        mocker.patch(
+            "codereviewbuddy.tools.comments.gh.rest",
+            side_effect=[[], [], SAMPLE_COMMITS_RESPONSE],
+        )
         mocker.patch("codereviewbuddy.tools.comments._get_changed_files", return_value=set())
-        threads = await list_review_comments(42, repo="myorg/myrepo")
-        assert len(threads) == 2
+        summary = await list_review_comments(42, repo="myorg/myrepo")
+        assert len(summary.threads) == 2
+
+    async def test_returns_reviewer_statuses(self):
+        summary = await list_review_comments(42)
+        # Should have statuses for unblocked and devin (both present in SAMPLE threads)
+        reviewer_names = {s.reviewer for s in summary.reviewer_statuses}
+        assert "unblocked" in reviewer_names
+        assert "devin" in reviewer_names
+
+    async def test_reviews_in_progress_when_pushed_after_review(self):
+        """Commit at 12:00, reviews at 10:00/11:00 → both pending."""
+        summary = await list_review_comments(42)
+        assert summary.reviews_in_progress is True
+        for s in summary.reviewer_statuses:
+            assert s.status == "pending"
 
 
 class TestNonExistentPR:
@@ -198,11 +236,14 @@ class TestNonExistentPR:
             "codereviewbuddy.tools.comments.gh.graphql",
             return_value=null_pr_response,
         )
-        mocker.patch("codereviewbuddy.tools.comments.gh.rest", return_value=[])
+        mocker.patch(
+            "codereviewbuddy.tools.comments.gh.rest",
+            side_effect=[[], [], []],
+        )
         mocker.patch("codereviewbuddy.tools.comments.gh.get_repo_info", return_value=("owner", "repo"))
 
-        threads = await list_review_comments(42)
-        assert threads == []
+        summary = await list_review_comments(42)
+        assert summary.threads == []
 
     def test_get_changed_files_returns_empty_for_null_pr(self, mocker: MockerFixture):
         """Regression: pullRequest=null must not crash with AttributeError."""
@@ -243,7 +284,10 @@ class TestResolveStaleComments:
             "codereviewbuddy.tools.comments.gh.graphql",
             side_effect=graphql_responses,
         )
-        mocker.patch("codereviewbuddy.tools.comments.gh.rest", return_value=[])
+        mocker.patch(
+            "codereviewbuddy.tools.comments.gh.rest",
+            side_effect=[[], [], SAMPLE_COMMITS_RESPONSE],
+        )
         mocker.patch("codereviewbuddy.tools.comments.gh.get_repo_info", return_value=("owner", "repo"))
 
         result = await resolve_stale_comments(42)
@@ -289,7 +333,10 @@ class TestResolveStaleComments:
         ]
 
         mocker.patch("codereviewbuddy.tools.comments.gh.graphql", side_effect=graphql_responses)
-        mocker.patch("codereviewbuddy.tools.comments.gh.rest", return_value=[])
+        mocker.patch(
+            "codereviewbuddy.tools.comments.gh.rest",
+            side_effect=[[], [], SAMPLE_COMMITS_RESPONSE],
+        )
         mocker.patch("codereviewbuddy.tools.comments.gh.get_repo_info", return_value=("owner", "repo"))
 
         result = await resolve_stale_comments(42)
@@ -316,7 +363,10 @@ class TestResolveStaleComments:
             "codereviewbuddy.tools.comments.gh.graphql",
             side_effect=[SAMPLE_GRAPHQL_RESPONSE, no_diff],
         )
-        mocker.patch("codereviewbuddy.tools.comments.gh.rest", return_value=[])
+        mocker.patch(
+            "codereviewbuddy.tools.comments.gh.rest",
+            side_effect=[[], [], SAMPLE_COMMITS_RESPONSE],
+        )
         mocker.patch("codereviewbuddy.tools.comments.gh.get_repo_info", return_value=("owner", "repo"))
 
         result = await resolve_stale_comments(42)
@@ -470,13 +520,15 @@ class TestListIncludesPrReviews:
                 ],
                 # _get_pr_issue_comments call
                 [],
+                # _get_latest_push_time call
+                SAMPLE_COMMITS_RESPONSE,
             ],
         )
 
-        threads = await list_review_comments(42)
+        summary = await list_review_comments(42)
         # 2 inline threads + 1 PR review
-        assert len(threads) == 3
-        pr_reviews = [t for t in threads if t.file is None]
+        assert len(summary.threads) == 3
+        pr_reviews = [t for t in summary.threads if t.file is None]
         assert len(pr_reviews) == 1
         assert pr_reviews[0].reviewer == "devin"
 
@@ -515,11 +567,14 @@ class TestThreadsPagination:
             "codereviewbuddy.tools.comments.gh.graphql",
             side_effect=[page1, page2, SAMPLE_DIFF_RESPONSE],
         )
-        mocker.patch("codereviewbuddy.tools.comments.gh.rest", return_value=[])
+        mocker.patch(
+            "codereviewbuddy.tools.comments.gh.rest",
+            side_effect=[[], [], SAMPLE_COMMITS_RESPONSE],
+        )
         mocker.patch("codereviewbuddy.tools.comments.gh.get_repo_info", return_value=("owner", "repo"))
 
-        threads = await list_review_comments(42)
-        assert len(threads) == 2
+        summary = await list_review_comments(42)
+        assert len(summary.threads) == 2
         # Verify cursor was passed on second call
         second_call = mock_graphql.call_args_list[1]
         variables = second_call.kwargs.get("variables", {})
@@ -545,11 +600,14 @@ class TestThreadsPagination:
             "codereviewbuddy.tools.comments.gh.graphql",
             side_effect=[malformed_page, SAMPLE_DIFF_RESPONSE],
         )
-        mocker.patch("codereviewbuddy.tools.comments.gh.rest", return_value=[])
+        mocker.patch(
+            "codereviewbuddy.tools.comments.gh.rest",
+            side_effect=[[], [], SAMPLE_COMMITS_RESPONSE],
+        )
         mocker.patch("codereviewbuddy.tools.comments.gh.get_repo_info", return_value=("owner", "repo"))
 
-        threads = await list_review_comments(42)
-        assert len(threads) == 1
+        summary = await list_review_comments(42)
+        assert len(summary.threads) == 1
 
 
 class TestChangedFilesPagination:
@@ -599,9 +657,9 @@ class TestChangedFilesPagination:
 class TestListStackReviewComments:
     """Tests for list_stack_review_comments."""
 
-    async def test_returns_threads_grouped_by_pr(self, mocker: MockerFixture):
+    async def test_returns_summaries_grouped_by_pr(self, mocker: MockerFixture):
         """Should call list_review_comments for each PR and group results."""
-        from codereviewbuddy.models import CommentStatus, ReviewThread
+        from codereviewbuddy.models import CommentStatus, ReviewSummary, ReviewThread
 
         thread_10 = ReviewThread(
             thread_id="PRRT_10",
@@ -623,30 +681,36 @@ class TestListStackReviewComments:
             comments=[],
             is_stale=False,
         )
+        summary_10 = ReviewSummary(threads=[thread_10])
+        summary_11 = ReviewSummary(threads=[thread_11])
+        summary_12 = ReviewSummary()
+
         from unittest.mock import AsyncMock
 
         mock_list = mocker.patch(
             "codereviewbuddy.tools.comments.list_review_comments",
             new_callable=AsyncMock,
-            side_effect=[[thread_10], [thread_11], []],
+            side_effect=[summary_10, summary_11, summary_12],
         )
 
         result = await list_stack_review_comments([10, 11, 12], repo="owner/repo")
 
         assert list(result.keys()) == [10, 11, 12]
-        assert result[10] == [thread_10]
-        assert result[11] == [thread_11]
-        assert result[12] == []
+        assert result[10].threads == [thread_10]
+        assert result[11].threads == [thread_11]
+        assert result[12].threads == []
         assert mock_list.call_count == 3
 
     async def test_passes_status_filter(self, mocker: MockerFixture):
         """Should forward status filter to each list_review_comments call."""
         from unittest.mock import AsyncMock
 
+        from codereviewbuddy.models import ReviewSummary
+
         mock_list = mocker.patch(
             "codereviewbuddy.tools.comments.list_review_comments",
             new_callable=AsyncMock,
-            return_value=[],
+            return_value=ReviewSummary(),
         )
 
         await list_stack_review_comments([10, 11], repo="owner/repo", status="unresolved")
@@ -827,3 +891,179 @@ class TestReplyToComment:
 
         with pytest.raises(GhError, match="Could not find comment ID"):
             reply_to_comment(42, "PRRT_kwDObad", "test")
+
+
+# ---------------------------------------------------------------------------
+# Reviewer status detection (#46)
+# ---------------------------------------------------------------------------
+
+
+class TestGetLatestPushTime:
+    def test_returns_last_commit_date(self, mocker: MockerFixture):
+        mocker.patch(
+            "codereviewbuddy.tools.comments.gh.rest",
+            return_value=SAMPLE_COMMITS_RESPONSE,
+        )
+        result = _get_latest_push_time("owner", "repo", 42)
+        assert result is not None
+        assert result.year == 2026
+        assert result.month == 2
+        assert result.day == 6
+        assert result.hour == 12
+
+    def test_returns_none_for_empty_response(self, mocker: MockerFixture):
+        mocker.patch("codereviewbuddy.tools.comments.gh.rest", return_value=[])
+        result = _get_latest_push_time("owner", "repo", 42)
+        assert result is None
+
+    def test_returns_none_for_null_response(self, mocker: MockerFixture):
+        mocker.patch("codereviewbuddy.tools.comments.gh.rest", return_value=None)
+        result = _get_latest_push_time("owner", "repo", 42)
+        assert result is None
+
+
+class TestBuildReviewerStatuses:
+    def test_completed_when_review_after_push(self):
+        from datetime import UTC, datetime
+
+        from codereviewbuddy.models import CommentStatus, ReviewComment, ReviewThread
+
+        threads = [
+            ReviewThread(
+                thread_id="PRRT_1",
+                pr_number=42,
+                status=CommentStatus.UNRESOLVED,
+                reviewer="unblocked",
+                comments=[
+                    ReviewComment(
+                        author="unblocked[bot]",
+                        body="issue",
+                        created_at=datetime(2026, 2, 6, 14, 0, tzinfo=UTC),
+                    ),
+                ],
+            ),
+        ]
+        push_at = datetime(2026, 2, 6, 12, 0, tzinfo=UTC)
+
+        statuses = _build_reviewer_statuses(threads, push_at)
+        assert len(statuses) == 1
+        assert statuses[0].reviewer == "unblocked"
+        assert statuses[0].status == "completed"
+
+    def test_pending_when_push_after_review(self):
+        from datetime import UTC, datetime
+
+        from codereviewbuddy.models import CommentStatus, ReviewComment, ReviewThread
+
+        threads = [
+            ReviewThread(
+                thread_id="PRRT_1",
+                pr_number=42,
+                status=CommentStatus.UNRESOLVED,
+                reviewer="devin",
+                comments=[
+                    ReviewComment(
+                        author="devin-ai-integration[bot]",
+                        body="issue",
+                        created_at=datetime(2026, 2, 6, 10, 0, tzinfo=UTC),
+                    ),
+                ],
+            ),
+        ]
+        push_at = datetime(2026, 2, 6, 12, 0, tzinfo=UTC)
+
+        statuses = _build_reviewer_statuses(threads, push_at)
+        assert len(statuses) == 1
+        assert statuses[0].reviewer == "devin"
+        assert statuses[0].status == "pending"
+
+    def test_skips_unknown_reviewers(self):
+        from datetime import UTC, datetime
+
+        from codereviewbuddy.models import CommentStatus, ReviewComment, ReviewThread
+
+        threads = [
+            ReviewThread(
+                thread_id="IC_1",
+                pr_number=42,
+                status=CommentStatus.UNRESOLVED,
+                reviewer="codecov[bot]",
+                comments=[
+                    ReviewComment(
+                        author="codecov[bot]",
+                        body="coverage report",
+                        created_at=datetime(2026, 2, 6, 10, 0, tzinfo=UTC),
+                    ),
+                ],
+            ),
+        ]
+        push_at = datetime(2026, 2, 6, 12, 0, tzinfo=UTC)
+
+        statuses = _build_reviewer_statuses(threads, push_at)
+        assert statuses == []
+
+    def test_ignores_human_replies_in_ai_threads(self):
+        """Human replies in AI threads should not inflate last_review_at."""
+        from datetime import UTC, datetime
+
+        from codereviewbuddy.models import CommentStatus, ReviewComment, ReviewThread
+
+        threads = [
+            ReviewThread(
+                thread_id="PRRT_1",
+                pr_number=42,
+                status=CommentStatus.UNRESOLVED,
+                reviewer="unblocked",
+                comments=[
+                    ReviewComment(
+                        author="unblocked[bot]",
+                        body="issue found",
+                        created_at=datetime(2026, 2, 6, 10, 0, tzinfo=UTC),
+                    ),
+                    ReviewComment(
+                        author="humandev",
+                        body="Fixed in abc123",
+                        created_at=datetime(2026, 2, 6, 16, 0, tzinfo=UTC),
+                    ),
+                ],
+            ),
+        ]
+        push_at = datetime(2026, 2, 6, 12, 0, tzinfo=UTC)
+
+        statuses = _build_reviewer_statuses(threads, push_at)
+        assert len(statuses) == 1
+        assert statuses[0].reviewer == "unblocked"
+        # Should be pending: the bot's comment (10:00) is before push (12:00).
+        # The human reply (16:00) should NOT count as a reviewer comment.
+        assert statuses[0].status == "pending"
+
+    def test_empty_threads_returns_empty(self):
+        from datetime import UTC, datetime
+
+        statuses = _build_reviewer_statuses([], datetime(2026, 2, 6, 12, 0, tzinfo=UTC))
+        assert statuses == []
+
+    def test_no_push_time_assumes_completed(self):
+        from datetime import UTC, datetime
+
+        from codereviewbuddy.models import CommentStatus, ReviewComment, ReviewThread
+
+        threads = [
+            ReviewThread(
+                thread_id="PRRT_1",
+                pr_number=42,
+                status=CommentStatus.UNRESOLVED,
+                reviewer="unblocked",
+                comments=[
+                    ReviewComment(
+                        author="unblocked[bot]",
+                        body="issue",
+                        created_at=datetime(2026, 2, 6, 10, 0, tzinfo=UTC),
+                    ),
+                ],
+            ),
+        ]
+
+        statuses = _build_reviewer_statuses(threads, None)
+        assert len(statuses) == 1
+        assert statuses[0].status == "completed"

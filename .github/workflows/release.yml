@@ -59,4 +59,4 @@ jobs:
   mcp-registry-publish:
     needs: release
     if: needs.release.outputs.released == 'true'
-    uses: detailobsessed/ci-components/.github/workflows/mcp-registry-publish-bun.yml@main
+    uses: detailobsessed/ci-components/.github/workflows/mcp-registry-publish.yml@main
