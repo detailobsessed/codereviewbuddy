@@ -153,6 +153,33 @@ class TestToolRegistration:
         assert "reviewer" not in required
         assert "repo" not in required
 
+    async def test_output_schemas_present(self, client: Client):
+        """Verify that tools with typed return annotations expose output schemas."""
+        tools = await client.list_tools()
+        tools_by_name = {t.name: t for t in tools}
+
+        # Tools returning Pydantic models should have outputSchema
+        for name in ("list_review_comments", "resolve_stale_comments", "request_rereview"):
+            tool = tools_by_name[name]
+            assert tool.outputSchema is not None, f"{name} should have an outputSchema"
+            assert tool.outputSchema.get("type") == "object", f"{name} outputSchema should be object type"
+
+    async def test_resolve_stale_output_schema_fields(self, client: Client):
+        """Verify resolve_stale_comments output schema contains expected fields."""
+        tools = await client.list_tools()
+        tool = next(t for t in tools if t.name == "resolve_stale_comments")
+        props = tool.outputSchema.get("properties", {})
+        assert "resolved_count" in props
+        assert "resolved_thread_ids" in props
+
+    async def test_request_rereview_output_schema_fields(self, client: Client):
+        """Verify request_rereview output schema contains expected fields."""
+        tools = await client.list_tools()
+        tool = next(t for t in tools if t.name == "request_rereview")
+        props = tool.outputSchema.get("properties", {})
+        assert "triggered" in props
+        assert "auto_triggers" in props
+
 
 # ---------------------------------------------------------------------------
 # Tool invocation tests (through MCP protocol)

@@ -245,8 +245,8 @@ class TestResolveStaleComments:
         mocker.patch("codereviewbuddy.tools.comments.gh.get_repo_info", return_value=("owner", "repo"))
 
         result = await resolve_stale_comments(42)
-        assert result["resolved_count"] == 1
-        assert "PRRT_kwDOtest123" in result["resolved_thread_ids"]
+        assert result.resolved_count == 1
+        assert "PRRT_kwDOtest123" in result.resolved_thread_ids
 
     async def test_skips_auto_resolving_reviewers(self, mocker: MockerFixture):
         """Devin/CodeRabbit threads should be skipped — they auto-resolve themselves."""
@@ -292,10 +292,10 @@ class TestResolveStaleComments:
 
         result = await resolve_stale_comments(42)
         # Only the unblocked thread should be resolved; Devin thread skipped
-        assert result["resolved_count"] == 1
-        assert "PRRT_kwDOtest123" in result["resolved_thread_ids"]
-        assert "PRRT_kwDOdevin456" not in result["resolved_thread_ids"]
-        assert result["skipped_count"] == 1
+        assert result.resolved_count == 1
+        assert "PRRT_kwDOtest123" in result.resolved_thread_ids
+        assert "PRRT_kwDOdevin456" not in result.resolved_thread_ids
+        assert result.skipped_count == 1
 
     async def test_nothing_to_resolve(self, mocker: MockerFixture):
         no_diff = {
@@ -318,7 +318,7 @@ class TestResolveStaleComments:
         mocker.patch("codereviewbuddy.tools.comments.gh.get_repo_info", return_value=("owner", "repo"))
 
         result = await resolve_stale_comments(42)
-        assert result["resolved_count"] == 0
+        assert result.resolved_count == 0
 
 
 class TestGetPrReviews:
