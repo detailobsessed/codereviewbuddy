@@ -217,14 +217,14 @@ class TestResolveComment:
     async def test_success(self, mocker: MockerFixture):
         response = {"data": {"resolveReviewThread": {"thread": {"id": "PRRT_test", "isResolved": True}}}}
         mocker.patch("codereviewbuddy.tools.comments.gh.graphql", return_value=response)
-        result = await resolve_comment(42, "PRRT_test")
+        result = resolve_comment(42, "PRRT_test")
         assert "Resolved" in result
 
     async def test_failure(self, mocker: MockerFixture):
         response = {"data": {"resolveReviewThread": {"thread": {"id": "PRRT_test", "isResolved": False}}}}
         mocker.patch("codereviewbuddy.tools.comments.gh.graphql", return_value=response)
         with pytest.raises(GhError, match="Failed to resolve"):
-            await resolve_comment(42, "PRRT_test")
+            resolve_comment(42, "PRRT_test")
 
 
 class TestResolveStaleComments:

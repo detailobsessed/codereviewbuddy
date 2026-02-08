@@ -108,7 +108,7 @@ async def list_stack_review_comments(
 
 
 @mcp.tool
-async def resolve_comment(
+def resolve_comment(
     pr_number: int,
     thread_id: str,
 ) -> str:
@@ -121,7 +121,7 @@ async def resolve_comment(
         pr_number: PR number (for context).
         thread_id: The GraphQL node ID (PRRT_...) of the thread to resolve.
     """
-    return await comments.resolve_comment(pr_number, thread_id)
+    return comments.resolve_comment(pr_number, thread_id)
 
 
 @mcp.tool
@@ -146,7 +146,7 @@ async def resolve_stale_comments(
 
 
 @mcp.tool
-async def reply_to_comment(
+def reply_to_comment(
     pr_number: int,
     thread_id: str,
     body: str,
@@ -160,7 +160,7 @@ async def reply_to_comment(
         body: Reply text.
         repo: Repository in "owner/repo" format. Auto-detected if not provided.
     """
-    return await comments.reply_to_comment(pr_number, thread_id, body, repo=repo)
+    return comments.reply_to_comment(pr_number, thread_id, body, repo=repo)
 
 
 @mcp.tool
