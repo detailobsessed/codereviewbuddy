@@ -28,6 +28,14 @@ class ReviewerAdapter(ABC):
     def auto_resolves_comments(self) -> bool:
         """Whether this reviewer auto-resolves addressed comments on new pushes."""
 
+    def auto_resolves_thread(self, comment_body: str) -> bool:  # noqa: ARG002
+        """Whether this reviewer will auto-resolve a specific thread.
+
+        Override to make per-thread decisions based on comment content.
+        Defaults to ``auto_resolves_comments`` (all-or-nothing).
+        """
+        return self.auto_resolves_comments
+
     @abstractmethod
     def identify(self, author: str) -> bool:
         """Return True if the given GitHub username belongs to this reviewer."""

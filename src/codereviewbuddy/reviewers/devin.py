@@ -25,6 +25,10 @@ class DevinAdapter(ReviewerAdapter):
     def auto_resolves_comments(self) -> bool:
         return True
 
+    def auto_resolves_thread(self, comment_body: str) -> bool:
+        """Devin only auto-resolves bug/investigation threads, not info threads."""
+        return "📝" not in comment_body
+
     def identify(self, author: str) -> bool:
         normalized = author.lower().strip()
         return "devin" in normalized
