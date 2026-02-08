@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+from fastmcp.utilities.async_utils import call_sync_fn_in_threadpool
+
 from codereviewbuddy import gh
 from codereviewbuddy.models import CommentStatus, ResolveStaleResult, ReviewComment, ReviewThread
 from codereviewbuddy.reviewers import get_reviewer, identify_reviewer
@@ -225,7 +227,7 @@ async def list_review_comments(
     if repo:
         owner, repo_name = repo.split("/", 1)
     else:
-        owner, repo_name = gh.get_repo_info(cwd=cwd)
+        owner, repo_name = await call_sync_fn_in_threadpool(gh.get_repo_info, cwd=cwd)
 
     # Fetch threads (paginated) and changed files
     raw_threads: list[dict[str, Any]] = []
@@ -242,7 +244,7 @@ async def list_review_comments(
         if cursor:
             variables["cursor"] = cursor
 
-        result = gh.graphql(_THREADS_QUERY, variables=variables, cwd=cwd)
+        result = await call_sync_fn_in_threadpool(gh.graphql, _THREADS_QUERY, variables=variables, cwd=cwd)
         pr_data = result.get("data", {}).get("repository", {}).get("pullRequest") or {}
         threads_data = pr_data.get("reviewThreads", {})
         raw_threads.extend(threads_data.get("nodes", []))
@@ -253,12 +255,12 @@ async def list_review_comments(
         else:
             break
 
-    changed_files = _get_changed_files(owner, repo_name, pr_number, cwd=cwd)
+    changed_files = await call_sync_fn_in_threadpool(_get_changed_files, owner, repo_name, pr_number, cwd=cwd)
 
     threads = _parse_threads(raw_threads, pr_number, changed_files)
 
     # Include PR-level reviews from AI reviewers (e.g. Devin summaries)
-    pr_reviews = _get_pr_reviews(owner, repo_name, pr_number, cwd=cwd)
+    pr_reviews = await call_sync_fn_in_threadpool(_get_pr_reviews, owner, repo_name, pr_number, cwd=cwd)
     threads.extend(pr_reviews)
 
     # Filter by status if requested
@@ -304,8 +306,7 @@ async def list_stack_review_comments(
     return results
 
 
-# ruff: disable[RUF029]
-async def resolve_comment(
+def resolve_comment(
     pr_number: int,
     thread_id: str,
     cwd: str | None = None,
@@ -328,9 +329,6 @@ async def resolve_comment(
 
     msg = f"Failed to resolve thread {thread_id} on PR #{pr_number}"
     raise gh.GhError(msg)
-
-
-# ruff: enable[RUF029]
 
 
 async def resolve_stale_comments(
@@ -365,7 +363,7 @@ async def resolve_stale_comments(
         mutations.append(f'  t{i}: resolveReviewThread(input: {{threadId: "{thread.thread_id}"}}) {{ thread {{ id isResolved }} }}')
 
     batch_mutation = "mutation {\n" + "\n".join(mutations) + "\n}"
-    gh.graphql(batch_mutation, cwd=cwd)
+    await call_sync_fn_in_threadpool(gh.graphql, batch_mutation, cwd=cwd)
 
     resolved_ids = [t.thread_id for t in stale]
     if ctx:
@@ -373,8 +371,7 @@ async def resolve_stale_comments(
     return ResolveStaleResult(resolved_count=len(resolved_ids), resolved_thread_ids=resolved_ids, skipped_count=len(skipped))
 
 
-# ruff: disable[RUF029]
-async def reply_to_comment(
+def reply_to_comment(
     pr_number: int,
     thread_id: str,
     body: str,
@@ -428,6 +425,3 @@ async def reply_to_comment(
         cwd=cwd,
     )
     return f"Replied to thread {thread_id} on PR #{pr_number}"
-
-
-# ruff: enable[RUF029]

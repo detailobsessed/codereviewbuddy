@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+from fastmcp.utilities.async_utils import call_sync_fn_in_threadpool
+
 from codereviewbuddy import gh
 from codereviewbuddy.models import RereviewResult
 from codereviewbuddy.reviewers import REVIEWERS, get_reviewer
@@ -39,7 +41,7 @@ async def request_rereview(
     if repo:
         owner, repo_name = repo.split("/", 1)
     else:
-        owner, repo_name = gh.get_repo_info(cwd=cwd)
+        owner, repo_name = await call_sync_fn_in_threadpool(gh.get_repo_info, cwd=cwd)
 
     triggered: list[str] = []
     auto_triggers: list[str] = []
@@ -54,7 +56,7 @@ async def request_rereview(
         if adapter.needs_manual_rereview:
             args = adapter.rereview_trigger(pr_number, owner, repo_name)
             if args:
-                gh.run_gh(*args, cwd=cwd)
+                await call_sync_fn_in_threadpool(gh.run_gh, *args, cwd=cwd)
                 triggered.append(adapter.name)
                 if ctx:
                     await ctx.info(f"Triggered re-review from {adapter.name} on PR #{pr_number}")
@@ -66,7 +68,7 @@ async def request_rereview(
             if adapter.needs_manual_rereview:
                 args = adapter.rereview_trigger(pr_number, owner, repo_name)
                 if args:
-                    gh.run_gh(*args, cwd=cwd)
+                    await call_sync_fn_in_threadpool(gh.run_gh, *args, cwd=cwd)
                     triggered.append(adapter.name)
                     if ctx:
                         await ctx.info(f"Triggered re-review from {adapter.name} on PR #{pr_number}")
