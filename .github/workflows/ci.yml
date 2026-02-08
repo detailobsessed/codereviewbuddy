@@ -26,6 +26,25 @@ env:
 
 jobs:
 
+  changes:
+    runs-on: blacksmith-4vcpu-ubuntu-2404
+    outputs:
+      src: ${{ steps.filter.outputs.src }}
+    steps:
+    - uses: actions/checkout@v6
+    - uses: dorny/paths-filter@v3
+      id: filter
+      with:
+        filters: |
+          src:
+            - 'src/**'
+            - 'tests/**'
+            - 'pyproject.toml'
+            - 'uv.lock'
+            - 'docs/**'
+            - 'mkdocs.yml'
+            - '*.md'
+
   links:
     runs-on: blacksmith-4vcpu-ubuntu-2404
     steps:
@@ -38,6 +57,8 @@ jobs:
         args: --no-progress --config .lychee.toml .
 
   quality:
+    needs: changes
+    if: ${{ github.event_name == 'push' || needs.changes.outputs.src == 'true' }}
     strategy:
       matrix:
         os:

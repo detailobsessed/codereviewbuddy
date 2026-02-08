@@ -1,5 +1,5 @@
 # Changes here will be overwritten by Copier.
-_commit: 0.17.0
+_commit: 0.19.1
 _src_path: gh:detailobsessed/copier-uv-bleeding
 author_email: ismart@gmail.com
 author_fullname: Ismar Iljazovic
@@ -11,6 +11,7 @@ project_name: codereviewbuddy
 project_type: app
 project_visibility: public
 publish_to_pypi: true
+repository_host: github.com
 repository_namespace: detailobsessed
 repository_provider: github.com
 use_blacksmith_runners: true
