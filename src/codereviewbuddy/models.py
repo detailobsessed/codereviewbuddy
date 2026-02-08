@@ -62,3 +62,4 @@ class ResolveStaleResult(TypedDict):
 
     resolved_count: int
     resolved_thread_ids: list[str]
+    skipped_count: int

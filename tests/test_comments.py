@@ -164,30 +164,30 @@ class TestListReviewComments:
         mocker.patch("codereviewbuddy.tools.comments.gh.get_repo_info", return_value=("owner", "repo"))
         mocker.patch("codereviewbuddy.tools.comments._get_changed_files", return_value=set())
 
-    def test_returns_all_threads(self):
-        threads = list_review_comments(42)
+    async def test_returns_all_threads(self):
+        threads = await list_review_comments(42)
         assert len(threads) == 2
 
-    def test_filter_unresolved(self):
-        threads = list_review_comments(42, status="unresolved")
+    async def test_filter_unresolved(self):
+        threads = await list_review_comments(42, status="unresolved")
         assert len(threads) == 1
         assert threads[0].status == "unresolved"
 
-    def test_filter_resolved(self):
-        threads = list_review_comments(42, status="resolved")
+    async def test_filter_resolved(self):
+        threads = await list_review_comments(42, status="resolved")
         assert len(threads) == 1
         assert threads[0].status == "resolved"
 
-    def test_explicit_repo(self, mocker: MockerFixture):
+    async def test_explicit_repo(self, mocker: MockerFixture):
         mocker.patch("codereviewbuddy.tools.comments.gh.graphql", return_value=SAMPLE_GRAPHQL_RESPONSE)
         mocker.patch("codereviewbuddy.tools.comments.gh.rest", return_value=[])
         mocker.patch("codereviewbuddy.tools.comments._get_changed_files", return_value=set())
-        threads = list_review_comments(42, repo="myorg/myrepo")
+        threads = await list_review_comments(42, repo="myorg/myrepo")
         assert len(threads) == 2
 
 
 class TestNonExistentPR:
-    def test_list_comments_returns_empty_for_null_pr(self, mocker: MockerFixture):
+    async def test_list_comments_returns_empty_for_null_pr(self, mocker: MockerFixture):
         """Regression: pullRequest=null must not crash with AttributeError."""
         null_pr_response = {
             "data": {"repository": {"pullRequest": None}},
@@ -199,7 +199,7 @@ class TestNonExistentPR:
         mocker.patch("codereviewbuddy.tools.comments.gh.rest", return_value=[])
         mocker.patch("codereviewbuddy.tools.comments.gh.get_repo_info", return_value=("owner", "repo"))
 
-        threads = list_review_comments(42)
+        threads = await list_review_comments(42)
         assert threads == []
 
     def test_get_changed_files_returns_empty_for_null_pr(self, mocker: MockerFixture):
@@ -214,21 +214,21 @@ class TestNonExistentPR:
 
 
 class TestResolveComment:
-    def test_success(self, mocker: MockerFixture):
+    async def test_success(self, mocker: MockerFixture):
         response = {"data": {"resolveReviewThread": {"thread": {"id": "PRRT_test", "isResolved": True}}}}
         mocker.patch("codereviewbuddy.tools.comments.gh.graphql", return_value=response)
-        result = resolve_comment(42, "PRRT_test")
+        result = await resolve_comment(42, "PRRT_test")
         assert "Resolved" in result
 
-    def test_failure(self, mocker: MockerFixture):
+    async def test_failure(self, mocker: MockerFixture):
         response = {"data": {"resolveReviewThread": {"thread": {"id": "PRRT_test", "isResolved": False}}}}
         mocker.patch("codereviewbuddy.tools.comments.gh.graphql", return_value=response)
         with pytest.raises(GhError, match="Failed to resolve"):
-            resolve_comment(42, "PRRT_test")
+            await resolve_comment(42, "PRRT_test")
 
 
 class TestResolveStaleComments:
-    def test_resolves_stale(self, mocker: MockerFixture):
+    async def test_resolves_stale(self, mocker: MockerFixture):
         stale_thread = SAMPLE_THREAD_NODE.copy()
 
         graphql_responses = [
@@ -244,11 +244,60 @@ class TestResolveStaleComments:
         mocker.patch("codereviewbuddy.tools.comments.gh.rest", return_value=[])
         mocker.patch("codereviewbuddy.tools.comments.gh.get_repo_info", return_value=("owner", "repo"))
 
-        result = resolve_stale_comments(42)
+        result = await resolve_stale_comments(42)
         assert result["resolved_count"] == 1
         assert "PRRT_kwDOtest123" in result["resolved_thread_ids"]
 
-    def test_nothing_to_resolve(self, mocker: MockerFixture):
+    async def test_skips_auto_resolving_reviewers(self, mocker: MockerFixture):
+        """Devin/CodeRabbit threads should be skipped — they auto-resolve themselves."""
+        devin_thread = {
+            "id": "PRRT_kwDOdevin456",
+            "isResolved": False,
+            "comments": {
+                "nodes": [
+                    {
+                        "author": {"login": "devin-ai-integration[bot]"},
+                        "body": "Consider refactoring this.",
+                        "createdAt": "2026-02-06T10:00:00Z",
+                        "path": "src/codereviewbuddy/gh.py",
+                        "line": 10,
+                    }
+                ]
+            },
+        }
+        mixed_response = {
+            "data": {
+                "repository": {
+                    "pullRequest": {
+                        "title": "Test PR",
+                        "url": "https://github.com/owner/repo/pull/42",
+                        "reviewThreads": {
+                            "pageInfo": {"hasNextPage": False, "endCursor": None},
+                            "nodes": [SAMPLE_THREAD_NODE, devin_thread],
+                        },
+                    }
+                }
+            },
+        }
+
+        graphql_responses = [
+            mixed_response,  # list_review_comments → threads query
+            SAMPLE_DIFF_RESPONSE,  # list_review_comments → changed files (gh.py is changed)
+            {"data": {"t0": {"thread": {"id": "PRRT_kwDOtest123", "isResolved": True}}}},  # batch resolve (only unblocked)
+        ]
+
+        mocker.patch("codereviewbuddy.tools.comments.gh.graphql", side_effect=graphql_responses)
+        mocker.patch("codereviewbuddy.tools.comments.gh.rest", return_value=[])
+        mocker.patch("codereviewbuddy.tools.comments.gh.get_repo_info", return_value=("owner", "repo"))
+
+        result = await resolve_stale_comments(42)
+        # Only the unblocked thread should be resolved; Devin thread skipped
+        assert result["resolved_count"] == 1
+        assert "PRRT_kwDOtest123" in result["resolved_thread_ids"]
+        assert "PRRT_kwDOdevin456" not in result["resolved_thread_ids"]
+        assert result["skipped_count"] == 1
+
+    async def test_nothing_to_resolve(self, mocker: MockerFixture):
         no_diff = {
             "data": {
                 "repository": {
@@ -268,7 +317,7 @@ class TestResolveStaleComments:
         mocker.patch("codereviewbuddy.tools.comments.gh.rest", return_value=[])
         mocker.patch("codereviewbuddy.tools.comments.gh.get_repo_info", return_value=("owner", "repo"))
 
-        result = resolve_stale_comments(42)
+        result = await resolve_stale_comments(42)
         assert result["resolved_count"] == 0
 
 
@@ -400,7 +449,7 @@ class TestGetPrReviews:
 class TestListIncludesPrReviews:
     """Tests that list_review_comments includes PR-level reviews."""
 
-    def test_includes_pr_reviews_alongside_threads(self, mocker: MockerFixture):
+    async def test_includes_pr_reviews_alongside_threads(self, mocker: MockerFixture):
         mocker.patch("codereviewbuddy.tools.comments.gh.graphql", return_value=SAMPLE_GRAPHQL_RESPONSE)
         mocker.patch("codereviewbuddy.tools.comments._get_changed_files", return_value=set())
         mocker.patch("codereviewbuddy.tools.comments.gh.get_repo_info", return_value=("owner", "repo"))
@@ -417,7 +466,7 @@ class TestListIncludesPrReviews:
             ],
         )
 
-        threads = list_review_comments(42)
+        threads = await list_review_comments(42)
         # 2 inline threads + 1 PR review
         assert len(threads) == 3
         pr_reviews = [t for t in threads if t.file is None]
@@ -426,7 +475,7 @@ class TestListIncludesPrReviews:
 
 
 class TestThreadsPagination:
-    def test_fetches_multiple_pages(self, mocker: MockerFixture):
+    async def test_fetches_multiple_pages(self, mocker: MockerFixture):
         page1 = {
             "data": {
                 "repository": {
@@ -462,14 +511,14 @@ class TestThreadsPagination:
         mocker.patch("codereviewbuddy.tools.comments.gh.rest", return_value=[])
         mocker.patch("codereviewbuddy.tools.comments.gh.get_repo_info", return_value=("owner", "repo"))
 
-        threads = list_review_comments(42)
+        threads = await list_review_comments(42)
         assert len(threads) == 2
         # Verify cursor was passed on second call
         second_call = mock_graphql.call_args_list[1]
         variables = second_call.kwargs.get("variables", {})
         assert variables.get("cursor") == "cursor_abc"
 
-    def test_stops_on_null_end_cursor(self, mocker: MockerFixture):
+    async def test_stops_on_null_end_cursor(self, mocker: MockerFixture):
         """Regression: hasNextPage=true + endCursor=null must not infinite-loop."""
         malformed_page = {
             "data": {
@@ -492,7 +541,7 @@ class TestThreadsPagination:
         mocker.patch("codereviewbuddy.tools.comments.gh.rest", return_value=[])
         mocker.patch("codereviewbuddy.tools.comments.gh.get_repo_info", return_value=("owner", "repo"))
 
-        threads = list_review_comments(42)
+        threads = await list_review_comments(42)
         assert len(threads) == 1
 
 
@@ -543,7 +592,7 @@ class TestChangedFilesPagination:
 class TestListStackReviewComments:
     """Tests for list_stack_review_comments."""
 
-    def test_returns_threads_grouped_by_pr(self, mocker: MockerFixture):
+    async def test_returns_threads_grouped_by_pr(self, mocker: MockerFixture):
         """Should call list_review_comments for each PR and group results."""
         from codereviewbuddy.models import CommentStatus, ReviewThread
 
@@ -567,12 +616,15 @@ class TestListStackReviewComments:
             comments=[],
             is_stale=False,
         )
+        from unittest.mock import AsyncMock
+
         mock_list = mocker.patch(
             "codereviewbuddy.tools.comments.list_review_comments",
+            new_callable=AsyncMock,
             side_effect=[[thread_10], [thread_11], []],
         )
 
-        result = list_stack_review_comments([10, 11, 12], repo="owner/repo")
+        result = await list_stack_review_comments([10, 11, 12], repo="owner/repo")
 
         assert list(result.keys()) == [10, 11, 12]
         assert result[10] == [thread_10]
@@ -580,22 +632,27 @@ class TestListStackReviewComments:
         assert result[12] == []
         assert mock_list.call_count == 3
 
-    def test_passes_status_filter(self, mocker: MockerFixture):
+    async def test_passes_status_filter(self, mocker: MockerFixture):
         """Should forward status filter to each list_review_comments call."""
+        from unittest.mock import AsyncMock
+
         mock_list = mocker.patch(
             "codereviewbuddy.tools.comments.list_review_comments",
+            new_callable=AsyncMock,
             return_value=[],
         )
 
-        list_stack_review_comments([10, 11], repo="owner/repo", status="unresolved")
+        await list_stack_review_comments([10, 11], repo="owner/repo", status="unresolved")
 
         for call in mock_list.call_args_list:
             assert call.kwargs["status"] == "unresolved"
 
-    def test_empty_pr_list(self, mocker: MockerFixture):
+    async def test_empty_pr_list(self, mocker: MockerFixture):
         """Should return empty dict for empty input."""
-        mocker.patch("codereviewbuddy.tools.comments.list_review_comments")
+        from unittest.mock import AsyncMock
 
-        result = list_stack_review_comments([], repo="owner/repo")
+        mocker.patch("codereviewbuddy.tools.comments.list_review_comments", new_callable=AsyncMock)
+
+        result = await list_stack_review_comments([], repo="owner/repo")
 
         assert result == {}
