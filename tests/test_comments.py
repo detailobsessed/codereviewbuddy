@@ -12,6 +12,7 @@ if TYPE_CHECKING:
 from codereviewbuddy.gh import GhError
 from codereviewbuddy.tools.comments import (
     _get_changed_files,
+    _get_pr_issue_comments,
     _get_pr_reviews,
     _parse_threads,
     list_review_comments,
@@ -456,14 +457,19 @@ class TestListIncludesPrReviews:
         mocker.patch("codereviewbuddy.tools.comments.gh.get_repo_info", return_value=("owner", "repo"))
         mocker.patch(
             "codereviewbuddy.tools.comments.gh.rest",
-            return_value=[
-                {
-                    "node_id": "PRR_devin",
-                    "user": {"login": "devin-ai-integration[bot]"},
-                    "state": "COMMENTED",
-                    "body": "2 potential issues found.",
-                    "submitted_at": "2026-02-07T10:00:00Z",
-                },
+            side_effect=[
+                # _get_pr_reviews call
+                [
+                    {
+                        "node_id": "PRR_devin",
+                        "user": {"login": "devin-ai-integration[bot]"},
+                        "state": "COMMENTED",
+                        "body": "2 potential issues found.",
+                        "submitted_at": "2026-02-07T10:00:00Z",
+                    },
+                ],
+                # _get_pr_issue_comments call
+                [],
             ],
         )
 
@@ -659,6 +665,86 @@ class TestListStackReviewComments:
         assert result == {}
 
 
+class TestGetPrIssueComments:
+    def test_returns_bot_comments(self, mocker: MockerFixture):
+        """Bot comments (type=Bot or [bot] suffix) should be included."""
+        mocker.patch(
+            "codereviewbuddy.tools.comments.gh.rest",
+            return_value=[
+                {
+                    "node_id": "IC_kwDOtest001",
+                    "user": {"login": "codecov[bot]", "type": "Bot"},
+                    "body": "## Coverage Report\n\nAll files 95%",
+                    "created_at": "2026-02-08T10:00:00Z",
+                },
+            ],
+        )
+
+        result = _get_pr_issue_comments("owner", "repo", 42)
+
+        assert len(result) == 1
+        assert result[0].thread_id == "IC_kwDOtest001"
+        assert result[0].reviewer == "codecov[bot]"
+        assert result[0].is_pr_review is True
+        assert "Coverage Report" in result[0].comments[0].body
+
+    def test_skips_human_comments(self, mocker: MockerFixture):
+        """Non-bot comments should be excluded."""
+        mocker.patch(
+            "codereviewbuddy.tools.comments.gh.rest",
+            return_value=[
+                {
+                    "node_id": "IC_kwDOtest002",
+                    "user": {"login": "humanuser", "type": "User"},
+                    "body": "LGTM",
+                    "created_at": "2026-02-08T10:00:00Z",
+                },
+            ],
+        )
+
+        result = _get_pr_issue_comments("owner", "repo", 42)
+        assert result == []
+
+    def test_skips_empty_bodies(self, mocker: MockerFixture):
+        mocker.patch(
+            "codereviewbuddy.tools.comments.gh.rest",
+            return_value=[
+                {
+                    "node_id": "IC_kwDOtest003",
+                    "user": {"login": "netlify[bot]", "type": "Bot"},
+                    "body": "",
+                    "created_at": "2026-02-08T10:00:00Z",
+                },
+            ],
+        )
+
+        result = _get_pr_issue_comments("owner", "repo", 42)
+        assert result == []
+
+    def test_handles_empty_response(self, mocker: MockerFixture):
+        mocker.patch("codereviewbuddy.tools.comments.gh.rest", return_value=[])
+        result = _get_pr_issue_comments("owner", "repo", 42)
+        assert result == []
+
+    def test_known_reviewer_uses_reviewer_name(self, mocker: MockerFixture):
+        """Known AI reviewers should be identified by their reviewer name."""
+        mocker.patch(
+            "codereviewbuddy.tools.comments.gh.rest",
+            return_value=[
+                {
+                    "node_id": "IC_kwDOtest004",
+                    "user": {"login": "unblocked[bot]", "type": "Bot"},
+                    "body": "@unblocked please re-review",
+                    "created_at": "2026-02-08T10:00:00Z",
+                },
+            ],
+        )
+
+        result = _get_pr_issue_comments("owner", "repo", 42)
+        assert len(result) == 1
+        assert result[0].reviewer == "unblocked"
+
+
 class TestReplyToComment:
     def test_reply_to_inline_thread(self, mocker: MockerFixture):
         """PRRT_ IDs should use the pull review comments reply API."""
@@ -705,6 +791,31 @@ class TestReplyToComment:
             body="noted",
             cwd=None,
         )
+
+    def test_reply_to_bot_issue_comment(self, mocker: MockerFixture):
+        """IC_ IDs (bot issue comments) should use the issues comments API."""
+        mocker.patch("codereviewbuddy.tools.comments.gh.get_repo_info", return_value=("owner", "repo"))
+        mock_rest = mocker.patch("codereviewbuddy.tools.comments.gh.rest")
+
+        result = reply_to_comment(42, "IC_kwDOtest001", "thanks for the coverage report")
+
+        assert "Replied to bot comment" in result
+        mock_rest.assert_called_once_with(
+            "/repos/owner/repo/issues/42/comments",
+            method="POST",
+            body="thanks for the coverage report",
+            cwd=None,
+        )
+
+    def test_resolve_rejects_prr_id(self):
+        """resolve_comment should reject PRR_ IDs with a clear error."""
+        with pytest.raises(GhError, match="only inline review threads"):
+            resolve_comment(42, "PRR_kwDOtest123")
+
+    def test_resolve_rejects_ic_id(self):
+        """resolve_comment should reject IC_ IDs with a clear error."""
+        with pytest.raises(GhError, match="only inline review threads"):
+            resolve_comment(42, "IC_kwDOtest001")
 
     def test_inline_thread_not_found_raises(self, mocker: MockerFixture):
         """PRRT_ with no comment ID should raise GhError."""

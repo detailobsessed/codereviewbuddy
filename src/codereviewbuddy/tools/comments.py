@@ -181,6 +181,58 @@ def _get_pr_reviews(
     return threads
 
 
+def _get_pr_issue_comments(
+    owner: str,
+    repo: str,
+    pr_number: int,
+    cwd: str | None = None,
+) -> list[ReviewThread]:
+    """Fetch regular PR comments from bots (e.g. codecov, netlify, vercel).
+
+    These are IssueComment nodes posted on the PR conversation tab — not review
+    threads or PR reviews. Without this, bot feedback like coverage reports and
+    deployment previews is invisible.
+    """
+    result = gh.rest(f"/repos/{owner}/{repo}/issues/{pr_number}/comments", cwd=cwd)
+    if not result:
+        return []
+
+    threads: list[ReviewThread] = []
+    for comment in result:
+        login = (comment.get("user") or {}).get("login", "unknown")
+        # Only include bot comments (login ends with [bot] or user type is Bot)
+        user_type = (comment.get("user") or {}).get("type", "")
+        is_bot = user_type == "Bot" or login.endswith("[bot]")
+        if not is_bot:
+            continue
+
+        body = (comment.get("body") or "").strip()
+        if not body:
+            continue
+
+        reviewer_name = identify_reviewer(login)
+        threads.append(
+            ReviewThread(
+                thread_id=comment.get("node_id", ""),
+                pr_number=pr_number,
+                status=CommentStatus.UNRESOLVED,
+                file=None,
+                line=None,
+                reviewer=reviewer_name if reviewer_name != "unknown" else login,
+                comments=[
+                    ReviewComment(
+                        author=login,
+                        body=body,
+                        created_at=comment.get("created_at"),
+                    ),
+                ],
+                is_stale=False,
+                is_pr_review=True,
+            )
+        )
+    return threads
+
+
 def _get_changed_files(owner: str, repo: str, pr_number: int, cwd: str | None = None) -> set[str]:
     """Get the set of files changed in the latest push of a PR."""
     all_files: list[dict[str, Any]] = []
@@ -263,6 +315,10 @@ async def list_review_comments(
     pr_reviews = await call_sync_fn_in_threadpool(_get_pr_reviews, owner, repo_name, pr_number, cwd=cwd)
     threads.extend(pr_reviews)
 
+    # Include regular PR comments from bots (e.g. codecov, netlify, vercel)
+    bot_comments = await call_sync_fn_in_threadpool(_get_pr_issue_comments, owner, repo_name, pr_number, cwd=cwd)
+    threads.extend(bot_comments)
+
     # Filter by status if requested
     if status:
         target = CommentStatus(status)
@@ -321,6 +377,10 @@ def resolve_comment(
     Returns:
         Confirmation message.
     """
+    if thread_id.startswith(("PRR_", "IC_")):
+        msg = f"Cannot resolve PR-level reviews or bot comments — only inline review threads (PRRT_) are resolvable. Got: {thread_id}"
+        raise gh.GhError(msg)
+
     result = gh.graphql(_RESOLVE_THREAD_MUTATION, variables={"threadId": thread_id}, cwd=cwd)
 
     thread_data = result.get("data", {}).get("resolveReviewThread", {}).get("thread", {})
@@ -378,15 +438,16 @@ def reply_to_comment(
     repo: str | None = None,
     cwd: str | None = None,
 ) -> str:
-    """Reply to a specific review thread or PR-level review.
+    """Reply to a specific review thread, PR-level review, or issue comment.
 
-    Supports both inline review threads (PRRT_ IDs) and PR-level reviews (PRR_ IDs).
+    Supports inline review threads (PRRT_ IDs), PR-level reviews (PRR_ IDs),
+    and issue comments (IC_ IDs, e.g. bot comments from codecov/netlify).
     For PRRT_ threads, replies as a thread comment via the pull review comments API.
-    For PRR_ reviews, posts a regular PR comment via the issues comments API.
+    For PRR_/IC_ IDs, posts a regular PR comment via the issues comments API.
 
     Args:
         pr_number: PR number.
-        thread_id: The thread ID to reply to (PRRT_... or PRR_...).
+        thread_id: The thread ID to reply to (PRRT_..., PRR_..., or IC_...).
         body: Reply text.
         repo: Repository in "owner/repo" format. Auto-detected if not provided.
         cwd: Working directory.
@@ -399,8 +460,10 @@ def reply_to_comment(
     else:
         owner, repo_name = gh.get_repo_info(cwd=cwd)
 
+    if thread_id.startswith("IC_"):
+        return _reply_to_pr_comment(pr_number, owner, repo_name, body, kind="bot comment", cwd=cwd)
     if thread_id.startswith("PRR_"):
-        return _reply_to_pr_review(pr_number, owner, repo_name, body, cwd=cwd)
+        return _reply_to_pr_comment(pr_number, owner, repo_name, body, kind="PR-level review", cwd=cwd)
 
     return _reply_to_review_thread(pr_number, thread_id, owner, repo_name, body, cwd=cwd)
 
@@ -441,18 +504,19 @@ def _reply_to_review_thread(
     return f"Replied to thread {thread_id} on PR #{pr_number}"
 
 
-def _reply_to_pr_review(
+def _reply_to_pr_comment(
     pr_number: int,
     owner: str,
     repo_name: str,
     body: str,
+    kind: str = "PR-level review",
     cwd: str | None = None,
 ) -> str:
-    """Reply to a PR-level review (PRR_ ID) by posting an issue comment."""
+    """Reply to a PR-level review or bot comment by posting an issue comment."""
     gh.rest(
         f"/repos/{owner}/{repo_name}/issues/{pr_number}/comments",
         method="POST",
         body=body,
         cwd=cwd,
     )
-    return f"Replied to PR-level review on PR #{pr_number}"
+    return f"Replied to {kind} on PR #{pr_number}"
