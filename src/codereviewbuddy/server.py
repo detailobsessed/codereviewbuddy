@@ -4,6 +4,7 @@ Exposes tools for managing AI code review comments on GitHub PRs.
 Authentication is handled by the `gh` CLI — no tokens needed.
 """
 
+import asyncio
 import logging
 
 from fastmcp import FastMCP
@@ -112,6 +113,9 @@ async def list_review_comments(
     except Exception as exc:
         logger.exception("list_review_comments failed for PR #%d", pr_number)
         return ReviewSummary(threads=[], error=f"Error: {exc}")
+    except asyncio.CancelledError:
+        logger.warning("list_review_comments cancelled for PR #%d", pr_number)
+        return ReviewSummary(threads=[], error="Cancelled")
 
 
 @mcp.tool
@@ -139,6 +143,9 @@ async def list_stack_review_comments(
     except Exception as exc:
         logger.exception("list_stack_review_comments failed")
         return {pr: ReviewSummary(threads=[], error=f"Error: {exc}") for pr in pr_numbers}
+    except asyncio.CancelledError:
+        logger.warning("list_stack_review_comments cancelled")
+        return {pr: ReviewSummary(threads=[], error="Cancelled") for pr in pr_numbers}
 
 
 @mcp.tool
@@ -185,6 +192,9 @@ async def resolve_stale_comments(
     except Exception as exc:
         logger.exception("resolve_stale_comments failed for PR #%d", pr_number)
         return ResolveStaleResult(resolved_count=0, resolved_thread_ids=[], error=f"Error: {exc}")
+    except asyncio.CancelledError:
+        logger.warning("resolve_stale_comments cancelled for PR #%d", pr_number)
+        return ResolveStaleResult(resolved_count=0, resolved_thread_ids=[], error="Cancelled")
 
 
 @mcp.tool
@@ -239,6 +249,9 @@ async def request_rereview(
     except Exception as exc:
         logger.exception("request_rereview failed for PR #%d", pr_number)
         return RereviewResult(triggered=[], auto_triggers=[], error=f"Error: {exc}")
+    except asyncio.CancelledError:
+        logger.warning("request_rereview cancelled for PR #%d", pr_number)
+        return RereviewResult(triggered=[], auto_triggers=[], error="Cancelled")
 
 
 @mcp.tool
@@ -311,6 +324,9 @@ async def wait_for_reviews(
     except Exception as exc:
         logger.exception("wait_for_reviews failed for PR #%d", pr_number)
         return ReviewSummary(threads=[], error=f"Error: {exc}")
+    except asyncio.CancelledError:
+        logger.warning("wait_for_reviews cancelled for PR #%d", pr_number)
+        return ReviewSummary(threads=[], error="Cancelled")
 
 
 @mcp.tool
@@ -333,6 +349,14 @@ async def check_for_updates() -> UpdateCheckResult:
             latest_version="unknown",
             update_available=False,
             error=f"Error: {exc}",
+        )
+    except asyncio.CancelledError:
+        logger.warning("check_for_updates cancelled")
+        return UpdateCheckResult(
+            current_version="unknown",
+            latest_version="unknown",
+            update_available=False,
+            error="Cancelled",
         )
 
 
