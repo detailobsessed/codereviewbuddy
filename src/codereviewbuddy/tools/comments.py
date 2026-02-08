@@ -378,14 +378,15 @@ def reply_to_comment(
     repo: str | None = None,
     cwd: str | None = None,
 ) -> str:
-    """Reply to a specific review thread.
+    """Reply to a specific review thread or PR-level review.
 
-    Note: GitHub's GraphQL API doesn't have a direct addPullRequestReviewThreadReply
-    mutation in all contexts, so we use the REST API for this.
+    Supports both inline review threads (PRRT_ IDs) and PR-level reviews (PRR_ IDs).
+    For PRRT_ threads, replies as a thread comment via the pull review comments API.
+    For PRR_ reviews, posts a regular PR comment via the issues comments API.
 
     Args:
         pr_number: PR number.
-        thread_id: The thread ID to reply to (we need the comment ID from the thread).
+        thread_id: The thread ID to reply to (PRRT_... or PRR_...).
         body: Reply text.
         repo: Repository in "owner/repo" format. Auto-detected if not provided.
         cwd: Working directory.
@@ -398,7 +399,21 @@ def reply_to_comment(
     else:
         owner, repo_name = gh.get_repo_info(cwd=cwd)
 
-    # First, get the comment ID from the thread
+    if thread_id.startswith("PRR_"):
+        return _reply_to_pr_review(pr_number, owner, repo_name, body, cwd=cwd)
+
+    return _reply_to_review_thread(pr_number, thread_id, owner, repo_name, body, cwd=cwd)
+
+
+def _reply_to_review_thread(
+    pr_number: int,
+    thread_id: str,
+    owner: str,
+    repo_name: str,
+    body: str,
+    cwd: str | None = None,
+) -> str:
+    """Reply to an inline review thread (PRRT_ ID) via the pull review comments API."""
     query = """
     query($threadId: ID!) {
       node(id: $threadId) {
@@ -417,7 +432,6 @@ def reply_to_comment(
         msg = f"Could not find comment ID for thread {thread_id}"
         raise gh.GhError(msg)
 
-    # Use REST API to reply
     gh.rest(
         f"/repos/{owner}/{repo_name}/pulls/{pr_number}/comments/{comment_id}/replies",
         method="POST",
@@ -425,3 +439,20 @@ def reply_to_comment(
         cwd=cwd,
     )
     return f"Replied to thread {thread_id} on PR #{pr_number}"
+
+
+def _reply_to_pr_review(
+    pr_number: int,
+    owner: str,
+    repo_name: str,
+    body: str,
+    cwd: str | None = None,
+) -> str:
+    """Reply to a PR-level review (PRR_ ID) by posting an issue comment."""
+    gh.rest(
+        f"/repos/{owner}/{repo_name}/issues/{pr_number}/comments",
+        method="POST",
+        body=body,
+        cwd=cwd,
+    )
+    return f"Replied to PR-level review on PR #{pr_number}"

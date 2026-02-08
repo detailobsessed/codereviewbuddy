@@ -16,6 +16,7 @@ from codereviewbuddy.tools.comments import (
     _parse_threads,
     list_review_comments,
     list_stack_review_comments,
+    reply_to_comment,
     resolve_comment,
     resolve_stale_comments,
 )
@@ -656,3 +657,62 @@ class TestListStackReviewComments:
         result = await list_stack_review_comments([], repo="owner/repo")
 
         assert result == {}
+
+
+class TestReplyToComment:
+    def test_reply_to_inline_thread(self, mocker: MockerFixture):
+        """PRRT_ IDs should use the pull review comments reply API."""
+        mocker.patch("codereviewbuddy.tools.comments.gh.get_repo_info", return_value=("owner", "repo"))
+        graphql_response = {"data": {"node": {"comments": {"nodes": [{"databaseId": 12345}]}}}}
+        mocker.patch("codereviewbuddy.tools.comments.gh.graphql", return_value=graphql_response)
+        mock_rest = mocker.patch("codereviewbuddy.tools.comments.gh.rest")
+
+        result = reply_to_comment(42, "PRRT_kwDOtest123", "looks good")
+
+        assert "Replied to thread PRRT_kwDOtest123" in result
+        mock_rest.assert_called_once_with(
+            "/repos/owner/repo/pulls/42/comments/12345/replies",
+            method="POST",
+            body="looks good",
+            cwd=None,
+        )
+
+    def test_reply_to_pr_review(self, mocker: MockerFixture):
+        """PRR_ IDs should use the issues comments API."""
+        mocker.patch("codereviewbuddy.tools.comments.gh.get_repo_info", return_value=("owner", "repo"))
+        mock_rest = mocker.patch("codereviewbuddy.tools.comments.gh.rest")
+
+        result = reply_to_comment(42, "PRR_kwDOtest456", "addressed in next PR")
+
+        assert "Replied to PR-level review" in result
+        mock_rest.assert_called_once_with(
+            "/repos/owner/repo/issues/42/comments",
+            method="POST",
+            body="addressed in next PR",
+            cwd=None,
+        )
+
+    def test_reply_to_pr_review_with_explicit_repo(self, mocker: MockerFixture):
+        """PRR_ with explicit repo should not call get_repo_info."""
+        mock_rest = mocker.patch("codereviewbuddy.tools.comments.gh.rest")
+
+        result = reply_to_comment(10, "PRR_kwDOtest789", "noted", repo="other/repo")
+
+        assert "Replied to PR-level review" in result
+        mock_rest.assert_called_once_with(
+            "/repos/other/repo/issues/10/comments",
+            method="POST",
+            body="noted",
+            cwd=None,
+        )
+
+    def test_inline_thread_not_found_raises(self, mocker: MockerFixture):
+        """PRRT_ with no comment ID should raise GhError."""
+        mocker.patch("codereviewbuddy.tools.comments.gh.get_repo_info", return_value=("owner", "repo"))
+        mocker.patch(
+            "codereviewbuddy.tools.comments.gh.graphql",
+            return_value={"data": {"node": {"comments": {"nodes": [{}]}}}},
+        )
+
+        with pytest.raises(GhError, match="Could not find comment ID"):
+            reply_to_comment(42, "PRRT_kwDObad", "test")
