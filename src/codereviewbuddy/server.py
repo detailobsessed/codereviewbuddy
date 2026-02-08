@@ -8,6 +8,9 @@ import logging
 
 from fastmcp import FastMCP
 from fastmcp.server.dependencies import get_context
+from fastmcp.server.middleware.error_handling import ErrorHandlingMiddleware
+from fastmcp.server.middleware.logging import LoggingMiddleware
+from fastmcp.server.middleware.timing import TimingMiddleware
 
 from codereviewbuddy import gh
 from codereviewbuddy.models import (  # noqa: TC001 - runtime imports needed for FastMCP schema generation
@@ -70,6 +73,10 @@ If an update is found, suggest the user run the upgrade command and restart thei
 MCP client.
 """,
 )
+
+mcp.add_middleware(ErrorHandlingMiddleware(include_traceback=True, transform_errors=True))
+mcp.add_middleware(TimingMiddleware())
+mcp.add_middleware(LoggingMiddleware(include_payloads=True, max_payload_length=500))
 
 
 @mcp.tool
