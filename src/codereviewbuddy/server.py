@@ -14,8 +14,9 @@ from codereviewbuddy.models import (  # noqa: TC001 - runtime imports needed for
     RereviewResult,
     ResolveStaleResult,
     ReviewThread,
+    UpdateCheckResult,
 )
-from codereviewbuddy.tools import comments, rereview
+from codereviewbuddy.tools import comments, rereview, version
 
 logger = logging.getLogger(__name__)
 
@@ -53,6 +54,12 @@ their own comments when they detect a fix (Devin, CodeRabbit). Only threads from
 reviewers that do NOT auto-resolve (e.g. Unblocked) are batch-resolved. The result
 includes a `skipped_count` field showing how many threads were left for the reviewer
 to handle.
+
+## Updates
+
+Call `check_for_updates` periodically to see if a newer version is available on PyPI.
+If an update is found, suggest the user run the upgrade command and restart their
+MCP client.
 """,
 )
 
@@ -179,6 +186,20 @@ async def request_rereview(
     """
     ctx = get_context()
     return await rereview.request_rereview(pr_number, reviewer=reviewer, repo=repo, ctx=ctx)
+
+
+@mcp.tool
+async def check_for_updates() -> UpdateCheckResult:
+    """Check if a newer version of codereviewbuddy is available on PyPI.
+
+    Compares the running server version against the latest published release.
+    If an update is available, returns the upgrade command for the user.
+    Useful for long-running MCP sessions where the server may fall behind.
+
+    Returns:
+        Current version, latest version, whether an update is available, and upgrade command.
+    """
+    return await version.check_for_updates()
 
 
 def main() -> None:

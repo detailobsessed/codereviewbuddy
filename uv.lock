@@ -218,6 +218,8 @@ version = "0.4.0"
 source = { editable = "." }
 dependencies = [
     { name = "fastmcp" },
+    { name = "httpx" },
+    { name = "packaging" },
 ]
 
 [package.dev-dependencies]
@@ -253,7 +255,11 @@ maintain = [
 ]
 
 [package.metadata]
-requires-dist = [{ name = "fastmcp", specifier = ">=2.14.5" }]
+requires-dist = [
+    { name = "fastmcp", specifier = ">=2.14.5" },
+    { name = "httpx", specifier = ">=0.28.1" },
+    { name = "packaging", specifier = ">=26.0" },
+]
 
 [package.metadata.requires-dev]
 ci = [

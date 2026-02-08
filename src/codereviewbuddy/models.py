@@ -69,3 +69,12 @@ class RereviewResult(BaseModel):
 
     triggered: list[str] = Field(default_factory=list, description="Reviewers that were manually triggered")
     auto_triggers: list[str] = Field(default_factory=list, description="Reviewers that auto-trigger on push (no action needed)")
+
+
+class UpdateCheckResult(BaseModel):
+    """Result of checking for a newer version on PyPI."""
+
+    current_version: str = Field(description="Currently running version")
+    latest_version: str = Field(description="Latest version on PyPI, or 'unknown' if check failed")
+    update_available: bool = Field(description="Whether a newer version is available")
+    upgrade_command: str = Field(default="uvx --upgrade codereviewbuddy", description="Command to upgrade")
