@@ -167,13 +167,14 @@ def reply_to_comment(
     body: str,
     repo: str | None = None,
 ) -> str:
-    """Reply to a specific review thread or PR-level review.
+    """Reply to a specific review thread, PR-level review, or bot comment.
 
-    Supports both inline review threads (PRRT_ IDs) and PR-level reviews (PRR_ IDs).
+    Supports inline review threads (PRRT_ IDs), PR-level reviews (PRR_ IDs),
+    and issue comments (IC_ IDs, e.g. bot comments from codecov/netlify).
 
     Args:
         pr_number: PR number.
-        thread_id: The GraphQL node ID (PRRT_... or PRR_...) of the thread to reply to.
+        thread_id: The node ID (PRRT_..., PRR_..., or IC_...) to reply to.
         body: Reply text.
         repo: Repository in "owner/repo" format. Auto-detected if not provided.
     """
