@@ -11,7 +11,6 @@ from typing import TYPE_CHECKING
 
 import pytest
 from fastmcp import Client
-from fastmcp.exceptions import ToolError
 
 from codereviewbuddy.server import mcp
 
@@ -226,12 +225,13 @@ class TestResolveCommentMCP:
         result = await client.call_tool("resolve_comment", {"pr_number": 42, "thread_id": "PRRT_kwDOtest123"})
         assert not result.is_error
 
-    async def test_failure_propagates(self, client: Client, mocker: MockerFixture):
+    async def test_failure_returns_error_string(self, client: Client, mocker: MockerFixture):
         fail_response = {"data": {"resolveReviewThread": {"thread": {"id": "PRRT_test", "isResolved": False}}}}
         mocker.patch("codereviewbuddy.tools.comments.gh.graphql", return_value=fail_response)
 
-        with pytest.raises(ToolError, match="Failed to resolve"):
-            await client.call_tool("resolve_comment", {"pr_number": 42, "thread_id": "PRRT_test"})
+        result = await client.call_tool("resolve_comment", {"pr_number": 42, "thread_id": "PRRT_test"})
+        assert not result.is_error
+        assert "Error resolving PRRT_test" in result.content[0].text
 
 
 class TestResolveStaleCommentsMCP:
@@ -289,8 +289,9 @@ class TestRequestRereviewMCP:
         result = await client.call_tool("request_rereview", {"pr_number": 42})
         assert not result.is_error
 
-    async def test_unknown_reviewer_error(self, client: Client, mocker: MockerFixture):
+    async def test_unknown_reviewer_returns_error(self, client: Client, mocker: MockerFixture):
         mocker.patch("codereviewbuddy.tools.rereview.gh.get_repo_info", return_value=("owner", "repo"))
 
-        with pytest.raises(ToolError, match="Unknown reviewer"):
-            await client.call_tool("request_rereview", {"pr_number": 42, "reviewer": "nonexistent"})
+        result = await client.call_tool("request_rereview", {"pr_number": 42, "reviewer": "nonexistent"})
+        assert not result.is_error
+        assert "Error" in result.content[0].text

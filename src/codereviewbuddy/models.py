@@ -55,6 +55,7 @@ class ReviewSummary(BaseModel):
     reviews_in_progress: bool = Field(
         default=False, description="True if at least one reviewer has a pending review (pushed after last review)"
     )
+    error: str | None = Field(default=None, description="Error message if the request failed")
 
 
 class StackPR(BaseModel):
@@ -82,6 +83,7 @@ class ResolveStaleResult(BaseModel):
     resolved_count: int = Field(description="Number of threads resolved")
     resolved_thread_ids: list[str] = Field(default_factory=list, description="Thread IDs that were resolved")
     skipped_count: int = Field(default=0, description="Threads skipped because the reviewer auto-resolves (e.g. Devin, CodeRabbit)")
+    error: str | None = Field(default=None, description="Error message if the request failed")
 
 
 class RereviewResult(BaseModel):
@@ -89,6 +91,7 @@ class RereviewResult(BaseModel):
 
     triggered: list[str] = Field(default_factory=list, description="Reviewers that were manually triggered")
     auto_triggers: list[str] = Field(default_factory=list, description="Reviewers that auto-trigger on push (no action needed)")
+    error: str | None = Field(default=None, description="Error message if the request failed")
 
 
 class UpdateCheckResult(BaseModel):
@@ -98,11 +101,13 @@ class UpdateCheckResult(BaseModel):
     latest_version: str = Field(description="Latest version on PyPI, or 'unknown' if check failed")
     update_available: bool = Field(description="Whether a newer version is available")
     upgrade_command: str = Field(default="uvx --upgrade codereviewbuddy", description="Command to upgrade")
+    error: str | None = Field(default=None, description="Error message if the request failed")
 
 
 class CreateIssueResult(BaseModel):
     """Result of creating a GitHub issue from a review comment."""
 
-    issue_number: int = Field(description="Created issue number")
-    issue_url: str = Field(description="URL of the created issue")
-    title: str = Field(description="Issue title")
+    issue_number: int = Field(default=0, description="Created issue number")
+    issue_url: str = Field(default="", description="URL of the created issue")
+    title: str = Field(default="", description="Issue title")
+    error: str | None = Field(default=None, description="Error message if the request failed")
