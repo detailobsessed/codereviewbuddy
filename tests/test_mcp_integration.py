@@ -112,6 +112,7 @@ async def client():
 class TestToolRegistration:
     EXPECTED_TOOLS = frozenset({
         "list_review_comments",
+        "list_stack_review_comments",
         "resolve_comment",
         "resolve_stale_comments",
         "reply_to_comment",
@@ -125,7 +126,7 @@ class TestToolRegistration:
 
     async def test_tool_count(self, client: Client):
         tools = await client.list_tools()
-        assert len(tools) == 5
+        assert len(tools) == 6
 
     async def test_list_review_comments_schema(self, client: Client):
         tools = await client.list_tools()
@@ -229,6 +230,18 @@ class TestReplyToCommentMCP:
             {"pr_number": 42, "thread_id": "PRRT_kwDOtest123", "body": "Fixed!"},
         )
         assert not result.is_error
+
+
+class TestListStackReviewCommentsMCP:
+    async def test_returns_grouped_results(self, client: Client, mocker: MockerFixture):
+        mocker.patch("codereviewbuddy.tools.comments.gh.graphql", return_value=SAMPLE_GRAPHQL_RESPONSE)
+        mocker.patch("codereviewbuddy.tools.comments.gh.rest", return_value=[])
+        mocker.patch("codereviewbuddy.tools.comments.gh.get_repo_info", return_value=("owner", "repo"))
+        mocker.patch("codereviewbuddy.tools.comments._get_changed_files", return_value=set())
+
+        result = await client.call_tool("list_stack_review_comments", {"pr_numbers": [42, 43]})
+        assert not result.is_error
+        assert len(result.content) > 0
 
 
 class TestRequestRereviewMCP:

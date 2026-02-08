@@ -256,6 +256,31 @@ def list_review_comments(
     return threads
 
 
+def list_stack_review_comments(
+    pr_numbers: list[int],
+    repo: str | None = None,
+    status: str | None = None,
+    cwd: str | None = None,
+) -> dict[int, list[ReviewThread]]:
+    """List review threads for multiple PRs in a stack, grouped by PR number.
+
+    Collapses N tool calls into 1 for the common stacked-PR review workflow.
+
+    Args:
+        pr_numbers: List of PR numbers to fetch comments for.
+        repo: Repository in "owner/repo" format. Auto-detected if not provided.
+        status: Filter by "resolved" or "unresolved". Returns all if not set.
+        cwd: Working directory for git operations.
+
+    Returns:
+        Dict mapping each PR number to its list of ReviewThread objects.
+    """
+    results: dict[int, list[ReviewThread]] = {}
+    for pr_number in pr_numbers:
+        results[pr_number] = list_review_comments(pr_number, repo=repo, status=status, cwd=cwd)
+    return results
+
+
 def resolve_comment(
     pr_number: int,
     thread_id: str,

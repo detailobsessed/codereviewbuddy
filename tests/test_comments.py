@@ -15,6 +15,7 @@ from codereviewbuddy.tools.comments import (
     _get_pr_reviews,
     _parse_threads,
     list_review_comments,
+    list_stack_review_comments,
     resolve_comment,
     resolve_stale_comments,
 )
@@ -532,3 +533,69 @@ class TestChangedFilesPagination:
 
         files = _get_changed_files("owner", "repo", 42)
         assert files == {"src/codereviewbuddy/gh.py", "README.md"}
+
+
+# ---------------------------------------------------------------------------
+# list_stack_review_comments
+# ---------------------------------------------------------------------------
+
+
+class TestListStackReviewComments:
+    """Tests for list_stack_review_comments."""
+
+    def test_returns_threads_grouped_by_pr(self, mocker: MockerFixture):
+        """Should call list_review_comments for each PR and group results."""
+        from codereviewbuddy.models import CommentStatus, ReviewThread
+
+        thread_10 = ReviewThread(
+            thread_id="PRRT_10",
+            pr_number=10,
+            status=CommentStatus.UNRESOLVED,
+            file="a.py",
+            line=1,
+            reviewer="devin",
+            comments=[],
+            is_stale=False,
+        )
+        thread_11 = ReviewThread(
+            thread_id="PRRT_11",
+            pr_number=11,
+            status=CommentStatus.RESOLVED,
+            file="b.py",
+            line=5,
+            reviewer="coderabbit",
+            comments=[],
+            is_stale=False,
+        )
+        mock_list = mocker.patch(
+            "codereviewbuddy.tools.comments.list_review_comments",
+            side_effect=[[thread_10], [thread_11], []],
+        )
+
+        result = list_stack_review_comments([10, 11, 12], repo="owner/repo")
+
+        assert list(result.keys()) == [10, 11, 12]
+        assert result[10] == [thread_10]
+        assert result[11] == [thread_11]
+        assert result[12] == []
+        assert mock_list.call_count == 3
+
+    def test_passes_status_filter(self, mocker: MockerFixture):
+        """Should forward status filter to each list_review_comments call."""
+        mock_list = mocker.patch(
+            "codereviewbuddy.tools.comments.list_review_comments",
+            return_value=[],
+        )
+
+        list_stack_review_comments([10, 11], repo="owner/repo", status="unresolved")
+
+        for call in mock_list.call_args_list:
+            assert call.kwargs["status"] == "unresolved"
+
+    def test_empty_pr_list(self, mocker: MockerFixture):
+        """Should return empty dict for empty input."""
+        mocker.patch("codereviewbuddy.tools.comments.list_review_comments")
+
+        result = list_stack_review_comments([], repo="owner/repo")
+
+        assert result == {}
