@@ -73,10 +73,16 @@ query($owner: String!, $repo: String!, $pr: Int!, $cursor: String) {
 """
 
 
-def _reviewer_auto_resolves(reviewer_name: str) -> bool:
-    """Check if a reviewer auto-resolves addressed comments on new pushes."""
+def _reviewer_auto_resolves(reviewer_name: str, comment_body: str = "") -> bool:
+    """Check if a reviewer will auto-resolve a specific thread.
+
+    Delegates to the adapter's ``auto_resolves_thread`` method which may
+    inspect the comment body (e.g. Devin skips info-level threads).
+    """
     adapter = get_reviewer(reviewer_name)
-    return adapter.auto_resolves_comments if adapter else False
+    if not adapter:
+        return False
+    return adapter.auto_resolves_thread(comment_body)
 
 
 def _parse_threads(raw_threads: list[dict[str, Any]], pr_number: int, changed_files: set[str] | None = None) -> list[ReviewThread]:
@@ -529,9 +535,15 @@ async def resolve_stale_comments(
     """
     summary = await list_review_comments(pr_number, repo=repo, status="unresolved", cwd=cwd, ctx=ctx)
     stale = [t for t in summary.threads if t.is_stale and not t.is_pr_review]
-    # Skip threads from reviewers that auto-resolve (e.g. Devin, CodeRabbit)
-    skipped = [t for t in stale if _reviewer_auto_resolves(t.reviewer)]
-    stale = [t for t in stale if not _reviewer_auto_resolves(t.reviewer)]
+    # Skip threads from reviewers that auto-resolve (e.g. Devin bugs, CodeRabbit)
+    # but allow info-level threads through (Devin won't auto-resolve those)
+
+    def _will_auto_resolve(t: ReviewThread) -> bool:
+        body = t.comments[0].body if t.comments else ""
+        return _reviewer_auto_resolves(t.reviewer, body)
+
+    skipped = [t for t in stale if _will_auto_resolve(t)]
+    stale = [t for t in stale if not _will_auto_resolve(t)]
 
     if not stale:
         return ResolveStaleResult(resolved_count=0, resolved_thread_ids=[], skipped_count=len(skipped))

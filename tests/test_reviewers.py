@@ -67,6 +67,18 @@ class TestDevinAdapter:
         assert adapter.needs_manual_rereview is False
         assert adapter.auto_resolves_comments is True
 
+    def test_auto_resolves_bug_thread(self):
+        adapter = DevinAdapter()
+        assert adapter.auto_resolves_thread("🔴 **Bug: null pointer**") is True
+
+    def test_auto_resolves_flag_thread(self):
+        adapter = DevinAdapter()
+        assert adapter.auto_resolves_thread("🚩 **check_for_updates not wrapped**") is True
+
+    def test_does_not_auto_resolve_info_thread(self):
+        adapter = DevinAdapter()
+        assert adapter.auto_resolves_thread("📝 **Info: This is informational**") is False
+
     def test_rereview_trigger_empty(self):
         adapter = DevinAdapter()
         assert adapter.rereview_trigger(42, "owner", "repo") == []

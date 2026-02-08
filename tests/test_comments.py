@@ -303,7 +303,7 @@ class TestResolveStaleComments:
                 "nodes": [
                     {
                         "author": {"login": "devin-ai-integration[bot]"},
-                        "body": "Consider refactoring this.",
+                        "body": "🔴 **Bug: Consider refactoring this.**",
                         "createdAt": "2026-02-06T10:00:00Z",
                         "path": "src/codereviewbuddy/gh.py",
                         "line": 10,
@@ -345,6 +345,63 @@ class TestResolveStaleComments:
         assert "PRRT_kwDOtest123" in result.resolved_thread_ids
         assert "PRRT_kwDOdevin456" not in result.resolved_thread_ids
         assert result.skipped_count == 1
+
+    async def test_resolves_devin_info_threads(self, mocker: MockerFixture):
+        """Devin info threads (📝) should be resolved — Devin won't auto-resolve them."""
+        devin_info_thread = {
+            "id": "PRRT_kwDOdevin_info",
+            "isResolved": False,
+            "comments": {
+                "nodes": [
+                    {
+                        "author": {"login": "devin-ai-integration[bot]"},
+                        "body": "📝 **Info: This is an informational comment**\n\nSome analysis details.",
+                        "createdAt": "2026-02-06T10:00:00Z",
+                        "path": "src/codereviewbuddy/gh.py",
+                        "line": 15,
+                    }
+                ]
+            },
+        }
+        mixed_response = {
+            "data": {
+                "repository": {
+                    "pullRequest": {
+                        "title": "Test PR",
+                        "url": "https://github.com/owner/repo/pull/42",
+                        "reviewThreads": {
+                            "pageInfo": {"hasNextPage": False, "endCursor": None},
+                            "nodes": [SAMPLE_THREAD_NODE, devin_info_thread],
+                        },
+                    }
+                }
+            },
+        }
+
+        graphql_responses = [
+            mixed_response,
+            SAMPLE_DIFF_RESPONSE,
+            # Both threads resolved: unblocked + devin info
+            {
+                "data": {
+                    "t0": {"thread": {"id": "PRRT_kwDOtest123", "isResolved": True}},
+                    "t1": {"thread": {"id": "PRRT_kwDOdevin_info", "isResolved": True}},
+                }
+            },
+        ]
+
+        mocker.patch("codereviewbuddy.tools.comments.gh.graphql", side_effect=graphql_responses)
+        mocker.patch(
+            "codereviewbuddy.tools.comments.gh.rest",
+            side_effect=[[], [], SAMPLE_COMMITS_RESPONSE],
+        )
+        mocker.patch("codereviewbuddy.tools.comments.gh.get_repo_info", return_value=("owner", "repo"))
+
+        result = await resolve_stale_comments(42)
+        assert result.resolved_count == 2
+        assert "PRRT_kwDOtest123" in result.resolved_thread_ids
+        assert "PRRT_kwDOdevin_info" in result.resolved_thread_ids
+        assert result.skipped_count == 0
 
     async def test_nothing_to_resolve(self, mocker: MockerFixture):
         no_diff = {
