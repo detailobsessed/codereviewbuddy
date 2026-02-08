@@ -13,7 +13,7 @@ from fastmcp.server.middleware.logging import LoggingMiddleware
 from fastmcp.server.middleware.timing import TimingMiddleware
 
 from codereviewbuddy import gh
-from codereviewbuddy.models import (  # noqa: TC001 - runtime imports needed for FastMCP schema generation
+from codereviewbuddy.models import (
     CreateIssueResult,
     RereviewResult,
     ResolveStaleResult,
@@ -106,8 +106,12 @@ async def list_review_comments(
     Returns:
         List of review threads with thread_id, file, line, reviewer, status, is_stale, and comments.
     """
-    ctx = get_context()
-    return await comments.list_review_comments(pr_number, repo=repo, status=status, ctx=ctx)
+    try:
+        ctx = get_context()
+        return await comments.list_review_comments(pr_number, repo=repo, status=status, ctx=ctx)
+    except Exception as exc:
+        logger.exception("list_review_comments failed for PR #%d", pr_number)
+        return ReviewSummary(threads=[], error=f"Error: {exc}")
 
 
 @mcp.tool
@@ -129,8 +133,12 @@ async def list_stack_review_comments(
     Returns:
         Dict mapping each PR number to its list of review threads.
     """
-    ctx = get_context()
-    return await comments.list_stack_review_comments(pr_numbers, repo=repo, status=status, ctx=ctx)
+    try:
+        ctx = get_context()
+        return await comments.list_stack_review_comments(pr_numbers, repo=repo, status=status, ctx=ctx)
+    except Exception as exc:
+        logger.exception("list_stack_review_comments failed")
+        return {pr: ReviewSummary(threads=[], error=f"Error: {exc}") for pr in pr_numbers}
 
 
 @mcp.tool
@@ -147,7 +155,11 @@ def resolve_comment(
         pr_number: PR number (for context).
         thread_id: The GraphQL node ID (PRRT_...) of the thread to resolve.
     """
-    return comments.resolve_comment(pr_number, thread_id)
+    try:
+        return comments.resolve_comment(pr_number, thread_id)
+    except Exception as exc:
+        logger.exception("resolve_comment failed for %s on PR #%d", thread_id, pr_number)
+        return f"Error resolving {thread_id} on PR #{pr_number}: {exc}"
 
 
 @mcp.tool
@@ -167,8 +179,12 @@ async def resolve_stale_comments(
     Returns:
         Dict with resolved_count and resolved_thread_ids.
     """
-    ctx = get_context()
-    return await comments.resolve_stale_comments(pr_number, repo=repo, ctx=ctx)
+    try:
+        ctx = get_context()
+        return await comments.resolve_stale_comments(pr_number, repo=repo, ctx=ctx)
+    except Exception as exc:
+        logger.exception("resolve_stale_comments failed for PR #%d", pr_number)
+        return ResolveStaleResult(resolved_count=0, resolved_thread_ids=[], error=f"Error: {exc}")
 
 
 @mcp.tool
@@ -189,7 +205,11 @@ def reply_to_comment(
         body: Reply text.
         repo: Repository in "owner/repo" format. Auto-detected if not provided.
     """
-    return comments.reply_to_comment(pr_number, thread_id, body, repo=repo)
+    try:
+        return comments.reply_to_comment(pr_number, thread_id, body, repo=repo)
+    except Exception as exc:
+        logger.exception("reply_to_comment failed for %s on PR #%d", thread_id, pr_number)
+        return f"Error replying to {thread_id} on PR #{pr_number}: {exc}"
 
 
 @mcp.tool
@@ -213,8 +233,12 @@ async def request_rereview(
     Returns:
         Dict with "triggered" (manually triggered reviewers) and "auto_triggers" (no action needed).
     """
-    ctx = get_context()
-    return await rereview.request_rereview(pr_number, reviewer=reviewer, repo=repo, ctx=ctx)
+    try:
+        ctx = get_context()
+        return await rereview.request_rereview(pr_number, reviewer=reviewer, repo=repo, ctx=ctx)
+    except Exception as exc:
+        logger.exception("request_rereview failed for PR #%d", pr_number)
+        return RereviewResult(triggered=[], auto_triggers=[], error=f"Error: {exc}")
 
 
 @mcp.tool
@@ -240,13 +264,17 @@ def create_issue_from_comment(
     Returns:
         Created issue number, URL, and title.
     """
-    return issues.create_issue_from_comment(
-        pr_number,
-        thread_id,
-        title,
-        labels=labels,
-        repo=repo,
-    )
+    try:
+        return issues.create_issue_from_comment(
+            pr_number,
+            thread_id,
+            title,
+            labels=labels,
+            repo=repo,
+        )
+    except Exception as exc:
+        logger.exception("create_issue_from_comment failed for %s on PR #%d", thread_id, pr_number)
+        return CreateIssueResult(issue_number=0, issue_url="", title=title, error=f"Error: {exc}")
 
 
 @mcp.tool
@@ -271,14 +299,18 @@ async def wait_for_reviews(
     Returns:
         Final ReviewSummary. Check reviews_in_progress — if still true, timeout was reached.
     """
-    ctx = get_context()
-    return await wait.wait_for_reviews(
-        pr_number,
-        repo=repo,
-        timeout=timeout,
-        poll_interval=poll_interval,
-        ctx=ctx,
-    )
+    try:
+        ctx = get_context()
+        return await wait.wait_for_reviews(
+            pr_number,
+            repo=repo,
+            timeout=timeout,
+            poll_interval=poll_interval,
+            ctx=ctx,
+        )
+    except Exception as exc:
+        logger.exception("wait_for_reviews failed for PR #%d", pr_number)
+        return ReviewSummary(threads=[], error=f"Error: {exc}")
 
 
 @mcp.tool
@@ -292,7 +324,16 @@ async def check_for_updates() -> UpdateCheckResult:
     Returns:
         Current version, latest version, whether an update is available, and upgrade command.
     """
-    return await version.check_for_updates()
+    try:
+        return await version.check_for_updates()
+    except Exception as exc:
+        logger.exception("check_for_updates failed")
+        return UpdateCheckResult(
+            current_version="unknown",
+            latest_version="unknown",
+            update_available=False,
+            error=f"Error: {exc}",
+        )
 
 
 def main() -> None:
