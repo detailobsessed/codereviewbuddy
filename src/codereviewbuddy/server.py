@@ -7,6 +7,7 @@ Authentication is handled by the `gh` CLI — no tokens needed.
 import logging
 
 from fastmcp import FastMCP
+from fastmcp.server.dependencies import get_context
 
 from codereviewbuddy import gh
 from codereviewbuddy.models import ResolveStaleResult  # noqa: TC001 - runtime import needed for FastMCP schema generation
@@ -40,12 +41,20 @@ across Unblocked, Devin, and CodeRabbit with staleness detection.
 A comment is "stale" when the file it references has been modified in the latest push.
 Stale comments are safe to batch-resolve with `resolve_stale_comments` since the code
 they reviewed has changed.
+
+## Auto-resolving reviewers
+
+`resolve_stale_comments` automatically skips threads from reviewers that auto-resolve
+their own comments when they detect a fix (Devin, CodeRabbit). Only threads from
+reviewers that do NOT auto-resolve (e.g. Unblocked) are batch-resolved. The result
+includes a `skipped_count` field showing how many threads were left for the reviewer
+to handle.
 """,
 )
 
 
 @mcp.tool
-def list_review_comments(
+async def list_review_comments(
     pr_number: int,
     repo: str | None = None,
     status: str | None = None,
@@ -60,12 +69,13 @@ def list_review_comments(
     Returns:
         List of review threads with thread_id, file, line, reviewer, status, is_stale, and comments.
     """
-    threads = comments.list_review_comments(pr_number, repo=repo, status=status)
+    ctx = get_context()
+    threads = await comments.list_review_comments(pr_number, repo=repo, status=status, ctx=ctx)
     return [t.model_dump(mode="json") for t in threads]
 
 
 @mcp.tool
-def list_stack_review_comments(
+async def list_stack_review_comments(
     pr_numbers: list[int],
     repo: str | None = None,
     status: str | None = None,
@@ -83,12 +93,13 @@ def list_stack_review_comments(
     Returns:
         Dict mapping each PR number to its list of review threads.
     """
-    results = comments.list_stack_review_comments(pr_numbers, repo=repo, status=status)
+    ctx = get_context()
+    results = await comments.list_stack_review_comments(pr_numbers, repo=repo, status=status, ctx=ctx)
     return {pr: [t.model_dump(mode="json") for t in threads] for pr, threads in results.items()}
 
 
 @mcp.tool
-def resolve_comment(
+async def resolve_comment(
     pr_number: int,
     thread_id: str,
 ) -> str:
@@ -101,11 +112,11 @@ def resolve_comment(
         pr_number: PR number (for context).
         thread_id: The GraphQL node ID (PRRT_...) of the thread to resolve.
     """
-    return comments.resolve_comment(pr_number, thread_id)
+    return await comments.resolve_comment(pr_number, thread_id)
 
 
 @mcp.tool
-def resolve_stale_comments(
+async def resolve_stale_comments(
     pr_number: int,
     repo: str | None = None,
 ) -> ResolveStaleResult:
@@ -121,11 +132,12 @@ def resolve_stale_comments(
     Returns:
         Dict with resolved_count and resolved_thread_ids.
     """
-    return comments.resolve_stale_comments(pr_number, repo=repo)
+    ctx = get_context()
+    return await comments.resolve_stale_comments(pr_number, repo=repo, ctx=ctx)
 
 
 @mcp.tool
-def reply_to_comment(
+async def reply_to_comment(
     pr_number: int,
     thread_id: str,
     body: str,
@@ -139,11 +151,11 @@ def reply_to_comment(
         body: Reply text.
         repo: Repository in "owner/repo" format. Auto-detected if not provided.
     """
-    return comments.reply_to_comment(pr_number, thread_id, body, repo=repo)
+    return await comments.reply_to_comment(pr_number, thread_id, body, repo=repo)
 
 
 @mcp.tool
-def request_rereview(
+async def request_rereview(
     pr_number: int,
     reviewer: str | None = None,
     repo: str | None = None,
@@ -163,7 +175,8 @@ def request_rereview(
     Returns:
         Dict with "triggered" (manually triggered reviewers) and "auto_triggers" (no action needed).
     """
-    return rereview.request_rereview(pr_number, reviewer=reviewer, repo=repo)
+    ctx = get_context()
+    return await rereview.request_rereview(pr_number, reviewer=reviewer, repo=repo, ctx=ctx)
 
 
 def main() -> None:

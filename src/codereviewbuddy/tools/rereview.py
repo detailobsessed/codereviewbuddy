@@ -2,19 +2,21 @@
 
 from __future__ import annotations
 
-import logging
+from typing import TYPE_CHECKING
 
 from codereviewbuddy import gh
 from codereviewbuddy.reviewers import REVIEWERS, get_reviewer
 
-logger = logging.getLogger(__name__)
+if TYPE_CHECKING:
+    from fastmcp.server.context import Context
 
 
-def request_rereview(
+async def request_rereview(
     pr_number: int,
     reviewer: str | None = None,
     repo: str | None = None,
     cwd: str | None = None,
+    ctx: Context | None = None,
 ) -> dict[str, list[str] | list[str]]:
     """Trigger a re-review for AI reviewers on a PR.
 
@@ -53,7 +55,8 @@ def request_rereview(
             if args:
                 gh.run_gh(*args, cwd=cwd)
                 triggered.append(adapter.name)
-                logger.info("Triggered re-review from %s on PR #%d", adapter.name, pr_number)
+                if ctx:
+                    await ctx.info(f"Triggered re-review from {adapter.name} on PR #{pr_number}")
         else:
             auto_triggers.append(adapter.name)
     else:
@@ -64,7 +67,8 @@ def request_rereview(
                 if args:
                     gh.run_gh(*args, cwd=cwd)
                     triggered.append(adapter.name)
-                    logger.info("Triggered re-review from %s on PR #%d", adapter.name, pr_number)
+                    if ctx:
+                        await ctx.info(f"Triggered re-review from {adapter.name} on PR #{pr_number}")
             else:
                 auto_triggers.append(adapter.name)
 

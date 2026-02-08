@@ -2,17 +2,16 @@
 
 from __future__ import annotations
 
-import logging
 from typing import TYPE_CHECKING
 
 from codereviewbuddy import gh
 from codereviewbuddy.models import CommentStatus, ResolveStaleResult, ReviewComment, ReviewThread
-from codereviewbuddy.reviewers import identify_reviewer
+from codereviewbuddy.reviewers import get_reviewer, identify_reviewer
 
 if TYPE_CHECKING:
     from typing import Any
 
-logger = logging.getLogger(__name__)
+    from fastmcp.server.context import Context
 
 # GraphQL query to fetch review threads for a PR (paginated)
 _THREADS_QUERY = """
@@ -69,6 +68,12 @@ query($owner: String!, $repo: String!, $pr: Int!, $cursor: String) {
   }
 }
 """
+
+
+def _reviewer_auto_resolves(reviewer_name: str) -> bool:
+    """Check if a reviewer auto-resolves addressed comments on new pushes."""
+    adapter = get_reviewer(reviewer_name)
+    return adapter.auto_resolves_comments if adapter else False
 
 
 def _parse_threads(raw_threads: list[dict[str, Any]], pr_number: int, changed_files: set[str] | None = None) -> list[ReviewThread]:
@@ -198,11 +203,12 @@ def _get_changed_files(owner: str, repo: str, pr_number: int, cwd: str | None = 
     return {f["path"] for f in all_files if f.get("path")}
 
 
-def list_review_comments(
+async def list_review_comments(
     pr_number: int,
     repo: str | None = None,
     status: str | None = None,
     cwd: str | None = None,
+    ctx: Context | None = None,
 ) -> list[ReviewThread]:
     """List all review threads for a PR with reviewer identification and staleness detection.
 
@@ -211,6 +217,7 @@ def list_review_comments(
         repo: Repository in "owner/repo" format. Auto-detected if not provided.
         status: Filter by "resolved" or "unresolved". Returns all if not set.
         cwd: Working directory for git operations.
+        ctx: FastMCP context for progress reporting. Injected by server tools.
 
     Returns:
         List of ReviewThread objects.
@@ -223,8 +230,14 @@ def list_review_comments(
     # Fetch threads (paginated) and changed files
     raw_threads: list[dict[str, Any]] = []
     cursor = None
+    page = 0
 
     while True:
+        page += 1
+        if ctx:
+            await ctx.report_progress(progress=page, total=None)
+            await ctx.info(f"Fetching review threads for PR #{pr_number} (page {page})")
+
         variables: dict[str, Any] = {"owner": owner, "repo": repo_name, "pr": pr_number}
         if cursor:
             variables["cursor"] = cursor
@@ -253,14 +266,18 @@ def list_review_comments(
         target = CommentStatus(status)
         threads = [t for t in threads if t.status == target]
 
+    if ctx:
+        await ctx.info(f"Found {len(threads)} review threads for PR #{pr_number}")
+
     return threads
 
 
-def list_stack_review_comments(
+async def list_stack_review_comments(
     pr_numbers: list[int],
     repo: str | None = None,
     status: str | None = None,
     cwd: str | None = None,
+    ctx: Context | None = None,
 ) -> dict[int, list[ReviewThread]]:
     """List review threads for multiple PRs in a stack, grouped by PR number.
 
@@ -271,17 +288,24 @@ def list_stack_review_comments(
         repo: Repository in "owner/repo" format. Auto-detected if not provided.
         status: Filter by "resolved" or "unresolved". Returns all if not set.
         cwd: Working directory for git operations.
+        ctx: FastMCP context for progress reporting. Injected by server tools.
 
     Returns:
         Dict mapping each PR number to its list of ReviewThread objects.
     """
     results: dict[int, list[ReviewThread]] = {}
-    for pr_number in pr_numbers:
-        results[pr_number] = list_review_comments(pr_number, repo=repo, status=status, cwd=cwd)
+    total = len(pr_numbers)
+    for i, pr_number in enumerate(pr_numbers):
+        if ctx:
+            await ctx.report_progress(progress=i, total=total)
+        results[pr_number] = await list_review_comments(pr_number, repo=repo, status=status, cwd=cwd, ctx=ctx)
+    if ctx:
+        await ctx.report_progress(progress=total, total=total)
     return results
 
 
-def resolve_comment(
+# ruff: disable[RUF029]
+async def resolve_comment(
     pr_number: int,
     thread_id: str,
     cwd: str | None = None,
@@ -306,10 +330,14 @@ def resolve_comment(
     raise gh.GhError(msg)
 
 
-def resolve_stale_comments(
+# ruff: enable[RUF029]
+
+
+async def resolve_stale_comments(
     pr_number: int,
     repo: str | None = None,
     cwd: str | None = None,
+    ctx: Context | None = None,
 ) -> ResolveStaleResult:
     """Bulk-resolve all unresolved threads on lines that changed since the review.
 
@@ -317,15 +345,19 @@ def resolve_stale_comments(
         pr_number: PR number.
         repo: Repository in "owner/repo" format. Auto-detected if not provided.
         cwd: Working directory.
+        ctx: FastMCP context for progress reporting. Injected by server tools.
 
     Returns:
         Dict with "resolved_count" and "resolved_thread_ids".
     """
-    threads = list_review_comments(pr_number, repo=repo, status="unresolved", cwd=cwd)
+    threads = await list_review_comments(pr_number, repo=repo, status="unresolved", cwd=cwd, ctx=ctx)
     stale = [t for t in threads if t.is_stale and not t.is_pr_review]
+    # Skip threads from reviewers that auto-resolve (e.g. Devin, CodeRabbit)
+    skipped = [t for t in stale if _reviewer_auto_resolves(t.reviewer)]
+    stale = [t for t in stale if not _reviewer_auto_resolves(t.reviewer)]
 
     if not stale:
-        return {"resolved_count": 0, "resolved_thread_ids": []}
+        return ResolveStaleResult(resolved_count=0, resolved_thread_ids=[], skipped_count=len(skipped))
 
     # Batch resolve using GraphQL aliases
     mutations = []
@@ -336,11 +368,13 @@ def resolve_stale_comments(
     gh.graphql(batch_mutation, cwd=cwd)
 
     resolved_ids = [t.thread_id for t in stale]
-    logger.info("Resolved %d stale threads on PR #%d", len(resolved_ids), pr_number)
-    return {"resolved_count": len(resolved_ids), "resolved_thread_ids": resolved_ids}
+    if ctx:
+        await ctx.info(f"Resolved {len(resolved_ids)} stale threads on PR #{pr_number}")
+    return ResolveStaleResult(resolved_count=len(resolved_ids), resolved_thread_ids=resolved_ids, skipped_count=len(skipped))
 
 
-def reply_to_comment(
+# ruff: disable[RUF029]
+async def reply_to_comment(
     pr_number: int,
     thread_id: str,
     body: str,
@@ -394,3 +428,6 @@ def reply_to_comment(
         cwd=cwd,
     )
     return f"Replied to thread {thread_id} on PR #{pr_number}"
+
+
+# ruff: enable[RUF029]
