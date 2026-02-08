@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from codereviewbuddy import gh
+from codereviewbuddy.models import RereviewResult
 from codereviewbuddy.reviewers import REVIEWERS, get_reviewer
 
 if TYPE_CHECKING:
@@ -17,7 +18,7 @@ async def request_rereview(
     repo: str | None = None,
     cwd: str | None = None,
     ctx: Context | None = None,
-) -> dict[str, list[str] | list[str]]:
+) -> RereviewResult:
     """Trigger a re-review for AI reviewers on a PR.
 
     For reviewers that need manual triggering (e.g. Unblocked), posts a comment.
@@ -72,4 +73,4 @@ async def request_rereview(
             else:
                 auto_triggers.append(adapter.name)
 
-    return {"triggered": triggered, "auto_triggers": auto_triggers}
+    return RereviewResult(triggered=triggered, auto_triggers=auto_triggers)

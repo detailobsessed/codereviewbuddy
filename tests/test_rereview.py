@@ -20,8 +20,8 @@ class TestRequestRereview:
 
     async def test_trigger_unblocked(self):
         result = await request_rereview(42, reviewer="unblocked")
-        assert "unblocked" in result["triggered"]
-        assert result["auto_triggers"] == []
+        assert "unblocked" in result.triggered
+        assert result.auto_triggers == []
         self.mock_run.assert_called_once()
         args = self.mock_run.call_args[0]
         assert "42" in args
@@ -29,19 +29,19 @@ class TestRequestRereview:
 
     async def test_devin_auto_triggers(self):
         result = await request_rereview(42, reviewer="devin")
-        assert result["triggered"] == []
-        assert "devin" in result["auto_triggers"]
+        assert result.triggered == []
+        assert "devin" in result.auto_triggers
 
     async def test_coderabbit_auto_triggers(self):
         result = await request_rereview(42, reviewer="coderabbit")
-        assert result["triggered"] == []
-        assert "coderabbit" in result["auto_triggers"]
+        assert result.triggered == []
+        assert "coderabbit" in result.auto_triggers
 
     async def test_trigger_all(self):
         result = await request_rereview(42)
-        assert "unblocked" in result["triggered"]
-        assert "devin" in result["auto_triggers"]
-        assert "coderabbit" in result["auto_triggers"]
+        assert "unblocked" in result.triggered
+        assert "devin" in result.auto_triggers
+        assert "coderabbit" in result.auto_triggers
 
     async def test_unknown_reviewer(self):
         with pytest.raises(ValueError, match="Unknown reviewer"):
@@ -50,6 +50,6 @@ class TestRequestRereview:
     async def test_explicit_repo(self, mocker: MockerFixture):
         mock_run = mocker.patch("codereviewbuddy.tools.rereview.gh.run_gh")
         result = await request_rereview(42, reviewer="unblocked", repo="myorg/myrepo")
-        assert "unblocked" in result["triggered"]
+        assert "unblocked" in result.triggered
         args = mock_run.call_args[0]
         assert "myorg/myrepo" in args

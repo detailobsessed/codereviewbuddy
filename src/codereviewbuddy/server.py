@@ -10,7 +10,11 @@ from fastmcp import FastMCP
 from fastmcp.server.dependencies import get_context
 
 from codereviewbuddy import gh
-from codereviewbuddy.models import ResolveStaleResult  # noqa: TC001 - runtime import needed for FastMCP schema generation
+from codereviewbuddy.models import (  # noqa: TC001 - runtime imports needed for FastMCP schema generation
+    RereviewResult,
+    ResolveStaleResult,
+    ReviewThread,
+)
 from codereviewbuddy.tools import comments, rereview
 
 logger = logging.getLogger(__name__)
@@ -58,7 +62,7 @@ async def list_review_comments(
     pr_number: int,
     repo: str | None = None,
     status: str | None = None,
-) -> list[dict]:
+) -> list[ReviewThread]:
     """List all review threads for a PR with reviewer identification and staleness.
 
     Args:
@@ -70,8 +74,7 @@ async def list_review_comments(
         List of review threads with thread_id, file, line, reviewer, status, is_stale, and comments.
     """
     ctx = get_context()
-    threads = await comments.list_review_comments(pr_number, repo=repo, status=status, ctx=ctx)
-    return [t.model_dump(mode="json") for t in threads]
+    return await comments.list_review_comments(pr_number, repo=repo, status=status, ctx=ctx)
 
 
 @mcp.tool
@@ -79,7 +82,7 @@ async def list_stack_review_comments(
     pr_numbers: list[int],
     repo: str | None = None,
     status: str | None = None,
-) -> dict[int, list[dict]]:
+) -> dict[int, list[ReviewThread]]:
     """List review threads for multiple PRs in a stack, grouped by PR number.
 
     Collapses N tool calls into 1 for the common stacked-PR review workflow.
@@ -94,8 +97,7 @@ async def list_stack_review_comments(
         Dict mapping each PR number to its list of review threads.
     """
     ctx = get_context()
-    results = await comments.list_stack_review_comments(pr_numbers, repo=repo, status=status, ctx=ctx)
-    return {pr: [t.model_dump(mode="json") for t in threads] for pr, threads in results.items()}
+    return await comments.list_stack_review_comments(pr_numbers, repo=repo, status=status, ctx=ctx)
 
 
 @mcp.tool
@@ -159,7 +161,7 @@ async def request_rereview(
     pr_number: int,
     reviewer: str | None = None,
     repo: str | None = None,
-) -> dict:
+) -> RereviewResult:
     """Trigger a re-review for AI reviewers on a PR.
 
     Handles per-reviewer differences automatically:
