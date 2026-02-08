@@ -83,11 +83,15 @@ Add to your MCP settings (`~/.codeium/windsurf/mcp_config.json`):
   "mcpServers": {
     "codereviewbuddy": {
       "command": "uvx",
-      "args": ["codereviewbuddy"]
+      "args": ["--prerelease=allow", "codereviewbuddy@latest"]
     }
   }
 }
 ```
+
+> **Why `--prerelease=allow`?** codereviewbuddy depends on FastMCP v3 beta (`>=3.0.0b2`). Without this flag, `uvx` refuses to resolve pre-release dependencies.
+>
+> **Why `@latest`?** Without it, `uvx` caches the first resolved version and never upgrades automatically.
 
 ### Claude Desktop
 
@@ -98,7 +102,7 @@ Add to `~/Library/Application Support/Claude/claude_desktop_config.json`:
   "mcpServers": {
     "codereviewbuddy": {
       "command": "uvx",
-      "args": ["codereviewbuddy"]
+      "args": ["--prerelease=allow", "codereviewbuddy@latest"]
     }
   }
 }
@@ -113,7 +117,7 @@ Add to `.cursor/mcp.json` in your project:
   "mcpServers": {
     "codereviewbuddy": {
       "command": "uvx",
-      "args": ["codereviewbuddy"]
+      "args": ["--prerelease=allow", "codereviewbuddy@latest"]
     }
   }
 }
