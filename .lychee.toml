@@ -13,6 +13,9 @@ exclude = [
     '^mailto:',
     # Private repo — various URLs 404 without auth
     '^https://github\.com/detailobsessed/codereviewbuddy',
+    # Placeholder URLs used in test fixtures
+    '^https://github\.com/owner/repo',
+    '^https://github\.com/other/repo',
     '^https://detailobsessed\.github\.io/codereviewbuddy',
     # Local dev server referenced in CONTRIBUTING.md
     '^http://localhost',
