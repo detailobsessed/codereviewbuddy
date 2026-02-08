@@ -78,3 +78,11 @@ class UpdateCheckResult(BaseModel):
     latest_version: str = Field(description="Latest version on PyPI, or 'unknown' if check failed")
     update_available: bool = Field(description="Whether a newer version is available")
     upgrade_command: str = Field(default="uvx --upgrade codereviewbuddy", description="Command to upgrade")
+
+
+class CreateIssueResult(BaseModel):
+    """Result of creating a GitHub issue from a review comment."""
+
+    issue_number: int = Field(description="Created issue number")
+    issue_url: str = Field(description="URL of the created issue")
+    title: str = Field(description="Issue title")

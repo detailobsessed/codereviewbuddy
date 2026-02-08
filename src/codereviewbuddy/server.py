@@ -11,12 +11,13 @@ from fastmcp.server.dependencies import get_context
 
 from codereviewbuddy import gh
 from codereviewbuddy.models import (  # noqa: TC001 - runtime imports needed for FastMCP schema generation
+    CreateIssueResult,
     RereviewResult,
     ResolveStaleResult,
     ReviewThread,
     UpdateCheckResult,
 )
-from codereviewbuddy.tools import comments, rereview, version
+from codereviewbuddy.tools import comments, issues, rereview, version
 
 logger = logging.getLogger(__name__)
 
@@ -54,6 +55,13 @@ their own comments when they detect a fix (Devin, CodeRabbit). Only threads from
 reviewers that do NOT auto-resolve (e.g. Unblocked) are batch-resolved. The result
 includes a `skipped_count` field showing how many threads were left for the reviewer
 to handle.
+
+## Tracking useful suggestions
+
+When review comments contain genuinely useful improvement suggestions (not bugs being
+fixed in the PR), use `create_issue_from_comment` to create a GitHub issue. Use labels
+to classify: type labels (bug, enhancement, documentation) and priority labels (P0-P3).
+Don't file issues for nitpicks or things already being addressed.
 
 ## Updates
 
@@ -186,6 +194,38 @@ async def request_rereview(
     """
     ctx = get_context()
     return await rereview.request_rereview(pr_number, reviewer=reviewer, repo=repo, ctx=ctx)
+
+
+@mcp.tool
+def create_issue_from_comment(
+    pr_number: int,
+    thread_id: str,
+    title: str,
+    labels: list[str] | None = None,
+    repo: str | None = None,
+) -> CreateIssueResult:
+    """Create a GitHub issue from a noteworthy review comment.
+
+    Use this to track genuinely useful improvement suggestions from AI reviewers
+    that aren't bugs being fixed in the current PR.
+
+    Args:
+        pr_number: PR number the comment belongs to.
+        thread_id: The GraphQL node ID (PRRT_...) of the review thread.
+        title: Issue title summarizing the suggestion.
+        labels: Optional labels (e.g. ["enhancement", "P2"]). Use repo labels for type and priority.
+        repo: Repository in "owner/repo" format. Auto-detected if not provided.
+
+    Returns:
+        Created issue number, URL, and title.
+    """
+    return issues.create_issue_from_comment(
+        pr_number,
+        thread_id,
+        title,
+        labels=labels,
+        repo=repo,
+    )
 
 
 @mcp.tool
