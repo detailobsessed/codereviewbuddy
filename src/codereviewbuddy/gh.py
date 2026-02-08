@@ -11,6 +11,8 @@ import logging
 import subprocess  # noqa: S404
 from typing import Any
 
+from codereviewbuddy import cache
+
 logger = logging.getLogger(__name__)
 
 
@@ -80,6 +82,10 @@ def run_gh(*args: str, cwd: str | None = None) -> str:
 def graphql(query: str, variables: dict[str, Any] | None = None, cwd: str | None = None) -> dict[str, Any]:
     """Execute a GitHub GraphQL query via gh api graphql.
 
+    Queries are cached with a short TTL to avoid redundant API calls
+    when multiple tools fetch the same data. Mutations bypass and
+    invalidate the cache.
+
     Args:
         query: GraphQL query string.
         variables: Optional variables to pass with -f (strings) or -F (ints/bools).
@@ -88,19 +94,37 @@ def graphql(query: str, variables: dict[str, Any] | None = None, cwd: str | None
     Returns:
         Parsed JSON response.
     """
+    is_mutation = query.strip().lower().startswith("mutation")
+
+    if not is_mutation:
+        key = cache.make_key("graphql", query, variables)
+        cached = cache.get(key)
+        if cached is not cache._SENTINEL:
+            return cached
+
     args = ["api", "graphql", "-f", f"query={query}"]
-    for key, value in (variables or {}).items():
+    for key_, value in (variables or {}).items():
         if isinstance(value, int | bool):
-            args.extend(["-F", f"{key}={value}"])
+            args.extend(["-F", f"{key_}={value}"])
         else:
-            args.extend(["-f", f"{key}={value}"])
+            args.extend(["-f", f"{key_}={value}"])
 
     raw = run_gh(*args, cwd=cwd)
-    return json.loads(raw)
+    result = json.loads(raw)
+
+    if is_mutation:
+        cache.clear()
+    else:
+        cache.put(key, result)
+
+    return result
 
 
 def rest(endpoint: str, method: str = "GET", cwd: str | None = None, **kwargs: str) -> Any:
     """Execute a GitHub REST API call via gh api.
+
+    GET requests are cached with a short TTL. Non-GET requests
+    bypass and invalidate the cache.
 
     Args:
         endpoint: REST API endpoint (e.g. "/repos/{owner}/{repo}/pulls").
@@ -111,14 +135,27 @@ def rest(endpoint: str, method: str = "GET", cwd: str | None = None, **kwargs: s
     Returns:
         Parsed JSON response.
     """
+    is_read = method.upper() == "GET"
+
+    if is_read:
+        key = cache.make_key("rest", endpoint, method, kwargs)
+        cached = cache.get(key)
+        if cached is not cache._SENTINEL:
+            return cached
+
     args = ["api", endpoint, "--method", method]
-    for key, value in kwargs.items():
-        args.extend(["-f", f"{key}={value}"])
+    for key_, value in kwargs.items():
+        args.extend(["-f", f"{key_}={value}"])
 
     raw = run_gh(*args, cwd=cwd)
-    if not raw.strip():
-        return None
-    return json.loads(raw)
+    result = None if not raw.strip() else json.loads(raw)
+
+    if is_read:
+        cache.put(key, result)
+    else:
+        cache.clear()
+
+    return result
 
 
 def check_auth(cwd: str | None = None) -> str:

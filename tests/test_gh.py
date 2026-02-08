@@ -11,6 +11,7 @@ import pytest
 if TYPE_CHECKING:
     from pytest_mock import MockerFixture
 
+from codereviewbuddy import cache
 from codereviewbuddy.gh import (
     GhError,
     GhNotAuthenticatedError,
@@ -60,6 +61,9 @@ class TestRunGh:
 
 
 class TestGraphql:
+    def setup_method(self):
+        cache.clear()
+
     def test_simple_query(self, mocker: MockerFixture):
         response = {"data": {"viewer": {"login": "testuser"}}}
         _patch_run(mocker, stdout=json.dumps(response))
@@ -82,8 +86,43 @@ class TestGraphql:
         assert "-F" in args
         assert "pr=42" in args
 
+    def test_query_cached_on_second_call(self, mocker: MockerFixture):
+        response = {"data": {"viewer": {"login": "testuser"}}}
+        mock = _patch_run(mocker, stdout=json.dumps(response))
+        r1 = graphql("query { viewer { login } }")
+        r2 = graphql("query { viewer { login } }")
+        assert r1 == r2
+        assert mock.call_count == 1  # only one subprocess call
+
+    def test_mutation_not_cached(self, mocker: MockerFixture):
+        response = {"data": {"resolveReviewThread": {"thread": {"isResolved": True}}}}
+        mock = _patch_run(mocker, stdout=json.dumps(response))
+        graphql("mutation { resolveReviewThread(input: {}) { thread { isResolved } } }")
+        graphql("mutation { resolveReviewThread(input: {}) { thread { isResolved } } }")
+        assert mock.call_count == 2  # both calls hit subprocess
+
+    def test_mutation_clears_cache(self, mocker: MockerFixture):
+        query_resp = {"data": {"threads": []}}
+        mutation_resp = {"data": {"resolve": True}}
+        mock = _patch_run(mocker, stdout=json.dumps(query_resp))
+        graphql("query { threads }")
+        assert cache.size() == 1
+        mock.return_value.stdout = json.dumps(mutation_resp)
+        graphql("mutation { resolve }")
+        assert cache.size() == 0  # mutation cleared cache
+
+    def test_different_variables_different_cache(self, mocker: MockerFixture):
+        response = {"data": {}}
+        mock = _patch_run(mocker, stdout=json.dumps(response))
+        graphql("query($pr: Int!) { }", variables={"pr": 42})
+        graphql("query($pr: Int!) { }", variables={"pr": 99})
+        assert mock.call_count == 2  # different variables = different cache keys
+
 
 class TestRest:
+    def setup_method(self):
+        cache.clear()
+
     def test_get(self, mocker: MockerFixture):
         response = [{"number": 1}]
         _patch_run(mocker, stdout=json.dumps(response))
@@ -94,6 +133,28 @@ class TestRest:
         _patch_run(mocker, stdout="  ")
         result = rest("/repos/owner/repo/pulls/1/merge", method="PUT")
         assert result is None
+
+    def test_get_cached_on_second_call(self, mocker: MockerFixture):
+        response = [{"number": 1}]
+        mock = _patch_run(mocker, stdout=json.dumps(response))
+        r1 = rest("/repos/owner/repo/pulls")
+        r2 = rest("/repos/owner/repo/pulls")
+        assert r1 == r2
+        assert mock.call_count == 1
+
+    def test_non_get_not_cached(self, mocker: MockerFixture):
+        _patch_run(mocker, stdout="  ")
+        rest("/repos/owner/repo/pulls/1/merge", method="PUT")
+        assert cache.size() == 0  # PUT not cached
+
+    def test_non_get_clears_cache(self, mocker: MockerFixture):
+        get_resp = [{"number": 1}]
+        mock = _patch_run(mocker, stdout=json.dumps(get_resp))
+        rest("/repos/owner/repo/pulls")
+        assert cache.size() == 1
+        mock.return_value.stdout = "  "
+        rest("/repos/owner/repo/pulls/1/merge", method="PUT")
+        assert cache.size() == 0
 
 
 class TestCheckAuth:
