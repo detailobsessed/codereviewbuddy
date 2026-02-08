@@ -53,3 +53,10 @@ jobs:
 
       - name: Publish to PyPI
         run: uv publish
+
+  # MCP Registry publish is in the calling workflow (not separate) so we can
+  # gate on released == 'true' and avoid duplicate-version errors.
+  mcp-registry-publish:
+    needs: release
+    if: needs.release.outputs.released == 'true'
+    uses: detailobsessed/ci-components/.github/workflows/mcp-registry-publish-bun.yml@main
