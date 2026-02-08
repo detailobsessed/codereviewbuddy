@@ -4,11 +4,15 @@ Exposes tools for managing AI code review comments on GitHub PRs.
 Authentication is handled by the `gh` CLI — no tokens needed.
 """
 
+from __future__ import annotations
+
 import asyncio
 import logging
+from typing import TYPE_CHECKING
 
 from fastmcp import FastMCP
 from fastmcp.server.dependencies import get_context
+from fastmcp.server.lifespan import lifespan
 from fastmcp.server.middleware.error_handling import ErrorHandlingMiddleware
 from fastmcp.server.middleware.logging import LoggingMiddleware
 from fastmcp.server.middleware.timing import TimingMiddleware
@@ -23,10 +27,22 @@ from codereviewbuddy.models import (
 )
 from codereviewbuddy.tools import comments, issues, rereview, version, wait
 
+if TYPE_CHECKING:
+    from collections.abc import AsyncIterator
+
 logger = logging.getLogger(__name__)
+
+
+@lifespan
+async def check_gh_cli(server: FastMCP) -> AsyncIterator[dict[str, object] | None]:  # noqa: ARG001, RUF029
+    """Verify gh CLI is installed and authenticated on server startup."""
+    check_prerequisites()
+    yield {}
+
 
 mcp = FastMCP(
     "codereviewbuddy",
+    lifespan=check_gh_cli,
     instructions="""\
 AI code review buddy — fetch, resolve, and manage PR review comments
 across Unblocked, Devin, and CodeRabbit with staleness detection.
@@ -362,7 +378,6 @@ async def check_for_updates() -> UpdateCheckResult:
 
 def main() -> None:
     """Run the codereviewbuddy MCP server."""
-    check_prerequisites()
     mcp.run()
 
 
