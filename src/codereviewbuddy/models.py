@@ -37,6 +37,26 @@ class ReviewThread(BaseModel):
     is_pr_review: bool = Field(default=False, description="True for PR-level reviews (PRR_ IDs) — not resolvable via resolveReviewThread")
 
 
+class ReviewerStatus(BaseModel):
+    """Status of a specific AI reviewer on a PR."""
+
+    reviewer: str = Field(description="Reviewer name (e.g. 'devin', 'unblocked')")
+    status: str = Field(description="'completed' (reviewed latest push) or 'pending' (push after last review)")
+    detail: str = Field(description="Human-readable explanation of the status")
+    last_review_at: datetime | None = Field(default=None, description="Timestamp of the reviewer's most recent comment/review")
+    last_push_at: datetime | None = Field(default=None, description="Timestamp of the latest commit on the PR")
+
+
+class ReviewSummary(BaseModel):
+    """Review threads plus reviewer status for a PR."""
+
+    threads: list[ReviewThread] = Field(default_factory=list, description="All review threads on the PR")
+    reviewer_statuses: list[ReviewerStatus] = Field(default_factory=list, description="Per-reviewer status based on timestamp heuristic")
+    reviews_in_progress: bool = Field(
+        default=False, description="True if at least one reviewer has a pending review (pushed after last review)"
+    )
+
+
 class StackPR(BaseModel):
     """A PR in a stack with review summary."""
 
