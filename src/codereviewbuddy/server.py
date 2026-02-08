@@ -25,7 +25,7 @@ from codereviewbuddy.models import (
     ReviewSummary,
     UpdateCheckResult,
 )
-from codereviewbuddy.tools import comments, issues, rereview, version, wait
+from codereviewbuddy.tools import comments, issues, rereview, version
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
@@ -52,10 +52,9 @@ across Unblocked, Devin, and CodeRabbit with staleness detection.
 1. Call `list_review_comments` to see all threads with staleness info.
    - Check `reviews_in_progress` — if true, reviewers haven't finished yet.
    - Check `reviewer_statuses` for per-reviewer detail.
-2. If reviews are still pending, call `wait_for_reviews` to poll until they complete.
-3. For threads on files you changed, call `resolve_stale_comments` to batch-resolve them.
-4. Reply to non-stale threads with `reply_to_comment` if you addressed them differently.
-5. Call `request_rereview` to trigger a fresh review cycle.
+2. For threads on files you changed, call `resolve_stale_comments` to batch-resolve them.
+3. Reply to non-stale threads with `reply_to_comment` if you addressed them differently.
+4. Call `request_rereview` to trigger a fresh review cycle.
 
 ## Review status detection
 
@@ -304,45 +303,6 @@ def create_issue_from_comment(
     except Exception as exc:
         logger.exception("create_issue_from_comment failed for %s on PR #%d", thread_id, pr_number)
         return CreateIssueResult(issue_number=0, issue_url="", title=title, error=f"Error: {exc}")
-
-
-@mcp.tool
-async def wait_for_reviews(
-    pr_number: int,
-    repo: str | None = None,
-    timeout: int = 300,
-    poll_interval: int = 30,
-) -> ReviewSummary:
-    """Wait for AI reviewers to finish reviewing the latest push on a PR.
-
-    Polls review status at regular intervals and returns when all known reviewers
-    have completed, or when the timeout is reached. Only tracks reviewers that have
-    previously commented on this PR.
-
-    Args:
-        pr_number: PR number to monitor.
-        repo: Repository in "owner/repo" format. Auto-detected if not provided.
-        timeout: Maximum seconds to wait (default 300 = 5 minutes).
-        poll_interval: Seconds between polls (default 30).
-
-    Returns:
-        Final ReviewSummary. Check reviews_in_progress — if still true, timeout was reached.
-    """
-    try:
-        ctx = get_context()
-        return await wait.wait_for_reviews(
-            pr_number,
-            repo=repo,
-            timeout=timeout,
-            poll_interval=poll_interval,
-            ctx=ctx,
-        )
-    except Exception as exc:
-        logger.exception("wait_for_reviews failed for PR #%d", pr_number)
-        return ReviewSummary(threads=[], error=f"Error: {exc}")
-    except asyncio.CancelledError:
-        logger.warning("wait_for_reviews cancelled for PR #%d", pr_number)
-        return ReviewSummary(threads=[], error="Cancelled")
 
 
 @mcp.tool
