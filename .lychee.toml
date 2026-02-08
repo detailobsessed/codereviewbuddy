@@ -17,7 +17,7 @@ exclude = [
     '^https://github\.com/owner/repo',
     '^https://github\.com/other/repo',
     '^https://detailobsessed\.github\.io/codereviewbuddy',
-    # Local dev server referenced in CONTRIBUTING.md
+    # Localhost URLs (e.g. docs preview in CONTRIBUTING.md)
     '^http://localhost',
 ]
 
