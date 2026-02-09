@@ -2,6 +2,8 @@
 # codereviewbuddy
 
 [![ci](https://github.com/detailobsessed/codereviewbuddy/workflows/ci/badge.svg)](https://github.com/detailobsessed/codereviewbuddy/actions?query=workflow%3Aci)
+[![release](https://img.shields.io/github/v/release/detailobsessed/codereviewbuddy)](https://github.com/detailobsessed/codereviewbuddy/releases)
+[![documentation](https://img.shields.io/badge/docs-mkdocs-blue.svg)](https://detailobsessed.github.io/codereviewbuddy/)
 [![Python 3.14+](https://img.shields.io/badge/python-3.14+-blue.svg)](https://www.python.org/downloads/)
 [![FastMCP v3 beta](https://img.shields.io/badge/FastMCP-v3.0.0b2-orange.svg)](https://github.com/jlowin/fastmcp)
 
