@@ -1,8 +1,8 @@
 # Lychee link checker configuration
 # https://github.com/lycheeverse/lychee
 
-# Don't check the config file itself or test fixtures
-exclude_path = [".lychee.toml", "tests/"]
+# Don't check the config file itself, test fixtures, or Jinja2 template overrides
+exclude_path = [".lychee.toml", "tests/", "docs/.overrides/"]
 
 # Exclude placeholder and example URLs
 exclude = [

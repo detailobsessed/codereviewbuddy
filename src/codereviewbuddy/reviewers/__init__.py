@@ -5,7 +5,7 @@ from __future__ import annotations
 from codereviewbuddy.reviewers.base import ReviewerAdapter
 from codereviewbuddy.reviewers.coderabbit import CodeRabbitAdapter
 from codereviewbuddy.reviewers.devin import DevinAdapter
-from codereviewbuddy.reviewers.registry import REVIEWERS, get_reviewer, identify_reviewer
+from codereviewbuddy.reviewers.registry import REVIEWERS, apply_config, get_reviewer, identify_reviewer
 from codereviewbuddy.reviewers.unblocked import UnblockedAdapter
 
 __all__ = [
@@ -14,6 +14,7 @@ __all__ = [
     "DevinAdapter",
     "ReviewerAdapter",
     "UnblockedAdapter",
+    "apply_config",
     "get_reviewer",
     "identify_reviewer",
 ]

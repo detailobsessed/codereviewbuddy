@@ -165,6 +165,7 @@ source = ["src/", "tests/"]
 
 [tool.coverage.report]
 precision = 2
+fail_under = 90
 omit = ["src/*/__init__.py", "tests/__init__.py"]
 exclude_lines = ["pragma: no cover", "if TYPE_CHECKING", "if __name__ == .__main__.:"]
 

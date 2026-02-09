@@ -172,8 +172,8 @@ def install_io_tap() -> bool:
     original_stdin = sys.stdin
     original_stdout = sys.stdout
     try:
-        sys.stdin = _TappedStream(sys.stdin, "stdin", LOG_FILE)  # type: ignore[assignment]
-        sys.stdout = _TappedStream(sys.stdout, "stdout", LOG_FILE)  # type: ignore[assignment]
+        sys.stdin = _TappedStream(sys.stdin, "stdin", LOG_FILE)
+        sys.stdout = _TappedStream(sys.stdout, "stdout", LOG_FILE)
     except Exception:
         sys.stdin = original_stdin
         sys.stdout = original_stdout

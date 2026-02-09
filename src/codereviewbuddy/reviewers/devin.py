@@ -2,7 +2,12 @@
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING, ClassVar
+
 from codereviewbuddy.reviewers.base import ReviewerAdapter
+
+if TYPE_CHECKING:
+    from codereviewbuddy.config import Severity
 
 
 class DevinAdapter(ReviewerAdapter):
@@ -24,6 +29,24 @@ class DevinAdapter(ReviewerAdapter):
     @property
     def auto_resolves_comments(self) -> bool:
         return True
+
+    # Devin's known emoji markers (verified from PR review comments).
+    # Ordered most-critical-first so the first match wins.
+    _EMOJI_SEVERITY: ClassVar[list[tuple[str, str]]] = [
+        ("🔴", "bug"),
+        ("🚩", "flagged"),
+        ("🟡", "warning"),
+        ("📝", "info"),
+    ]
+
+    def classify_severity(self, comment_body: str) -> Severity:
+        """Classify using Devin's emoji markers: 🔴 bug, 🚩 flagged, 🟡 warning, 📝 info."""
+        from codereviewbuddy.config import Severity
+
+        for emoji, level in self._EMOJI_SEVERITY:
+            if emoji in comment_body:
+                return Severity(level)
+        return Severity.INFO
 
     def auto_resolves_thread(self, comment_body: str) -> bool:
         """Devin only auto-resolves bug/investigation threads, not info threads."""

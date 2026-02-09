@@ -1,0 +1,338 @@
+"""Tests for the raw I/O tap diagnostic module."""
+
+from __future__ import annotations
+
+import io
+import json
+import sys
+from pathlib import Path
+from typing import TYPE_CHECKING
+from unittest.mock import MagicMock
+
+if TYPE_CHECKING:
+    import pytest
+    from pytest_mock import MockerFixture
+
+from codereviewbuddy.io_tap import (
+    _log_entry,
+    _TappedBuffer,
+    _TappedStream,
+    install_io_tap,
+)
+
+# ---------------------------------------------------------------------------
+# _log_entry
+# ---------------------------------------------------------------------------
+
+
+class TestLogEntry:
+    def test_writes_jsonl_entry(self, tmp_path: Path):
+        log_file = tmp_path / "tap.jsonl"
+        _log_entry(log_file, "stdin", b'{"jsonrpc":"2.0"}')
+        lines = log_file.read_text(encoding="utf-8").splitlines()
+        assert len(lines) == 1
+        entry = json.loads(lines[0])
+        assert entry["dir"] == "stdin"
+        assert entry["bytes"] == len(b'{"jsonrpc":"2.0"}')
+        assert entry["line"] == '{"jsonrpc":"2.0"}'
+        assert "ts" in entry
+
+    def test_skips_empty_data(self, tmp_path: Path):
+        log_file = tmp_path / "tap.jsonl"
+        _log_entry(log_file, "stdin", b"")
+        assert not log_file.exists()
+
+    def test_skips_whitespace_only_data(self, tmp_path: Path):
+        log_file = tmp_path / "tap.jsonl"
+        _log_entry(log_file, "stdin", b"   \n  ")
+        assert not log_file.exists()
+
+    def test_truncates_long_lines(self, tmp_path: Path):
+        log_file = tmp_path / "tap.jsonl"
+        _log_entry(log_file, "stdout", b"x" * 1000)
+        entry = json.loads(log_file.read_text(encoding="utf-8"))
+        assert len(entry["line"]) == 500
+
+    def test_appends_multiple_entries(self, tmp_path: Path):
+        log_file = tmp_path / "tap.jsonl"
+        _log_entry(log_file, "stdin", b"line1")
+        _log_entry(log_file, "stdout", b"line2")
+        lines = log_file.read_text(encoding="utf-8").splitlines()
+        assert len(lines) == 2
+
+    def test_survives_write_error(self, tmp_path: Path):
+        """OSError during write should not propagate."""
+        bad_path = tmp_path / "nonexistent" / "deep" / "tap.jsonl"
+        # Should not raise
+        _log_entry(bad_path, "stdin", b"data")
+
+    def test_handles_invalid_utf8(self, tmp_path: Path):
+        log_file = tmp_path / "tap.jsonl"
+        _log_entry(log_file, "stdin", b"\xff\xfe invalid")
+        entry = json.loads(log_file.read_text(encoding="utf-8"))
+        assert entry["dir"] == "stdin"
+
+
+# ---------------------------------------------------------------------------
+# _TappedBuffer
+# ---------------------------------------------------------------------------
+
+
+class TestTappedBuffer:
+    def test_readline_logs_and_returns(self, tmp_path: Path):
+        log_file = tmp_path / "tap.jsonl"
+        inner = io.BytesIO(b"hello\nworld\n")
+        buf = _TappedBuffer(inner, "stdin", log_file)
+        result = buf.readline()
+        assert result == b"hello\n"
+        assert log_file.exists()
+        entry = json.loads(log_file.read_text(encoding="utf-8"))
+        assert entry["dir"] == "stdin"
+
+    def test_readline_empty_no_log(self, tmp_path: Path):
+        log_file = tmp_path / "tap.jsonl"
+        inner = io.BytesIO(b"")
+        buf = _TappedBuffer(inner, "stdin", log_file)
+        result = buf.readline()
+        assert result == b""
+        assert not log_file.exists()
+
+    def test_read_logs_and_returns(self, tmp_path: Path):
+        log_file = tmp_path / "tap.jsonl"
+        inner = io.BytesIO(b"payload")
+        buf = _TappedBuffer(inner, "stdin", log_file)
+        result = buf.read()
+        assert result == b"payload"
+        assert log_file.exists()
+
+    def test_read_empty_no_log(self, tmp_path: Path):
+        log_file = tmp_path / "tap.jsonl"
+        inner = io.BytesIO(b"")
+        buf = _TappedBuffer(inner, "stdin", log_file)
+        result = buf.read()
+        assert result == b""
+        assert not log_file.exists()
+
+    def test_read1_logs_and_returns(self, tmp_path: Path):
+        log_file = tmp_path / "tap.jsonl"
+        inner = MagicMock()
+        inner.read1.return_value = b"chunk"
+        buf = _TappedBuffer(inner, "stdin", log_file)
+        result = buf.read1(1024)
+        assert result == b"chunk"
+        assert log_file.exists()
+
+    def test_read1_empty_no_log(self, tmp_path: Path):
+        log_file = tmp_path / "tap.jsonl"
+        inner = MagicMock()
+        inner.read1.return_value = b""
+        buf = _TappedBuffer(inner, "stdin", log_file)
+        result = buf.read1(1024)
+        assert result == b""
+        assert not log_file.exists()
+
+    def test_write_logs_and_returns(self, tmp_path: Path):
+        log_file = tmp_path / "tap.jsonl"
+        inner = io.BytesIO()
+        buf = _TappedBuffer(inner, "stdout", log_file)
+        n = buf.write(b"output")
+        assert n == 6
+        assert log_file.exists()
+        entry = json.loads(log_file.read_text(encoding="utf-8"))
+        assert entry["dir"] == "stdout"
+
+    def test_write_empty_no_log(self, tmp_path: Path):
+        log_file = tmp_path / "tap.jsonl"
+        inner = io.BytesIO()
+        buf = _TappedBuffer(inner, "stdout", log_file)
+        buf.write(b"")
+        assert not log_file.exists()
+
+    def test_flush_delegates(self):
+        inner = MagicMock()
+        buf = _TappedBuffer(inner, "stdout", Path("/dev/null"))
+        buf.flush()
+        inner.flush.assert_called_once()
+
+    def test_getattr_delegates(self):
+        inner = MagicMock()
+        inner.name = "test_stream"
+        buf = _TappedBuffer(inner, "stdin", Path("/dev/null"))
+        assert buf.name == "test_stream"
+
+    def test_setattr_delegates(self):
+        inner = MagicMock()
+        buf = _TappedBuffer(inner, "stdin", Path("/dev/null"))
+        buf.custom_attr = "value"
+        assert inner.custom_attr == "value"
+
+    def test_iter_delegates(self):
+        inner = MagicMock()
+        inner.__iter__ = MagicMock(return_value=iter([b"a", b"b"]))
+        buf = _TappedBuffer(inner, "stdin", Path("/dev/null"))
+        assert list(buf) == [b"a", b"b"]
+
+    def test_next_delegates(self):
+        inner = MagicMock()
+        inner.__next__ = MagicMock(return_value=b"line")
+        buf = _TappedBuffer(inner, "stdin", Path("/dev/null"))
+        assert next(buf) == b"line"
+
+
+# ---------------------------------------------------------------------------
+# _TappedStream
+# ---------------------------------------------------------------------------
+
+
+class TestTappedStream:
+    def test_buffer_returns_tapped_buffer(self, tmp_path: Path):
+        log_file = tmp_path / "tap.jsonl"
+        stream = _TappedStream(sys.stdin, "stdin", log_file)
+        assert isinstance(stream.buffer, _TappedBuffer)
+
+    def test_buffer_is_same_instance(self, tmp_path: Path):
+        log_file = tmp_path / "tap.jsonl"
+        stream = _TappedStream(sys.stdin, "stdin", log_file)
+        assert stream.buffer is stream.buffer  # same object
+
+    def test_readline_logs_text(self, tmp_path: Path):
+        log_file = tmp_path / "tap.jsonl"
+        inner = io.StringIO("hello\nworld\n")
+        # StringIO has no .buffer, so give it one
+        inner.buffer = io.BytesIO(b"hello\nworld\n")  # type: ignore[attr-defined]
+        stream = _TappedStream(inner, "stdin", log_file)
+        result = stream.readline()
+        assert result == "hello\n"
+        assert log_file.exists()
+
+    def test_readline_empty_no_log(self, tmp_path: Path):
+        log_file = tmp_path / "tap.jsonl"
+        inner = io.StringIO("")
+        inner.buffer = io.BytesIO(b"")  # type: ignore[attr-defined]
+        stream = _TappedStream(inner, "stdin", log_file)
+        result = stream.readline()
+        assert result == ""
+        assert not log_file.exists()
+
+    def test_read_logs_text(self, tmp_path: Path):
+        log_file = tmp_path / "tap.jsonl"
+        inner = io.StringIO("content")
+        inner.buffer = io.BytesIO(b"content")  # type: ignore[attr-defined]
+        stream = _TappedStream(inner, "stdin", log_file)
+        result = stream.read()
+        assert result == "content"
+        assert log_file.exists()
+
+    def test_read_empty_no_log(self, tmp_path: Path):
+        log_file = tmp_path / "tap.jsonl"
+        inner = io.StringIO("")
+        inner.buffer = io.BytesIO(b"")  # type: ignore[attr-defined]
+        stream = _TappedStream(inner, "stdin", log_file)
+        result = stream.read()
+        assert result == ""
+        assert not log_file.exists()
+
+    def test_write_logs_text(self, tmp_path: Path):
+        log_file = tmp_path / "tap.jsonl"
+        inner = io.StringIO()
+        inner.buffer = io.BytesIO()  # type: ignore[attr-defined]
+        stream = _TappedStream(inner, "stdout", log_file)
+        result = stream.write("output")
+        assert result == 6
+        assert log_file.exists()
+
+    def test_write_empty_no_log(self, tmp_path: Path):
+        log_file = tmp_path / "tap.jsonl"
+        inner = io.StringIO()
+        inner.buffer = io.BytesIO()  # type: ignore[attr-defined]
+        stream = _TappedStream(inner, "stdout", log_file)
+        stream.write("")
+        assert not log_file.exists()
+
+    def test_getattr_delegates(self):
+        inner = MagicMock()
+        inner.encoding = "utf-8"
+        stream = _TappedStream(inner, "stdin", Path("/dev/null"))
+        assert stream.encoding == "utf-8"
+
+    def test_setattr_delegates(self):
+        inner = MagicMock()
+        stream = _TappedStream(inner, "stdin", Path("/dev/null"))
+        stream.custom = "val"
+        assert inner.custom == "val"
+
+    def test_iter_delegates(self):
+        inner = MagicMock()
+        inner.__iter__ = MagicMock(return_value=iter(["a", "b"]))
+        stream = _TappedStream(inner, "stdin", Path("/dev/null"))
+        assert list(stream) == ["a", "b"]
+
+    def test_next_delegates(self):
+        inner = MagicMock()
+        inner.__next__ = MagicMock(return_value="line")
+        stream = _TappedStream(inner, "stdin", Path("/dev/null"))
+        assert next(stream) == "line"
+
+
+# ---------------------------------------------------------------------------
+# install_io_tap
+# ---------------------------------------------------------------------------
+
+
+class TestInstallIoTap:
+    def test_returns_false_when_env_not_set(self, monkeypatch: pytest.MonkeyPatch):
+        monkeypatch.delenv("CODEREVIEWBUDDY_IO_TAP", raising=False)
+        assert install_io_tap() is False
+
+    def test_returns_false_when_env_is_zero(self, monkeypatch: pytest.MonkeyPatch):
+        monkeypatch.setenv("CODEREVIEWBUDDY_IO_TAP", "0")
+        assert install_io_tap() is False
+
+    def test_installs_tap_when_enabled(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
+        monkeypatch.setenv("CODEREVIEWBUDDY_IO_TAP", "1")
+        monkeypatch.setattr("codereviewbuddy.io_tap.LOG_DIR", tmp_path)
+        monkeypatch.setattr("codereviewbuddy.io_tap.LOG_FILE", tmp_path / "io_tap.jsonl")
+
+        original_stdin = sys.stdin
+        original_stdout = sys.stdout
+        try:
+            result = install_io_tap()
+            assert result is True
+            assert isinstance(sys.stdin, _TappedStream)
+            assert isinstance(sys.stdout, _TappedStream)
+        finally:
+            sys.stdin = original_stdin
+            sys.stdout = original_stdout
+
+    def test_returns_false_on_mkdir_failure(self, monkeypatch: pytest.MonkeyPatch):
+        monkeypatch.setenv("CODEREVIEWBUDDY_IO_TAP", "1")
+        bad_dir = MagicMock()
+        bad_dir.mkdir.side_effect = OSError("mocked")
+        monkeypatch.setattr("codereviewbuddy.io_tap.LOG_DIR", bad_dir)
+        assert install_io_tap() is False
+
+    def test_restores_streams_on_failure(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path, mocker: MockerFixture):
+        monkeypatch.setenv("CODEREVIEWBUDDY_IO_TAP", "1")
+        monkeypatch.setattr("codereviewbuddy.io_tap.LOG_DIR", tmp_path)
+        monkeypatch.setattr("codereviewbuddy.io_tap.LOG_FILE", tmp_path / "io_tap.jsonl")
+
+        original_stdin = sys.stdin
+        original_stdout = sys.stdout
+
+        # Make _TappedStream raise on second call (stdout)
+        call_count = 0
+        original_tapped_stream = _TappedStream
+
+        def failing_tapped_stream(*args, **kwargs):
+            nonlocal call_count
+            call_count += 1
+            if call_count == 2:
+                raise RuntimeError
+            return original_tapped_stream(*args, **kwargs)
+
+        mocker.patch("codereviewbuddy.io_tap._TappedStream", side_effect=failing_tapped_stream)
+
+        result = install_io_tap()
+        assert result is False
+        assert sys.stdin is original_stdin
+        assert sys.stdout is original_stdout

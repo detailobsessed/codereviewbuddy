@@ -18,6 +18,7 @@ from fastmcp.server.middleware.logging import LoggingMiddleware
 from fastmcp.server.middleware.timing import TimingMiddleware
 
 from codereviewbuddy import gh
+from codereviewbuddy.config import load_config, set_config
 from codereviewbuddy.middleware import WriteOperationMiddleware
 from codereviewbuddy.models import (
     CreateIssueResult,
@@ -26,6 +27,7 @@ from codereviewbuddy.models import (
     ReviewSummary,
     UpdateCheckResult,
 )
+from codereviewbuddy.reviewers import apply_config
 from codereviewbuddy.tools import comments, issues, rereview, version
 
 if TYPE_CHECKING:
@@ -38,6 +40,9 @@ logger = logging.getLogger(__name__)
 async def check_gh_cli(server: FastMCP) -> AsyncIterator[dict[str, object] | None]:  # noqa: ARG001, RUF029
     """Verify gh CLI is installed and authenticated on server startup."""
     check_prerequisites()
+    config = load_config()
+    set_config(config)
+    apply_config(config)
     yield {}
 
 
@@ -86,6 +91,24 @@ their own comments when they detect a fix (Devin, CodeRabbit). Only threads from
 reviewers that do NOT auto-resolve (e.g. Unblocked) are batch-resolved. The result
 includes a `skipped_count` field showing how many threads were left for the reviewer
 to handle.
+
+## Per-reviewer configuration
+
+The server loads `.codereviewbuddy.toml` from the project root at startup. This config
+controls per-reviewer resolve policy:
+
+- **`resolve_levels`**: Which severity levels you're allowed to resolve. If you try to
+  resolve a thread whose severity (🔴 bug, 🚩 flagged, 🟡 warning, 📝 info) exceeds
+  the allowed levels, the server will **block** the resolve and return an error.
+- **`auto_resolve_stale`**: Whether `resolve_stale_comments` touches this reviewer's
+  threads at all.
+- **`enabled`**: Whether this reviewer's threads appear in results.
+
+With default config, only 📝 info threads from Devin can be resolved. All severity
+levels from Unblocked can be resolved. No CodeRabbit threads can be resolved.
+If `resolve_comment` or `resolve_stale_comments` returns a "blocked by config" error,
+do NOT retry — the config is intentional. Inform the user about the blocked thread
+and its severity level instead.
 
 ## Tracking useful suggestions
 
@@ -339,11 +362,31 @@ async def check_for_updates() -> UpdateCheckResult:
 
 
 def main() -> None:
-    """Run the codereviewbuddy MCP server."""
+    """Run the codereviewbuddy MCP server, or handle CLI subcommands."""
+    import sys
+
+    if len(sys.argv) > 1 and sys.argv[1] == "init":
+        _init_config()
+        return
+
     from codereviewbuddy.io_tap import install_io_tap
 
     install_io_tap()
     mcp.run()
+
+
+def _init_config() -> None:
+    """Write a self-documenting .codereviewbuddy.toml to the current directory."""
+    from pathlib import Path
+
+    from codereviewbuddy.config import CONFIG_FILENAME, DEFAULT_CONFIG_TEMPLATE
+
+    target = Path.cwd() / CONFIG_FILENAME
+    if target.exists():
+        print(f"Error: {CONFIG_FILENAME} already exists in {Path.cwd()}")  # noqa: T201
+        raise SystemExit(1)
+    target.write_text(DEFAULT_CONFIG_TEMPLATE, encoding="utf-8")
+    print(f"Created {target}")  # noqa: T201
 
 
 def check_prerequisites() -> None:
