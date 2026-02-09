@@ -18,6 +18,7 @@ from fastmcp.server.middleware.logging import LoggingMiddleware
 from fastmcp.server.middleware.timing import TimingMiddleware
 
 from codereviewbuddy import gh
+from codereviewbuddy.middleware import WriteOperationMiddleware
 from codereviewbuddy.models import (
     CreateIssueResult,
     RereviewResult,
@@ -104,6 +105,7 @@ MCP client.
 mcp.add_middleware(ErrorHandlingMiddleware(include_traceback=True, transform_errors=True))
 mcp.add_middleware(TimingMiddleware())
 mcp.add_middleware(LoggingMiddleware(include_payloads=True, max_payload_length=500))
+mcp.add_middleware(WriteOperationMiddleware())
 
 
 @mcp.tool
