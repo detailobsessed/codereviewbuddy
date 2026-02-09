@@ -340,6 +340,9 @@ async def check_for_updates() -> UpdateCheckResult:
 
 def main() -> None:
     """Run the codereviewbuddy MCP server."""
+    from codereviewbuddy.io_tap import install_io_tap
+
+    install_io_tap()
     mcp.run()
 
 

@@ -1,0 +1,184 @@
+"""Raw I/O tap for stdio transport diagnostics.
+
+Wraps sys.stdin and sys.stdout to log every JSON-RPC line at the byte
+level, before the MCP library touches them. This provides a ground-truth
+audit trail for diagnosing transport hangs (issue #65).
+
+Logs are written to ~/.codereviewbuddy/io_tap.jsonl.
+Enable via the CODEREVIEWBUDDY_IO_TAP=1 environment variable.
+"""
+
+from __future__ import annotations
+
+import json
+import logging
+import os
+import time
+from pathlib import Path
+from typing import Any
+
+logger = logging.getLogger(__name__)
+
+IO_TAP_ENV = "CODEREVIEWBUDDY_IO_TAP"
+LOG_DIR = Path.home() / ".codereviewbuddy"
+LOG_FILE = LOG_DIR / "io_tap.jsonl"
+
+
+def _log_entry(log_path: Path, direction: str, data: bytes) -> None:
+    """Append a single I/O event to the JSONL log file."""
+    try:
+        text = data.decode("utf-8", errors="replace").strip()
+        if not text:
+            return
+        entry = {
+            "ts": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
+            "dir": direction,
+            "bytes": len(data),
+            "line": text[:500],
+        }
+        with log_path.open("a", encoding="utf-8") as f:
+            f.write(json.dumps(entry) + "\n")
+    except Exception:
+        logger.debug("Failed to write I/O tap entry", exc_info=True)
+
+
+class _TappedBuffer:
+    """Transparent proxy for binary buffer streams (BufferedReader/BufferedWriter).
+
+    MCP's stdio_server accesses sys.stdin.buffer and sys.stdout.buffer
+    directly, wrapping them in a fresh TextIOWrapper. This class intercepts
+    read/readline/write at the bytes level so the tap actually captures
+    JSON-RPC traffic.
+    """
+
+    def __init__(self, wrapped: Any, direction: str, log_path: Path) -> None:
+        object.__setattr__(self, "_wrapped", wrapped)
+        object.__setattr__(self, "_direction", direction)
+        object.__setattr__(self, "_log_path", log_path)
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._wrapped, name)
+
+    def __setattr__(self, name: str, value: Any) -> None:
+        setattr(self._wrapped, name, value)
+
+    def __iter__(self) -> Any:
+        return iter(self._wrapped)
+
+    def __next__(self) -> Any:
+        return next(self._wrapped)
+
+    def readline(self, *args: Any, **kwargs: Any) -> bytes:
+        result = self._wrapped.readline(*args, **kwargs)
+        if result:
+            _log_entry(self._log_path, self._direction, result)
+        return result
+
+    def read(self, *args: Any, **kwargs: Any) -> bytes:
+        result = self._wrapped.read(*args, **kwargs)
+        if result:
+            _log_entry(self._log_path, self._direction, result)
+        return result
+
+    def read1(self, *args: Any, **kwargs: Any) -> bytes:
+        result = self._wrapped.read1(*args, **kwargs)
+        if result:
+            _log_entry(self._log_path, self._direction, result)
+        return result
+
+    def write(self, data: Any) -> int:
+        result = self._wrapped.write(data)
+        if data:
+            raw = data if isinstance(data, bytes) else bytes(data)
+            _log_entry(self._log_path, self._direction, raw)
+        return result
+
+    def flush(self) -> None:
+        self._wrapped.flush()
+
+
+class _TappedStream:
+    """Transparent proxy for text streams (sys.stdin / sys.stdout).
+
+    Intercepts .buffer access to return a _TappedBuffer, ensuring the tap
+    works even when MCP's stdio_server does TextIOWrapper(sys.stdin.buffer).
+    Also intercepts text-level read/write for non-MCP consumers.
+    """
+
+    def __init__(self, wrapped: Any, direction: str, log_path: Path) -> None:
+        object.__setattr__(self, "_wrapped", wrapped)
+        object.__setattr__(self, "_direction", direction)
+        object.__setattr__(self, "_log_path", log_path)
+        # Pre-create the tapped buffer so .buffer always returns the same instance
+        object.__setattr__(
+            self,
+            "_tapped_buffer",
+            _TappedBuffer(wrapped.buffer, direction, log_path),
+        )
+
+    @property
+    def buffer(self) -> _TappedBuffer:
+        """Return tapped buffer — this is how MCP's stdio_server accesses I/O."""
+        return self._tapped_buffer
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._wrapped, name)
+
+    def __setattr__(self, name: str, value: Any) -> None:
+        setattr(self._wrapped, name, value)
+
+    def __iter__(self) -> Any:
+        return iter(self._wrapped)
+
+    def __next__(self) -> Any:
+        return next(self._wrapped)
+
+    def readline(self, *args: Any, **kwargs: Any) -> Any:
+        result = self._wrapped.readline(*args, **kwargs)
+        if result:
+            _log_entry(self._log_path, self._direction, result if isinstance(result, bytes) else result.encode("utf-8", errors="replace"))
+        return result
+
+    def read(self, *args: Any, **kwargs: Any) -> Any:
+        result = self._wrapped.read(*args, **kwargs)
+        if result:
+            _log_entry(self._log_path, self._direction, result if isinstance(result, bytes) else result.encode("utf-8", errors="replace"))
+        return result
+
+    def write(self, data: Any) -> Any:
+        result = self._wrapped.write(data)
+        if data:
+            _log_entry(self._log_path, self._direction, data if isinstance(data, bytes) else data.encode("utf-8", errors="replace"))
+        return result
+
+
+def install_io_tap() -> bool:
+    """Install I/O tap on stdin/stdout if CODEREVIEWBUDDY_IO_TAP=1.
+
+    Must be called BEFORE FastMCP starts the stdio transport.
+    Returns True if the tap was installed, False otherwise.
+    """
+    if os.environ.get(IO_TAP_ENV) != "1":
+        return False
+
+    try:
+        LOG_DIR.mkdir(parents=True, exist_ok=True)
+    except OSError:
+        logger.warning("Failed to create I/O tap log directory: %s", LOG_DIR)
+        return False
+
+    import sys
+
+    original_stdin = sys.stdin
+    original_stdout = sys.stdout
+    try:
+        sys.stdin = _TappedStream(sys.stdin, "stdin", LOG_FILE)  # type: ignore[assignment]
+        sys.stdout = _TappedStream(sys.stdout, "stdout", LOG_FILE)  # type: ignore[assignment]
+    except Exception:
+        sys.stdin = original_stdin
+        sys.stdout = original_stdout
+        logger.exception("Failed to install I/O tap")
+        return False
+    else:
+        logger.info("I/O tap installed, logging to %s", LOG_FILE)
+        return True
