@@ -729,7 +729,7 @@ def reply_to_comment(
 
     Supports inline review threads (PRRT_ IDs), PR-level reviews (PRR_ IDs),
     and issue comments (IC_ IDs, e.g. bot comments from codecov/netlify).
-    For PRRT_ threads, replies as a thread comment via the pull review comments API.
+    For PRRT_ threads, replies via the GraphQL addPullRequestReviewThreadReply mutation.
     For PRR_/IC_ IDs, posts a regular PR comment via the issues comments API.
 
     Args:
@@ -742,6 +742,11 @@ def reply_to_comment(
     Returns:
         Confirmation message.
     """
+    # PRRT_ threads use GraphQL with only the thread ID — no repo info needed
+    if thread_id.startswith("PRRT_"):
+        return _reply_to_review_thread(pr_number, thread_id, body, cwd=cwd)
+
+    # IC_ and PRR_ paths need owner/repo for the issues comments API
     if repo:
         owner, repo_name = repo.split("/", 1)
     else:
@@ -752,42 +757,37 @@ def reply_to_comment(
     if thread_id.startswith("PRR_"):
         return _reply_to_pr_comment(pr_number, owner, repo_name, body, kind="PR-level review", cwd=cwd)
 
-    return _reply_to_review_thread(pr_number, thread_id, owner, repo_name, body, cwd=cwd)
+    return _reply_to_review_thread(pr_number, thread_id, body, cwd=cwd)
+
+
+_REPLY_TO_THREAD_MUTATION = """
+mutation($threadId: ID!, $body: String!) {
+  addPullRequestReviewThreadReply(input: {
+    pullRequestReviewThreadId: $threadId,
+    body: $body
+  }) {
+    comment { id }
+  }
+}
+"""
 
 
 def _reply_to_review_thread(
     pr_number: int,
     thread_id: str,
-    owner: str,
-    repo_name: str,
     body: str,
     cwd: str | None = None,
 ) -> str:
-    """Reply to an inline review thread (PRRT_ ID) via the pull review comments API."""
-    query = """
-    query($threadId: ID!) {
-      node(id: $threadId) {
-        ... on PullRequestReviewThread {
-          comments(first: 1) {
-            nodes { databaseId }
-          }
-        }
-      }
-    }
-    """
-    result = gh.graphql(query, variables={"threadId": thread_id}, cwd=cwd)
-    comment_id = result.get("data", {}).get("node", {}).get("comments", {}).get("nodes", [{}])[0].get("databaseId")
-
-    if not comment_id:
-        msg = f"Could not find comment ID for thread {thread_id}"
-        raise gh.GhError(msg)
-
-    gh.rest(
-        f"/repos/{owner}/{repo_name}/pulls/{pr_number}/comments/{comment_id}/replies",
-        method="POST",
-        body=body,
+    """Reply to an inline review thread (PRRT_ ID) via GraphQL mutation."""
+    result = gh.graphql(
+        _REPLY_TO_THREAD_MUTATION,
+        variables={"threadId": thread_id, "body": body},
         cwd=cwd,
     )
+    errors = result.get("errors")
+    if errors:
+        msg = f"GraphQL error replying to {thread_id}: {errors[0].get('message', errors)}"
+        raise gh.GhError(msg)
     return f"Replied to thread {thread_id} on PR #{pr_number}"
 
 

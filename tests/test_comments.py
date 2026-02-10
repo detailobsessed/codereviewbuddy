@@ -960,21 +960,20 @@ class TestGetPrIssueComments:
 
 class TestReplyToComment:
     def test_reply_to_inline_thread(self, mocker: MockerFixture):
-        """PRRT_ IDs should use the pull review comments reply API."""
-        mocker.patch("codereviewbuddy.tools.comments.gh.get_repo_info", return_value=("owner", "repo"))
-        graphql_response = {"data": {"node": {"comments": {"nodes": [{"databaseId": 12345}]}}}}
-        mocker.patch("codereviewbuddy.tools.comments.gh.graphql", return_value=graphql_response)
-        mock_rest = mocker.patch("codereviewbuddy.tools.comments.gh.rest")
+        """PRRT_ IDs should use GraphQL addPullRequestReviewThreadReply mutation."""
+        # No get_repo_info mock needed — PRRT_ path short-circuits before repo lookup
+        mock_graphql = mocker.patch(
+            "codereviewbuddy.tools.comments.gh.graphql",
+            return_value={"data": {"addPullRequestReviewThreadReply": {"comment": {"id": "C_123"}}}},
+        )
 
         result = reply_to_comment(42, "PRRT_kwDOtest123", "looks good")
 
         assert "Replied to thread PRRT_kwDOtest123" in result
-        mock_rest.assert_called_once_with(
-            "/repos/owner/repo/pulls/42/comments/12345/replies",
-            method="POST",
-            body="looks good",
-            cwd=None,
-        )
+        mock_graphql.assert_called_once()
+        call_args = mock_graphql.call_args
+        assert call_args.kwargs["variables"] == {"threadId": "PRRT_kwDOtest123", "body": "looks good"}
+        assert "addPullRequestReviewThreadReply" in call_args.args[0]
 
     def test_reply_to_pr_review(self, mocker: MockerFixture):
         """PRR_ IDs should use the issues comments API."""
@@ -1030,15 +1029,15 @@ class TestReplyToComment:
         with pytest.raises(GhError, match="only inline review threads"):
             resolve_comment(42, "IC_kwDOtest001")
 
-    def test_inline_thread_not_found_raises(self, mocker: MockerFixture):
-        """PRRT_ with no comment ID should raise GhError."""
+    def test_inline_thread_graphql_error_raises(self, mocker: MockerFixture):
+        """GraphQL errors when replying to PRRT_ should raise GhError."""
         mocker.patch("codereviewbuddy.tools.comments.gh.get_repo_info", return_value=("owner", "repo"))
         mocker.patch(
             "codereviewbuddy.tools.comments.gh.graphql",
-            return_value={"data": {"node": {"comments": {"nodes": [{}]}}}},
+            return_value={"errors": [{"message": "Could not resolve to a node"}]},
         )
 
-        with pytest.raises(GhError, match="Could not find comment ID"):
+        with pytest.raises(GhError, match="GraphQL error"):
             reply_to_comment(42, "PRRT_kwDObad", "test")
 
 

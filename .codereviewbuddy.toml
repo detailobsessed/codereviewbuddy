@@ -27,4 +27,4 @@ resolve_levels = ["info"]       # Only allow resolving info-level threads from D
 
 [pr_descriptions]
 enabled = true                  # Set to false to disable PR description tools entirely
-require_review = false          # Set to true to require user approval before updating descriptions
+# DEPRECATED: require_review = false
