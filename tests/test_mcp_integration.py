@@ -135,8 +135,8 @@ class TestToolRegistration:
         tool = next(t for t in tools if t.name == "list_review_comments")
         schema = tool.inputSchema
         assert "pr_number" in schema["properties"]
-        assert schema["properties"]["pr_number"]["type"] == "integer"
-        assert "pr_number" in schema["required"]
+        # pr_number is optional (int | None) — not in required
+        assert "pr_number" not in schema.get("required", [])
 
     async def test_resolve_comment_schema(self, client: Client):
         tools = await client.list_tools()
@@ -149,9 +149,9 @@ class TestToolRegistration:
         tools = await client.list_tools()
         tool = next(t for t in tools if t.name == "request_rereview")
         schema = tool.inputSchema
-        # reviewer and repo are optional
+        # all params are optional
         required = schema.get("required", [])
-        assert "pr_number" in required
+        assert "pr_number" not in required
         assert "reviewer" not in required
         assert "repo" not in required
 

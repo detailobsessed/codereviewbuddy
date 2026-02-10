@@ -17,6 +17,7 @@ from codereviewbuddy.gh import (
     GhNotAuthenticatedError,
     GhNotFoundError,
     check_auth,
+    get_current_pr_number,
     get_repo_info,
     graphql,
     rest,
@@ -168,6 +169,17 @@ class TestCheckAuth:
         _patch_run(mocker, stderr="not logged in", returncode=1)
         with pytest.raises(GhNotAuthenticatedError):
             check_auth()
+
+
+class TestGetCurrentPrNumber:
+    def test_success(self, mocker: MockerFixture):
+        _patch_run(mocker, stdout="42\n")
+        assert get_current_pr_number() == 42
+
+    def test_no_pr_for_branch(self, mocker: MockerFixture):
+        _patch_run(mocker, stderr="no pull requests found", returncode=1)
+        with pytest.raises(GhError, match="no pull requests found"):
+            get_current_pr_number()
 
 
 class TestGetRepoInfo:

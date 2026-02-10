@@ -36,6 +36,13 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
+def _resolve_pr_number(pr_number: int | None) -> int:
+    """Resolve pr_number, auto-detecting from the current branch if not provided."""
+    if pr_number is not None:
+        return pr_number
+    return gh.get_current_pr_number()
+
+
 @lifespan
 async def check_gh_cli(server: FastMCP) -> AsyncIterator[dict[str, object] | None]:  # noqa: ARG001, RUF029
     """Verify gh CLI is installed and authenticated on server startup."""
@@ -133,14 +140,14 @@ mcp.add_middleware(WriteOperationMiddleware())
 
 @mcp.tool
 async def list_review_comments(
-    pr_number: int,
+    pr_number: int | None = None,
     repo: str | None = None,
     status: str | None = None,
 ) -> ReviewSummary:
     """List all review threads for a PR with reviewer identification and staleness.
 
     Args:
-        pr_number: The PR number to fetch comments for.
+        pr_number: The PR number to fetch comments for. Auto-detected from current branch if omitted.
         repo: Repository in "owner/repo" format. Auto-detected from git remote if not provided.
         status: Filter by "resolved" or "unresolved". Returns all if not set.
 
@@ -148,13 +155,14 @@ async def list_review_comments(
         List of review threads with thread_id, file, line, reviewer, status, is_stale, and comments.
     """
     try:
+        pr_number = _resolve_pr_number(pr_number)
         ctx = get_context()
         return await comments.list_review_comments(pr_number, repo=repo, status=status, ctx=ctx)
     except Exception as exc:
-        logger.exception("list_review_comments failed for PR #%d", pr_number)
+        logger.exception("list_review_comments failed for PR #%s", pr_number)
         return ReviewSummary(threads=[], error=f"Error: {exc}")
     except asyncio.CancelledError:
-        logger.warning("list_review_comments cancelled for PR #%d", pr_number)
+        logger.warning("list_review_comments cancelled for PR #%s", pr_number)
         return ReviewSummary(threads=[], error="Cancelled")
 
 
@@ -190,8 +198,8 @@ async def list_stack_review_comments(
 
 @mcp.tool
 def resolve_comment(
-    pr_number: int,
     thread_id: str,
+    pr_number: int | None = None,
 ) -> str:
     """Resolve a specific review thread by its ID.
 
@@ -199,19 +207,20 @@ def resolve_comment(
     Thread IDs have the PRRT_ prefix.
 
     Args:
-        pr_number: PR number (for context).
+        pr_number: PR number (for context). Auto-detected from current branch if omitted.
         thread_id: The GraphQL node ID (PRRT_...) of the thread to resolve.
     """
     try:
+        pr_number = _resolve_pr_number(pr_number)
         return comments.resolve_comment(pr_number, thread_id)
     except Exception as exc:
-        logger.exception("resolve_comment failed for %s on PR #%d", thread_id, pr_number)
+        logger.exception("resolve_comment failed for %s on PR #%s", thread_id, pr_number)
         return f"Error resolving {thread_id} on PR #{pr_number}: {exc}"
 
 
 @mcp.tool
 async def resolve_stale_comments(
-    pr_number: int,
+    pr_number: int | None = None,
     repo: str | None = None,
 ) -> ResolveStaleResult:
     """Bulk-resolve all unresolved threads on files that changed since the review.
@@ -220,28 +229,29 @@ async def resolve_stale_comments(
     has been modified, the comment is considered stale and gets resolved.
 
     Args:
-        pr_number: PR number.
+        pr_number: PR number. Auto-detected from current branch if omitted.
         repo: Repository in "owner/repo" format. Auto-detected if not provided.
 
     Returns:
         Dict with resolved_count and resolved_thread_ids.
     """
     try:
+        pr_number = _resolve_pr_number(pr_number)
         ctx = get_context()
         return await comments.resolve_stale_comments(pr_number, repo=repo, ctx=ctx)
     except Exception as exc:
-        logger.exception("resolve_stale_comments failed for PR #%d", pr_number)
+        logger.exception("resolve_stale_comments failed for PR #%s", pr_number)
         return ResolveStaleResult(resolved_count=0, resolved_thread_ids=[], error=f"Error: {exc}")
     except asyncio.CancelledError:
-        logger.warning("resolve_stale_comments cancelled for PR #%d", pr_number)
+        logger.warning("resolve_stale_comments cancelled for PR #%s", pr_number)
         return ResolveStaleResult(resolved_count=0, resolved_thread_ids=[], error="Cancelled")
 
 
 @mcp.tool
 def reply_to_comment(
-    pr_number: int,
     thread_id: str,
     body: str,
+    pr_number: int | None = None,
     repo: str | None = None,
 ) -> str:
     """Reply to a specific review thread, PR-level review, or bot comment.
@@ -250,21 +260,22 @@ def reply_to_comment(
     and issue comments (IC_ IDs, e.g. bot comments from codecov/netlify).
 
     Args:
-        pr_number: PR number.
+        pr_number: PR number. Auto-detected from current branch if omitted.
         thread_id: The node ID (PRRT_..., PRR_..., or IC_...) to reply to.
         body: Reply text.
         repo: Repository in "owner/repo" format. Auto-detected if not provided.
     """
     try:
+        pr_number = _resolve_pr_number(pr_number)
         return comments.reply_to_comment(pr_number, thread_id, body, repo=repo)
     except Exception as exc:
-        logger.exception("reply_to_comment failed for %s on PR #%d", thread_id, pr_number)
+        logger.exception("reply_to_comment failed for %s on PR #%s", thread_id, pr_number)
         return f"Error replying to {thread_id} on PR #{pr_number}: {exc}"
 
 
 @mcp.tool
 async def request_rereview(
-    pr_number: int,
+    pr_number: int | None = None,
     reviewer: str | None = None,
     repo: str | None = None,
 ) -> RereviewResult:
@@ -276,7 +287,7 @@ async def request_rereview(
     - CodeRabbit: auto-triggers on push (no action needed)
 
     Args:
-        pr_number: PR number.
+        pr_number: PR number. Auto-detected from current branch if omitted.
         reviewer: Specific reviewer to trigger (e.g. "unblocked"). Triggers all if not set.
         repo: Repository in "owner/repo" format. Auto-detected if not provided.
 
@@ -284,21 +295,22 @@ async def request_rereview(
         Dict with "triggered" (manually triggered reviewers) and "auto_triggers" (no action needed).
     """
     try:
+        pr_number = _resolve_pr_number(pr_number)
         ctx = get_context()
         return await rereview.request_rereview(pr_number, reviewer=reviewer, repo=repo, ctx=ctx)
     except Exception as exc:
-        logger.exception("request_rereview failed for PR #%d", pr_number)
+        logger.exception("request_rereview failed for PR #%s", pr_number)
         return RereviewResult(triggered=[], auto_triggers=[], error=f"Error: {exc}")
     except asyncio.CancelledError:
-        logger.warning("request_rereview cancelled for PR #%d", pr_number)
+        logger.warning("request_rereview cancelled for PR #%s", pr_number)
         return RereviewResult(triggered=[], auto_triggers=[], error="Cancelled")
 
 
 @mcp.tool
 def create_issue_from_comment(
-    pr_number: int,
     thread_id: str,
     title: str,
+    pr_number: int | None = None,
     labels: list[str] | None = None,
     repo: str | None = None,
 ) -> CreateIssueResult:
@@ -308,7 +320,7 @@ def create_issue_from_comment(
     that aren't bugs being fixed in the current PR.
 
     Args:
-        pr_number: PR number the comment belongs to.
+        pr_number: PR number the comment belongs to. Auto-detected from current branch if omitted.
         thread_id: The GraphQL node ID (PRRT_...) of the review thread.
         title: Issue title summarizing the suggestion.
         labels: Optional labels (e.g. ["enhancement", "P2"]). Use repo labels for type and priority.
@@ -318,6 +330,7 @@ def create_issue_from_comment(
         Created issue number, URL, and title.
     """
     try:
+        pr_number = _resolve_pr_number(pr_number)
         return issues.create_issue_from_comment(
             pr_number,
             thread_id,
@@ -326,7 +339,7 @@ def create_issue_from_comment(
             repo=repo,
         )
     except Exception as exc:
-        logger.exception("create_issue_from_comment failed for %s on PR #%d", thread_id, pr_number)
+        logger.exception("create_issue_from_comment failed for %s on PR #%s", thread_id, pr_number)
         return CreateIssueResult(issue_number=0, issue_url="", title=title, error=f"Error: {exc}")
 
 
