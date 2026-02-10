@@ -12,6 +12,7 @@ from codereviewbuddy import gh
 from codereviewbuddy.config import Severity, get_config
 from codereviewbuddy.models import CommentStatus, ResolveStaleResult, ReviewComment, ReviewerStatus, ReviewSummary, ReviewThread
 from codereviewbuddy.reviewers import get_reviewer, identify_reviewer
+from codereviewbuddy.tools.stack import discover_stack
 
 logger = logging.getLogger(__name__)
 
@@ -519,10 +520,18 @@ async def list_review_comments(
             pending = [s.reviewer for s in reviewer_statuses if s.status == "pending"]
             await ctx.warning(f"⚠️ Reviews still pending from: {', '.join(pending)}")
 
+    # Discover PR stack (cached per session) — best-effort, don't fail the request
+    try:
+        full_repo = f"{owner}/{repo_name}"
+        stack_prs = await discover_stack(pr_number, repo=full_repo, cwd=cwd, ctx=ctx)
+    except Exception:
+        stack_prs = []
+
     return ReviewSummary(
         threads=threads,
         reviewer_statuses=reviewer_statuses,
         reviews_in_progress=reviews_in_progress,
+        stack=stack_prs,
     )
 
 

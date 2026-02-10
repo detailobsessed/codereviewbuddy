@@ -47,6 +47,15 @@ class ReviewerStatus(BaseModel):
     last_push_at: datetime | None = Field(default=None, description="Timestamp of the latest commit on the PR")
 
 
+class StackPR(BaseModel):
+    """A PR in a stack."""
+
+    pr_number: int = Field(description="PR number")
+    branch: str = Field(description="Branch name")
+    title: str = Field(description="PR title")
+    url: str = Field(description="PR URL")
+
+
 class ReviewSummary(BaseModel):
     """Review threads plus reviewer status for a PR."""
 
@@ -55,26 +64,33 @@ class ReviewSummary(BaseModel):
     reviews_in_progress: bool = Field(
         default=False, description="True if at least one reviewer has a pending review (pushed after last review)"
     )
+    stack: list[StackPR] = Field(default_factory=list, description="Other PRs in the same stack, discovered via branch chain")
     error: str | None = Field(default=None, description="Error message if the request failed")
 
 
-class StackPR(BaseModel):
-    """A PR in a stack with review summary."""
+class PRReviewStatusSummary(BaseModel):
+    """Lightweight review status for a single PR — no full comment bodies."""
 
     pr_number: int = Field(description="PR number")
-    branch: str = Field(description="Branch name")
     title: str = Field(description="PR title")
     url: str = Field(description="PR URL")
-    unresolved_count: int = Field(default=0, description="Number of unresolved review threads")
-    resolved_count: int = Field(default=0, description="Number of resolved review threads")
+    unresolved: int = Field(default=0, description="Number of unresolved threads")
+    resolved: int = Field(default=0, description="Number of resolved threads")
+    bugs: int = Field(default=0, description="Number of 🔴 bug-level threads")
+    flagged: int = Field(default=0, description="Number of 🚩 flagged threads")
+    warnings: int = Field(default=0, description="Number of 🟡 warning threads")
+    info_count: int = Field(default=0, description="Number of 📝 info threads")
+    stale: int = Field(default=0, description="Number of unresolved stale threads (file changed after comment)")
+    reviews_in_progress: bool = Field(default=False, description="Whether any reviewer hasn't reviewed the latest push")
 
 
-class StackStatus(BaseModel):
-    """Summary of all PRs in a stack."""
+class StackReviewStatusResult(BaseModel):
+    """Lightweight stack-wide review status overview."""
 
-    prs: list[StackPR] = Field(default_factory=list, description="PRs in the stack, bottom to top")
-    total_unresolved: int = Field(default=0, description="Total unresolved threads across all PRs")
-    stack_tool: str = Field(default="none", description="Stack tool detected (graphite, git-town, none)")
+    prs: list[PRReviewStatusSummary] = Field(default_factory=list, description="Per-PR review status, bottom to top")
+    total_unresolved: int = Field(default=0, description="Total unresolved threads across the stack")
+    any_reviews_in_progress: bool = Field(default=False, description="Whether any PR has pending reviews")
+    error: str | None = Field(default=None, description="Error message if the request failed")
 
 
 class ResolveStaleResult(BaseModel):
@@ -92,16 +108,6 @@ class RereviewResult(BaseModel):
 
     triggered: list[str] = Field(default_factory=list, description="Reviewers that were manually triggered")
     auto_triggers: list[str] = Field(default_factory=list, description="Reviewers that auto-trigger on push (no action needed)")
-    error: str | None = Field(default=None, description="Error message if the request failed")
-
-
-class UpdateCheckResult(BaseModel):
-    """Result of checking for a newer version on PyPI."""
-
-    current_version: str = Field(description="Currently running version")
-    latest_version: str = Field(description="Latest version on PyPI, or 'unknown' if check failed")
-    update_available: bool = Field(description="Whether a newer version is available")
-    upgrade_command: str = Field(default="uvx --upgrade codereviewbuddy", description="Command to upgrade")
     error: str | None = Field(default=None, description="Error message if the request failed")
 
 
@@ -124,16 +130,6 @@ class PRDescriptionReviewResult(BaseModel):
     """Result of reviewing PR descriptions across a stack."""
 
     descriptions: list[PRDescriptionInfo] = Field(default_factory=list, description="PR descriptions with analysis")
-    error: str | None = Field(default=None, description="Error message if the request failed")
-
-
-class UpdatePRDescriptionResult(BaseModel):
-    """Result of updating a PR description."""
-
-    pr_number: int = Field(default=0, description="PR number that was updated")
-    updated: bool = Field(default=False, description="Whether the description was actually updated")
-    requires_review: bool = Field(default=False, description="True if config requires user review before applying")
-    preview: str = Field(default="", description="Preview of the new body (when require_review is true)")
     error: str | None = Field(default=None, description="Error message if the request failed")
 
 

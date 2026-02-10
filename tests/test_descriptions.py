@@ -15,7 +15,6 @@ from codereviewbuddy.tools.descriptions import (
     _analyze_pr,
     _is_boilerplate,
     review_pr_descriptions,
-    update_pr_description,
 )
 
 # -- Fixtures ------------------------------------------------------------------
@@ -178,57 +177,3 @@ class TestReviewPRDescriptions:
         result = await review_pr_descriptions([42])
         assert result.error is not None
         assert "disabled" in result.error
-
-
-# -- Async tests: update_pr_description ----------------------------------------
-
-
-class TestUpdatePRDescription:
-    @pytest.fixture(autouse=True)
-    def _reset_config(self):
-        set_config(Config())
-        yield
-        set_config(Config())
-
-    async def test_updates_description(self, mocker: MockerFixture):
-        mock_run = mocker.patch("codereviewbuddy.tools.descriptions.gh.run_gh")
-        result = await update_pr_description(42, "New body text")
-        assert result.updated is True
-        assert result.requires_review is False
-        assert result.error is None
-        mock_run.assert_called_once()
-        call_args = mock_run.call_args[0]
-        assert "pr" in call_args
-        assert "edit" in call_args
-        assert "42" in call_args
-        assert "New body text" in call_args
-
-    async def test_with_repo(self, mocker: MockerFixture):
-        mock_run = mocker.patch("codereviewbuddy.tools.descriptions.gh.run_gh")
-        result = await update_pr_description(42, "Body", repo="other/repo")
-        assert result.updated is True
-        call_args = mock_run.call_args[0]
-        assert "other/repo" in call_args
-
-    async def test_disabled_returns_error(self):
-        set_config(Config(pr_descriptions=PRDescriptionsConfig(enabled=False)))
-        result = await update_pr_description(42, "Body")
-        assert result.updated is False
-        assert result.error is not None
-        assert "disabled" in result.error
-
-    async def test_require_review_returns_preview(self):
-        set_config(Config(pr_descriptions=PRDescriptionsConfig(require_review=True)))
-        ctx = AsyncMock()
-        result = await update_pr_description(42, "## Summary\n\nNew description", ctx=ctx)
-        assert result.updated is False
-        assert result.requires_review is True
-        assert result.preview == "## Summary\n\nNew description"
-        assert result.error is None
-        ctx.info.assert_called_once()
-
-    async def test_require_review_does_not_call_gh(self, mocker: MockerFixture):
-        set_config(Config(pr_descriptions=PRDescriptionsConfig(require_review=True)))
-        mock_run = mocker.patch("codereviewbuddy.tools.descriptions.gh.run_gh")
-        await update_pr_description(42, "Body")
-        mock_run.assert_not_called()
