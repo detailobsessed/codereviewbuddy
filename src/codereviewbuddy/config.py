@@ -63,12 +63,26 @@ class ReviewerConfig(BaseModel):
     )
 
 
+class PRDescriptionsConfig(BaseModel):
+    """Configuration for PR description management tools."""
+
+    enabled: bool = Field(default=True, description="Whether PR description tools are available")
+    require_review: bool = Field(
+        default=False,
+        description="If true, return a preview instead of directly updating — user must approve changes",
+    )
+
+
 class Config(BaseModel):
     """Top-level codereviewbuddy configuration."""
 
     reviewers: dict[str, ReviewerConfig] = Field(
         default_factory=dict,
         description="Per-reviewer configuration sections",
+    )
+    pr_descriptions: PRDescriptionsConfig = Field(
+        default_factory=PRDescriptionsConfig,
+        description="PR description management settings",
     )
 
     @model_validator(mode="after")
@@ -181,9 +195,13 @@ def set_config(config: Config) -> None:
     _config = config
 
 
-# -- Self-documenting template for ``codereviewbuddy init`` --------------------
+# -- Template sections for ``codereviewbuddy config`` --------------------------
 
-DEFAULT_CONFIG_TEMPLATE = """\
+# Each section is a (header_pattern, text_block) pair. The header_pattern is
+# used to check whether the section already exists in the user's config file.
+# The text_block is what gets written for --init or appended for --update.
+
+_TEMPLATE_HEADER = """\
 # .codereviewbuddy.toml — Per-reviewer configuration for codereviewbuddy
 # All settings are optional. Omitted values use sensible defaults.
 # Place this file in your project root (next to .git/).
@@ -193,19 +211,105 @@ DEFAULT_CONFIG_TEMPLATE = """\
 #   flagged  — 🚩 likely needs a code change
 #   warning  — 🟡 worth addressing but not blocking
 #   info     — 📝 informational, no action required
+"""
 
+_TEMPLATE_SECTIONS: list[tuple[str, str]] = [
+    (
+        "[reviewers.devin]",
+        """\
 [reviewers.devin]
 # enabled = true                  # Set to false to ignore Devin comments entirely
 # auto_resolve_stale = false      # Devin auto-resolves its own bug threads; we skip them
 # resolve_levels = ["info"]       # Only allow resolving info-level threads from Devin
-
+""",
+    ),
+    (
+        "[reviewers.unblocked]",
+        """\
 [reviewers.unblocked]
 # enabled = true
 # auto_resolve_stale = true       # We batch-resolve Unblocked's stale threads
 # resolve_levels = ["info", "warning", "flagged", "bug"]  # All levels allowed
-
+""",
+    ),
+    (
+        "[reviewers.coderabbit]",
+        """\
 [reviewers.coderabbit]
 # enabled = true
 # auto_resolve_stale = false      # CodeRabbit handles its own resolution
 # resolve_levels = []             # Don't resolve any CodeRabbit threads
-"""
+""",
+    ),
+    (
+        "[pr_descriptions]",
+        """\
+[pr_descriptions]
+# enabled = true                  # Set to false to disable PR description tools entirely
+# require_review = false          # Set to true to require user approval before updating descriptions
+""",
+    ),
+]
+
+DEFAULT_CONFIG_TEMPLATE = _TEMPLATE_HEADER + "\n".join(block for _, block in _TEMPLATE_SECTIONS)
+
+
+def init_config(cwd: Path | None = None) -> Path:
+    """Create a new ``.codereviewbuddy.toml`` in the given directory.
+
+    Raises ``SystemExit(1)`` if the file already exists.
+
+    Returns:
+        Path to the created file.
+    """
+    target = (cwd or Path.cwd()) / CONFIG_FILENAME
+    if target.exists():
+        print(f"Error: {CONFIG_FILENAME} already exists in {target.parent}")  # noqa: T201
+        print("Hint: use 'codereviewbuddy config --update' to add new sections")  # noqa: T201
+        raise SystemExit(1)
+    target.write_text(DEFAULT_CONFIG_TEMPLATE, encoding="utf-8")
+    print(f"Created {target}")  # noqa: T201
+    return target
+
+
+def update_config(cwd: Path | None = None) -> tuple[Path, list[str]]:
+    """Append missing sections to an existing ``.codereviewbuddy.toml``.
+
+    Reads the current config file, checks which template sections are
+    missing, and appends them. Does NOT modify existing values.
+
+    Raises ``SystemExit(1)`` if the config file doesn't exist.
+
+    Returns:
+        Tuple of (config path, list of added section headers).
+    """
+    target = (cwd or Path.cwd()) / CONFIG_FILENAME
+    if not target.exists():
+        print(f"Error: {CONFIG_FILENAME} not found in {target.parent}")  # noqa: T201
+        print("Hint: use 'codereviewbuddy config --init' to create one")  # noqa: T201
+        raise SystemExit(1)
+
+    existing = target.read_text(encoding="utf-8")
+    added: list[str] = []
+
+    for header, _block in _TEMPLATE_SECTIONS:
+        if header not in existing:
+            added.append(header)
+
+    if not added:
+        print(f"{CONFIG_FILENAME} is up to date — no new sections to add")  # noqa: T201
+        return target, added
+
+    # Ensure file ends with a newline before appending
+    appendix = "" if existing.endswith("\n") else "\n"
+    appendix += "\n# --- New sections added by 'codereviewbuddy config --update' ---\n\n"
+    for header, block in _TEMPLATE_SECTIONS:
+        if header in added:
+            appendix += block + "\n"
+
+    target.write_text(existing + appendix, encoding="utf-8")
+    print(f"Updated {target} — added {len(added)} section(s):")  # noqa: T201
+    for h in added:
+        print(f"  + {h}")  # noqa: T201
+
+    return target, added

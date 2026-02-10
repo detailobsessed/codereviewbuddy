@@ -38,6 +38,7 @@ class TestWriteToolClassification:
             "reply_to_comment",
             "request_rereview",
             "create_issue_from_comment",
+            "update_pr_description",
         }
         assert expected == WRITE_TOOLS
 

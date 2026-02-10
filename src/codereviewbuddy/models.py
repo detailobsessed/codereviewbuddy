@@ -105,6 +105,38 @@ class UpdateCheckResult(BaseModel):
     error: str | None = Field(default=None, description="Error message if the request failed")
 
 
+class PRDescriptionInfo(BaseModel):
+    """A single PR's description with quality analysis."""
+
+    pr_number: int = Field(description="PR number")
+    title: str = Field(description="PR title")
+    body: str = Field(default="", description="PR body/description")
+    url: str = Field(default="", description="PR URL")
+    has_body: bool = Field(default=False, description="Whether the PR has a non-empty description")
+    is_boilerplate: bool = Field(default=False, description="Whether the description is template boilerplate only")
+    linked_issues: list[str] = Field(default_factory=list, description="Issue references found (e.g. #123)")
+    missing_elements: list[str] = Field(
+        default_factory=list, description="Missing quality elements (e.g. 'no linked issues', 'empty body')"
+    )
+
+
+class PRDescriptionReviewResult(BaseModel):
+    """Result of reviewing PR descriptions across a stack."""
+
+    descriptions: list[PRDescriptionInfo] = Field(default_factory=list, description="PR descriptions with analysis")
+    error: str | None = Field(default=None, description="Error message if the request failed")
+
+
+class UpdatePRDescriptionResult(BaseModel):
+    """Result of updating a PR description."""
+
+    pr_number: int = Field(default=0, description="PR number that was updated")
+    updated: bool = Field(default=False, description="Whether the description was actually updated")
+    requires_review: bool = Field(default=False, description="True if config requires user review before applying")
+    preview: str = Field(default="", description="Preview of the new body (when require_review is true)")
+    error: str | None = Field(default=None, description="Error message if the request failed")
+
+
 class CreateIssueResult(BaseModel):
     """Result of creating a GitHub issue from a review comment."""
 

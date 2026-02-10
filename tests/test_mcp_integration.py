@@ -115,6 +115,8 @@ class TestToolRegistration:
         "request_rereview",
         "check_for_updates",
         "create_issue_from_comment",
+        "review_pr_descriptions",
+        "update_pr_description",
     })
 
     async def test_all_tools_registered(self, client: Client):
@@ -124,7 +126,7 @@ class TestToolRegistration:
 
     async def test_tool_count(self, client: Client):
         tools = await client.list_tools()
-        assert len(tools) == 8
+        assert len(tools) == 10
 
     async def test_list_review_comments_schema(self, client: Client):
         tools = await client.list_tools()
@@ -324,3 +326,37 @@ class TestRequestRereviewMCP:
         result = await client.call_tool("request_rereview", {"pr_number": 42, "reviewer": "nonexistent"})
         assert not result.is_error
         assert "Error" in result.content[0].text
+
+
+class TestReviewPRDescriptionsMCP:
+    async def test_returns_analysis(self, client: Client, mocker: MockerFixture):
+        mocker.patch(
+            "codereviewbuddy.tools.descriptions._fetch_pr_info",
+            return_value={
+                "number": 42,
+                "title": "feat: test",
+                "body": "## Summary\n\nCloses #15\n\nA meaningful description.",
+                "url": "https://github.com/owner/repo/pull/42",
+            },
+        )
+        result = await client.call_tool("review_pr_descriptions", {"pr_numbers": [42]})
+        assert not result.is_error
+
+
+class TestUpdatePRDescriptionMCP:
+    async def test_updates_through_mcp(self, client: Client, mocker: MockerFixture):
+        mocker.patch("codereviewbuddy.tools.descriptions.gh.run_gh")
+        result = await client.call_tool(
+            "update_pr_description",
+            {"pr_number": 42, "body": "## Summary\n\nNew description"},
+        )
+        assert not result.is_error
+
+    async def test_output_schema_present(self, client: Client):
+        tools = await client.list_tools()
+        tool = next(t for t in tools if t.name == "update_pr_description")
+        assert tool.outputSchema is not None
+        props = tool.outputSchema.get("properties", {})
+        assert "updated" in props
+        assert "requires_review" in props
+        assert "preview" in props

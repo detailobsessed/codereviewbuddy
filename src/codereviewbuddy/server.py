@@ -22,13 +22,15 @@ from codereviewbuddy.config import load_config, set_config
 from codereviewbuddy.middleware import WriteOperationMiddleware
 from codereviewbuddy.models import (
     CreateIssueResult,
+    PRDescriptionReviewResult,
     RereviewResult,
     ResolveStaleResult,
     ReviewSummary,
     UpdateCheckResult,
+    UpdatePRDescriptionResult,
 )
 from codereviewbuddy.reviewers import apply_config
-from codereviewbuddy.tools import comments, issues, rereview, version
+from codereviewbuddy.tools import comments, descriptions, issues, rereview, version
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
@@ -344,6 +346,68 @@ def create_issue_from_comment(
 
 
 @mcp.tool
+async def review_pr_descriptions(
+    pr_numbers: list[int],
+    repo: str | None = None,
+) -> PRDescriptionReviewResult:
+    """Review PR descriptions across a stack for quality issues.
+
+    Returns each PR's title, body, linked issues, and missing elements
+    (empty body, boilerplate only, no linked issues, too short).
+
+    Args:
+        pr_numbers: List of PR numbers to review.
+        repo: Repository in "owner/repo" format. Auto-detected from git remote if not provided.
+
+    Returns:
+        Analysis results for each PR's description.
+    """
+    try:
+        ctx = get_context()
+        return await descriptions.review_pr_descriptions(pr_numbers, repo=repo, ctx=ctx)
+    except Exception as exc:
+        logger.exception("review_pr_descriptions failed")
+        return PRDescriptionReviewResult(error=f"Error: {exc}")
+    except asyncio.CancelledError:
+        logger.warning("review_pr_descriptions cancelled")
+        return PRDescriptionReviewResult(error="Cancelled")
+
+
+@mcp.tool
+async def update_pr_description(
+    body: str,
+    pr_number: int | None = None,
+    repo: str | None = None,
+) -> UpdatePRDescriptionResult:
+    """Update a PR's description.
+
+    Respects config settings:
+    - If ``pr_descriptions.enabled`` is false, returns an error.
+    - If ``pr_descriptions.require_review`` is true, returns a preview
+      instead of applying the update. Present the preview to the user
+      for approval before calling again.
+
+    Args:
+        body: New description body (markdown).
+        pr_number: PR number. Auto-detected from current branch if omitted.
+        repo: Repository in "owner/repo" format. Auto-detected if not provided.
+
+    Returns:
+        Update result with status and optional preview.
+    """
+    try:
+        pr_number = _resolve_pr_number(pr_number)
+        ctx = get_context()
+        return await descriptions.update_pr_description(pr_number, body, repo=repo, ctx=ctx)
+    except Exception as exc:
+        logger.exception("update_pr_description failed for PR #%s", pr_number)
+        return UpdatePRDescriptionResult(pr_number=pr_number or 0, error=f"Error: {exc}")
+    except asyncio.CancelledError:
+        logger.warning("update_pr_description cancelled for PR #%s", pr_number)
+        return UpdatePRDescriptionResult(pr_number=pr_number or 0, error="Cancelled")
+
+
+@mcp.tool
 async def check_for_updates() -> UpdateCheckResult:
     """Check if a newer version of codereviewbuddy is available on PyPI.
 
@@ -379,7 +443,12 @@ def main() -> None:
     import sys
 
     if len(sys.argv) > 1 and sys.argv[1] == "init":
-        _init_config()
+        print("'codereviewbuddy init' has been renamed to 'codereviewbuddy config --init'")  # noqa: T201
+        _config_cmd(["--init"])
+        return
+
+    if len(sys.argv) > 1 and sys.argv[1] == "config":
+        _config_cmd(sys.argv[2:])
         return
 
     from codereviewbuddy.io_tap import install_io_tap
@@ -388,18 +457,20 @@ def main() -> None:
     mcp.run()
 
 
-def _init_config() -> None:
-    """Write a self-documenting .codereviewbuddy.toml to the current directory."""
-    from pathlib import Path
+def _config_cmd(args: list[str]) -> None:
+    """Handle ``codereviewbuddy config [--init | --update]``."""
+    from codereviewbuddy.config import init_config, update_config
 
-    from codereviewbuddy.config import CONFIG_FILENAME, DEFAULT_CONFIG_TEMPLATE
-
-    target = Path.cwd() / CONFIG_FILENAME
-    if target.exists():
-        print(f"Error: {CONFIG_FILENAME} already exists in {Path.cwd()}")  # noqa: T201
+    if "--init" in args:
+        init_config()
+    elif "--update" in args:
+        update_config()
+    else:
+        print("Usage: codereviewbuddy config [--init | --update]")  # noqa: T201
+        print()  # noqa: T201
+        print("  --init    Create a new .codereviewbuddy.toml with all defaults")  # noqa: T201
+        print("  --update  Add new config sections without changing existing values")  # noqa: T201
         raise SystemExit(1)
-    target.write_text(DEFAULT_CONFIG_TEMPLATE, encoding="utf-8")
-    print(f"Created {target}")  # noqa: T201
 
 
 def check_prerequisites() -> None:
