@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from codereviewbuddy.config import Severity
+from codereviewbuddy.config import ReviewerConfig, Severity
 from codereviewbuddy.reviewers import (
     REVIEWERS,
     CodeRabbitAdapter,
@@ -52,12 +52,24 @@ class TestUnblockedAdapter:
         assert adapter.needs_manual_rereview is True
         assert adapter.auto_resolves_comments is False
 
-    def test_rereview_trigger(self):
+    def test_rereview_trigger_default_message(self):
         adapter = UnblockedAdapter()
         args = adapter.rereview_trigger(42, "owner", "repo")
         assert args[0] == "pr"
         assert "42" in args
         assert "--body" in args
+        assert "@unblocked please re-review" in args
+
+    def test_rereview_trigger_custom_message(self):
+        adapter = UnblockedAdapter()
+        adapter.configure(ReviewerConfig(rereview_message="@unblocked re-review please, with context"))
+        args = adapter.rereview_trigger(42, "owner", "repo")
+        assert "@unblocked re-review please, with context" in args
+
+    def test_rereview_trigger_config_without_message_uses_default(self):
+        adapter = UnblockedAdapter()
+        adapter.configure(ReviewerConfig())
+        args = adapter.rereview_trigger(42, "owner", "repo")
         assert "@unblocked please re-review" in args
 
 

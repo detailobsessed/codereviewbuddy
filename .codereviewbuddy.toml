@@ -22,3 +22,9 @@ resolve_levels = ["info"]       # Only allow resolving info-level threads from D
 # enabled = true
 # auto_resolve_stale = false      # CodeRabbit handles its own resolution
 # resolve_levels = []             # Don't resolve any CodeRabbit threads
+
+# --- New sections added by 'codereviewbuddy config --update' ---
+
+[pr_descriptions]
+enabled = true                  # Set to false to disable PR description tools entirely
+require_review = false          # Set to true to require user approval before updating descriptions

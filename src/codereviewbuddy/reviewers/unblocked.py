@@ -30,6 +30,9 @@ class UnblockedAdapter(ReviewerAdapter):
         return normalized in {"unblocked[bot]", "unblocked-bot", "unblocked"}
 
     def rereview_trigger(self, pr_number: int, owner: str, repo: str) -> list[str]:
+        message = "@unblocked please re-review"
+        if self._config and self._config.rereview_message is not None:
+            message = self._config.rereview_message
         return [
             "pr",
             "comment",
@@ -37,5 +40,5 @@ class UnblockedAdapter(ReviewerAdapter):
             "--repo",
             f"{owner}/{repo}",
             "--body",
-            "@unblocked please re-review",
+            message,
         ]
