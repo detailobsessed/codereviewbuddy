@@ -56,7 +56,7 @@ class TestUpdateConfig:
     def test_appends_missing_sections(self, tmp_path: Path):
         config_file = tmp_path / CONFIG_FILENAME
         config_file.write_text("[reviewers.devin]\nenabled = true\n", encoding="utf-8")
-        _, added = update_config(cwd=tmp_path)
+        _, added, _deprecated = update_config(cwd=tmp_path)
         assert "[pr_descriptions]" in added
         assert "[reviewers.unblocked]" in added
         assert "[reviewers.devin]" not in added  # already existed
@@ -66,8 +66,9 @@ class TestUpdateConfig:
 
     def test_no_changes_when_up_to_date(self, tmp_path: Path):
         init_config(cwd=tmp_path)
-        _, added = update_config(cwd=tmp_path)
+        _, added, deprecated = update_config(cwd=tmp_path)
         assert added == []
+        assert deprecated == []
 
     def test_fails_if_no_config(self, tmp_path: Path):
         with pytest.raises(SystemExit):
@@ -93,6 +94,13 @@ class TestConfigCmd:
         monkeypatch.chdir(tmp_path)
         (tmp_path / CONFIG_FILENAME).write_text("[reviewers.devin]\n", encoding="utf-8")
         _config_cmd(["--update"])
+
+    def test_clean_flag(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+        monkeypatch.chdir(tmp_path)
+        (tmp_path / CONFIG_FILENAME).write_text("[pr_descriptions]\nrequire_review = false\n", encoding="utf-8")
+        _config_cmd(["--clean"])
+        content = (tmp_path / CONFIG_FILENAME).read_text(encoding="utf-8")
+        assert "require_review" not in content
 
 
 class TestResolvePrNumber:

@@ -140,6 +140,36 @@ class Config(BaseModel):
         return True, ""
 
 
+def _collect_unknown_keys(
+    data: dict[str, Any],
+    model_cls: type[BaseModel],
+    prefix: str = "",
+) -> list[str]:
+    """Recursively find keys in *data* that don't match any field in *model_cls*.
+
+    Unknown reviewer *names* under ``[reviewers.*]`` are intentionally allowed
+    (forward-compat for new reviewers).  Only unknown *keys within* known
+    sections are flagged.
+
+    Returns dotted key paths like ``pr_descriptions.require_review``.
+    """
+    known = set(model_cls.model_fields)
+    unknown: list[str] = []
+
+    for key, value in data.items():
+        dotted = f"{prefix}{key}"
+        if key not in known:
+            unknown.append(dotted)
+            continue
+        # Recurse into sub-models (but not dicts of sub-models like reviewers)
+        field_info = model_cls.model_fields[key]
+        annotation = field_info.annotation
+        if isinstance(annotation, type) and issubclass(annotation, BaseModel) and isinstance(value, dict):
+            unknown.extend(_collect_unknown_keys(value, annotation, prefix=f"{dotted}."))
+
+    return unknown
+
+
 def _find_config_file(start: Path) -> Path | None:
     """Walk up from *start* looking for ``.codereviewbuddy.toml``, stopping at ``.git`` root."""
     current = start.resolve()
@@ -181,10 +211,20 @@ def load_config(cwd: str | Path | None = None) -> Config:
         raise ValueError(msg) from exc
 
     try:
-        return Config.model_validate(data)
+        config = Config.model_validate(data)
     except Exception as exc:
         msg = f"Invalid config in {config_path}: {exc}"
         raise ValueError(msg) from exc
+
+    unknown = _collect_unknown_keys(data, Config)
+    for key in unknown:
+        logger.warning(
+            "Unknown config key '%s' in %s — run 'codereviewbuddy config --update' to clean up",
+            key,
+            config_path,
+        )
+
+    return config
 
 
 # -- Global config instance (set during server lifespan) -----------------------
@@ -280,22 +320,94 @@ def init_config(cwd: Path | None = None) -> Path:
     return target
 
 
-def update_config(cwd: Path | None = None) -> tuple[Path, list[str]]:
-    """Append missing sections to an existing ``.codereviewbuddy.toml``.
+def _comment_out_unknown_keys(target: Path) -> list[str]:
+    """Comment out unknown keys in a config file using tomlkit (style-preserving).
+
+    Returns list of dotted key paths that were commented out.
+    """
+    import tomlkit
+
+    raw = target.read_text(encoding="utf-8")
+    data = tomllib.loads(raw)
+    unknown = _collect_unknown_keys(data, Config)
+    if not unknown:
+        return []
+
+    doc = tomlkit.loads(raw)
+    for dotted in unknown:
+        parts = dotted.split(".")
+        container = doc
+        for part in parts[:-1]:
+            container = container[part]
+        key = parts[-1]
+        value = container[key]  # type: ignore[not-subscriptable]
+        del container[key]  # type: ignore[not-subscriptable]
+        # Serialize the value safely — tables/dicts can't use the simple split trick
+        try:
+            if isinstance(value, dict):
+                serialized = tomlkit.inline_table()
+                serialized.update(value)
+                value_str = str(serialized)
+            else:
+                value_str = tomlkit.dumps({"_": value}).split("= ", 1)[1].strip()
+                if "\n" in value_str:
+                    value_str = repr(value)
+        except Exception:
+            value_str = repr(value)
+        container.add(tomlkit.comment(f"DEPRECATED: {key} = {value_str}"))  # type: ignore[possibly-missing-attribute]
+
+    target.write_text(tomlkit.dumps(doc), encoding="utf-8")
+    return unknown
+
+
+def _remove_unknown_keys(target: Path) -> list[str]:
+    """Remove unknown keys from a config file using tomlkit (style-preserving).
+
+    Returns list of dotted key paths that were removed.
+    """
+    import tomlkit
+
+    raw = target.read_text(encoding="utf-8")
+    data = tomllib.loads(raw)
+    unknown = _collect_unknown_keys(data, Config)
+    if not unknown:
+        return []
+
+    doc = tomlkit.loads(raw)
+    for dotted in unknown:
+        parts = dotted.split(".")
+        container = doc
+        for part in parts[:-1]:
+            container = container[part]
+        del container[parts[-1]]  # type: ignore[not-subscriptable]
+
+    target.write_text(tomlkit.dumps(doc), encoding="utf-8")
+    return unknown
+
+
+def update_config(cwd: Path | None = None) -> tuple[Path, list[str], list[str]]:
+    """Append missing sections and comment out deprecated keys.
 
     Reads the current config file, checks which template sections are
-    missing, and appends them. Does NOT modify existing values.
+    missing, appends them, and comments out any unrecognized keys.
 
     Raises ``SystemExit(1)`` if the config file doesn't exist.
 
     Returns:
-        Tuple of (config path, list of added section headers).
+        Tuple of (config path, list of added section headers, list of deprecated keys commented out).
     """
     target = (cwd or Path.cwd()) / CONFIG_FILENAME
     if not target.exists():
         print(f"Error: {CONFIG_FILENAME} not found in {target.parent}")  # noqa: T201
         print("Hint: use 'codereviewbuddy config --init' to create one")  # noqa: T201
         raise SystemExit(1)
+
+    # Comment out deprecated keys first
+    deprecated = _comment_out_unknown_keys(target)
+    if deprecated:
+        print(f"Commented out {len(deprecated)} deprecated key(s):")  # noqa: T201
+        for d in deprecated:
+            print(f"  # {d}")  # noqa: T201
 
     existing = target.read_text(encoding="utf-8")
     added: list[str] = []
@@ -304,20 +416,48 @@ def update_config(cwd: Path | None = None) -> tuple[Path, list[str]]:
         if header not in existing:
             added.append(header)
 
-    if not added:
-        print(f"{CONFIG_FILENAME} is up to date — no new sections to add")  # noqa: T201
-        return target, added
+    if added:
+        # Ensure file ends with a newline before appending
+        appendix = "" if existing.endswith("\n") else "\n"
+        appendix += "\n# --- New sections added by 'codereviewbuddy config --update' ---\n\n"
+        for header, block in _TEMPLATE_SECTIONS:
+            if header in added:
+                appendix += block + "\n"
 
-    # Ensure file ends with a newline before appending
-    appendix = "" if existing.endswith("\n") else "\n"
-    appendix += "\n# --- New sections added by 'codereviewbuddy config --update' ---\n\n"
-    for header, block in _TEMPLATE_SECTIONS:
-        if header in added:
-            appendix += block + "\n"
+        target.write_text(existing + appendix, encoding="utf-8")
+        print(f"Added {len(added)} section(s):")  # noqa: T201
+        for h in added:
+            print(f"  + {h}")  # noqa: T201
 
-    target.write_text(existing + appendix, encoding="utf-8")
-    print(f"Updated {target} — added {len(added)} section(s):")  # noqa: T201
-    for h in added:
-        print(f"  + {h}")  # noqa: T201
+    if not added and not deprecated:
+        print(f"{CONFIG_FILENAME} is up to date — nothing to change")  # noqa: T201
 
-    return target, added
+    return target, added, deprecated
+
+
+def clean_config(cwd: Path | None = None) -> tuple[Path, list[str]]:
+    """Remove deprecated keys from an existing ``.codereviewbuddy.toml``.
+
+    Unlike ``update_config`` which comments out deprecated keys, this
+    removes them entirely for a tidy config file.
+
+    Raises ``SystemExit(1)`` if the config file doesn't exist.
+
+    Returns:
+        Tuple of (config path, list of removed key paths).
+    """
+    target = (cwd or Path.cwd()) / CONFIG_FILENAME
+    if not target.exists():
+        print(f"Error: {CONFIG_FILENAME} not found in {target.parent}")  # noqa: T201
+        print("Hint: use 'codereviewbuddy config --init' to create one")  # noqa: T201
+        raise SystemExit(1)
+
+    removed = _remove_unknown_keys(target)
+    if removed:
+        print(f"Removed {len(removed)} deprecated key(s) from {target}:")  # noqa: T201
+        for r in removed:
+            print(f"  - {r}")  # noqa: T201
+    else:
+        print(f"{CONFIG_FILENAME} is clean — no deprecated keys found")  # noqa: T201
+
+    return target, removed

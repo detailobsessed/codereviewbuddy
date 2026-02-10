@@ -26,6 +26,7 @@ classifiers = [
 ]
 dependencies = [
     "fastmcp>=3.0.0b2",
+    "tomlkit>=0.13",
 ]
 
 [project.scripts]

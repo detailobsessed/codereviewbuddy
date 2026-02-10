@@ -13,7 +13,10 @@ from codereviewbuddy.config import (
     Config,
     ReviewerConfig,
     Severity,
+    _collect_unknown_keys,
+    clean_config,
     load_config,
+    update_config,
 )
 
 
@@ -230,3 +233,110 @@ auto_resolve_stale = false
             assert config.reviewers[name].enabled == zero.reviewers[name].enabled, name
             assert config.reviewers[name].auto_resolve_stale == zero.reviewers[name].auto_resolve_stale, name
             assert config.reviewers[name].resolve_levels == zero.reviewers[name].resolve_levels, name
+
+
+class TestCollectUnknownKeys:
+    def test_top_level_unknown(self):
+        data = {"reviewers": {}, "bogus_key": True}
+        assert _collect_unknown_keys(data, Config) == ["bogus_key"]
+
+    def test_nested_unknown_in_pr_descriptions(self):
+        data = {"pr_descriptions": {"enabled": True, "require_review": False}}
+        assert _collect_unknown_keys(data, Config) == ["pr_descriptions.require_review"]
+
+    def test_no_unknowns(self):
+        data = {"pr_descriptions": {"enabled": True}}
+        assert _collect_unknown_keys(data, Config) == []
+
+    def test_unknown_reviewer_names_are_allowed(self):
+        """Unknown reviewer names under [reviewers.*] should NOT be flagged."""
+        data = {"reviewers": {"future_bot": {"enabled": True}}}
+        assert _collect_unknown_keys(data, Config) == []
+
+    def test_multiple_unknowns(self):
+        data = {"pr_descriptions": {"require_review": False}, "foo": 1}
+        unknown = _collect_unknown_keys(data, Config)
+        assert "pr_descriptions.require_review" in unknown
+        assert "foo" in unknown
+
+
+class TestLoadConfigWarnings:
+    def test_warns_on_unknown_keys(self, tmp_path: Path, caplog: pytest.LogCaptureFixture):
+        (tmp_path / ".git").mkdir()
+        (tmp_path / ".codereviewbuddy.toml").write_text(
+            "[pr_descriptions]\nrequire_review = false\n",
+            encoding="utf-8",
+        )
+        import logging
+
+        with caplog.at_level(logging.WARNING, logger="codereviewbuddy.config"):
+            load_config(cwd=tmp_path)
+        assert any("require_review" in r.message for r in caplog.records)
+        assert any("--update" in r.message for r in caplog.records)
+
+
+class TestUpdateConfigDeprecation:
+    def test_comments_out_deprecated_keys(self, tmp_path: Path):
+        config_file = tmp_path / ".codereviewbuddy.toml"
+        config_file.write_text(
+            "[pr_descriptions]\nenabled = true\nrequire_review = false\n",
+            encoding="utf-8",
+        )
+        _, _added, deprecated = update_config(cwd=tmp_path)
+        assert "pr_descriptions.require_review" in deprecated
+        content = config_file.read_text(encoding="utf-8")
+        assert "DEPRECATED" in content
+        assert "require_review" in content  # still present as comment
+
+    def test_no_deprecations(self, tmp_path: Path):
+        config_file = tmp_path / ".codereviewbuddy.toml"
+        config_file.write_text("[pr_descriptions]\nenabled = true\n", encoding="utf-8")
+        _, _added, deprecated = update_config(cwd=tmp_path)
+        assert deprecated == []
+
+    def test_comments_out_unknown_table_section(self, tmp_path: Path):
+        config_file = tmp_path / ".codereviewbuddy.toml"
+        config_file.write_text(
+            '[pr_descriptions]\nenabled = true\n\n[old_section]\nkey = "val"\n',
+            encoding="utf-8",
+        )
+        _, _added, deprecated = update_config(cwd=tmp_path)
+        assert "old_section" in deprecated
+        content = config_file.read_text(encoding="utf-8")
+        assert "DEPRECATED" in content
+
+    def test_comments_out_empty_unknown_table(self, tmp_path: Path):
+        """Regression: empty unknown table used to crash with IndexError."""
+        config_file = tmp_path / ".codereviewbuddy.toml"
+        config_file.write_text(
+            "[pr_descriptions]\nenabled = true\n\n[deprecated_section]\n",
+            encoding="utf-8",
+        )
+        _, _added, deprecated = update_config(cwd=tmp_path)
+        assert "deprecated_section" in deprecated
+        content = config_file.read_text(encoding="utf-8")
+        assert "DEPRECATED" in content
+
+
+class TestCleanConfig:
+    def test_removes_deprecated_keys(self, tmp_path: Path):
+        config_file = tmp_path / ".codereviewbuddy.toml"
+        config_file.write_text(
+            "[pr_descriptions]\nenabled = true\nrequire_review = false\n",
+            encoding="utf-8",
+        )
+        _, removed = clean_config(cwd=tmp_path)
+        assert "pr_descriptions.require_review" in removed
+        content = config_file.read_text(encoding="utf-8")
+        assert "require_review" not in content
+        assert "enabled" in content  # known key preserved
+
+    def test_no_deprecated_keys(self, tmp_path: Path):
+        config_file = tmp_path / ".codereviewbuddy.toml"
+        config_file.write_text("[pr_descriptions]\nenabled = true\n", encoding="utf-8")
+        _, removed = clean_config(cwd=tmp_path)
+        assert removed == []
+
+    def test_fails_if_no_config(self, tmp_path: Path):
+        with pytest.raises(SystemExit):
+            clean_config(cwd=tmp_path)

@@ -438,18 +438,21 @@ def main() -> None:
 
 
 def _config_cmd(args: list[str]) -> None:
-    """Handle ``codereviewbuddy config [--init | --update]``."""
-    from codereviewbuddy.config import init_config, update_config
+    """Handle ``codereviewbuddy config [--init | --update | --clean]``."""
+    from codereviewbuddy.config import clean_config, init_config, update_config
 
     if "--init" in args:
         init_config()
     elif "--update" in args:
         update_config()
+    elif "--clean" in args:
+        clean_config()
     else:
-        print("Usage: codereviewbuddy config [--init | --update]")  # noqa: T201
+        print("Usage: codereviewbuddy config [--init | --update | --clean]")  # noqa: T201
         print()  # noqa: T201
         print("  --init    Create a new .codereviewbuddy.toml with all defaults")  # noqa: T201
-        print("  --update  Add new config sections without changing existing values")  # noqa: T201
+        print("  --update  Add new sections and comment out deprecated keys")  # noqa: T201
+        print("  --clean   Remove deprecated keys entirely")  # noqa: T201
         raise SystemExit(1)
 
 
