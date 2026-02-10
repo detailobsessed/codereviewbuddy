@@ -11,8 +11,8 @@ if TYPE_CHECKING:
 
     from pytest_mock import MockerFixture
 
-from codereviewbuddy.gh import GhNotAuthenticatedError, GhNotFoundError
-from codereviewbuddy.server import _init_config, check_prerequisites
+from codereviewbuddy.gh import GhError, GhNotAuthenticatedError, GhNotFoundError
+from codereviewbuddy.server import _init_config, _resolve_pr_number, check_prerequisites
 
 
 class TestCheckPrerequisites:
@@ -46,6 +46,23 @@ class TestInitConfig:
         (tmp_path / CONFIG_FILENAME).write_text("existing", encoding="utf-8")
         with pytest.raises(SystemExit):
             _init_config()
+
+
+class TestResolvePrNumber:
+    def test_returns_explicit_number(self):
+        assert _resolve_pr_number(42) == 42
+
+    def test_auto_detects_from_branch(self, mocker: MockerFixture):
+        mocker.patch("codereviewbuddy.server.gh.get_current_pr_number", return_value=99)
+        assert _resolve_pr_number(None) == 99
+
+    def test_raises_when_no_pr(self, mocker: MockerFixture):
+        mocker.patch(
+            "codereviewbuddy.server.gh.get_current_pr_number",
+            side_effect=GhError("no pull requests found"),
+        )
+        with pytest.raises(GhError, match="no pull requests found"):
+            _resolve_pr_number(None)
 
 
 class TestMain:

@@ -183,6 +183,21 @@ def check_auth(cwd: str | None = None) -> str:
     return "authenticated"
 
 
+def get_current_pr_number(cwd: str | None = None) -> int:
+    """Detect the PR number associated with the current git branch.
+
+    Uses ``gh pr view`` which resolves the current branch to its open PR.
+
+    Returns:
+        The PR number.
+
+    Raises:
+        GhError: If no PR is associated with the current branch.
+    """
+    raw = run_gh("pr", "view", "--json", "number", "-q", ".number", cwd=cwd)
+    return int(raw.strip())
+
+
 def get_repo_info(cwd: str | None = None) -> tuple[str, str]:
     """Get the owner and repo name for the current repository.
 
