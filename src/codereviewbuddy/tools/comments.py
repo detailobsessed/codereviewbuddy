@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING
 from fastmcp.utilities.async_utils import call_sync_fn_in_threadpool
 
 from codereviewbuddy import gh
+from codereviewbuddy.config import Severity, get_config
 from codereviewbuddy.models import CommentStatus, ResolveStaleResult, ReviewComment, ReviewerStatus, ReviewSummary, ReviewThread
 from codereviewbuddy.reviewers import get_reviewer, identify_reviewer
 
@@ -76,9 +77,20 @@ query($owner: String!, $repo: String!, $pr: Int!, $cursor: String) {
 def _reviewer_auto_resolves(reviewer_name: str, comment_body: str = "") -> bool:
     """Check if a reviewer will auto-resolve a specific thread.
 
-    Delegates to the adapter's ``auto_resolves_thread`` method which may
-    inspect the comment body (e.g. Devin skips info-level threads).
+    First consults the config's ``auto_resolve_stale`` setting.  If config
+    says we *should* auto-resolve (i.e. the reviewer does NOT handle its own),
+    returns ``False`` so our bulk-resolve picks it up.  Otherwise delegates
+    to the adapter's ``auto_resolves_thread`` method which may inspect the
+    comment body (e.g. Devin skips info-level threads).
     """
+    config = get_config()
+    rc = config.get_reviewer(reviewer_name)
+    # If config says auto_resolve_stale=True, WE handle resolution — reviewer
+    # is not expected to auto-resolve, so return False ("reviewer won't do it").
+    # If auto_resolve_stale=False, the reviewer handles its own resolution,
+    # so delegate to the adapter for per-thread decisions.
+    if rc.auto_resolve_stale:
+        return False
     adapter = get_reviewer(reviewer_name)
     if not adapter:
         return False
@@ -426,6 +438,10 @@ async def list_review_comments(
     bot_comments = await call_sync_fn_in_threadpool(_get_pr_issue_comments, owner, repo_name, pr_number, cwd=cwd)
     threads.extend(bot_comments)
 
+    # Filter out threads from disabled reviewers
+    config = get_config()
+    threads = [t for t in threads if config.get_reviewer(t.reviewer).enabled]
+
     # Build reviewer statuses (timestamp heuristic)
     last_push_at = await call_sync_fn_in_threadpool(
         _get_latest_push_time,
@@ -487,12 +503,49 @@ async def list_stack_review_comments(
     return results
 
 
+_THREAD_DETAIL_QUERY = """
+query($threadId: ID!) {
+  node(id: $threadId) {
+    ... on PullRequestReviewThread {
+      comments(first: 1) {
+        nodes {
+          author { login }
+          body
+        }
+      }
+    }
+  }
+}
+"""
+
+
+def _fetch_thread_detail(thread_id: str, cwd: str | None = None) -> tuple[str, str]:
+    """Fetch reviewer name and first comment body for a thread.
+
+    Returns:
+        (reviewer_name, comment_body) — empty strings if lookup fails.
+    """
+    result = gh.graphql(_THREAD_DETAIL_QUERY, variables={"threadId": thread_id}, cwd=cwd)
+    node = result.get("data", {}).get("node") or {}
+    comments = node.get("comments", {}).get("nodes", [])
+    if not comments:
+        return "", ""
+    first = comments[0]
+    login = (first.get("author") or {}).get("login", "")
+    reviewer = identify_reviewer(login)
+    body = first.get("body", "")
+    return reviewer, body
+
+
 def resolve_comment(
     pr_number: int,
     thread_id: str,
     cwd: str | None = None,
 ) -> str:
     """Resolve a specific review thread by its GraphQL ID.
+
+    Always fetches thread details server-side and enforces the per-reviewer
+    ``resolve_levels`` policy — agents cannot bypass this.
 
     Args:
         pr_number: PR number (for context/logging).
@@ -501,10 +554,23 @@ def resolve_comment(
 
     Returns:
         Confirmation message.
+
+    Raises:
+        gh.GhError: If the thread type is not resolvable or resolve is blocked by config.
     """
     if thread_id.startswith(("PRR_", "IC_")):
         msg = f"Cannot resolve PR-level reviews or bot comments — only inline review threads (PRRT_) are resolvable. Got: {thread_id}"
         raise gh.GhError(msg)
+
+    # Config enforcement: fetch thread details and check resolve_levels
+    reviewer_name, comment_body = _fetch_thread_detail(thread_id, cwd=cwd)
+    if reviewer_name:
+        config = get_config()
+        adapter = get_reviewer(reviewer_name)
+        severity = adapter.classify_severity(comment_body) if adapter else Severity.INFO
+        allowed, reason = config.can_resolve(reviewer_name, severity)
+        if not allowed:
+            raise gh.GhError(reason)
 
     result = gh.graphql(_RESOLVE_THREAD_MUTATION, variables={"threadId": thread_id}, cwd=cwd)
 
@@ -533,6 +599,7 @@ async def resolve_stale_comments(
     Returns:
         Dict with "resolved_count" and "resolved_thread_ids".
     """
+    config = get_config()
     summary = await list_review_comments(pr_number, repo=repo, status="unresolved", cwd=cwd, ctx=ctx)
     stale = [t for t in summary.threads if t.is_stale and not t.is_pr_review]
     # Skip threads from reviewers that auto-resolve (e.g. Devin bugs, CodeRabbit)
@@ -545,21 +612,46 @@ async def resolve_stale_comments(
     skipped = [t for t in stale if _will_auto_resolve(t)]
     stale = [t for t in stale if not _will_auto_resolve(t)]
 
-    if not stale:
-        return ResolveStaleResult(resolved_count=0, resolved_thread_ids=[], skipped_count=len(skipped))
+    # Config enforcement: filter out threads whose severity exceeds resolve_levels
+    allowed: list[ReviewThread] = []
+    blocked_count = 0
+    for t in stale:
+        body = t.comments[0].body if t.comments else ""
+        adapter = get_reviewer(t.reviewer)
+        severity = adapter.classify_severity(body) if adapter else Severity.INFO
+        can, _reason = config.can_resolve(t.reviewer, severity)
+        if can:
+            allowed.append(t)
+        else:
+            blocked_count += 1
+
+    if not allowed:
+        return ResolveStaleResult(
+            resolved_count=0,
+            resolved_thread_ids=[],
+            skipped_count=len(skipped),
+            blocked_count=blocked_count,
+        )
 
     # Batch resolve using GraphQL aliases
     mutations = []
-    for i, thread in enumerate(stale):
+    for i, thread in enumerate(allowed):
         mutations.append(f'  t{i}: resolveReviewThread(input: {{threadId: "{thread.thread_id}"}}) {{ thread {{ id isResolved }} }}')
 
     batch_mutation = "mutation {\n" + "\n".join(mutations) + "\n}"
     await call_sync_fn_in_threadpool(gh.graphql, batch_mutation, cwd=cwd)
 
-    resolved_ids = [t.thread_id for t in stale]
+    resolved_ids = [t.thread_id for t in allowed]
     if ctx:
         await ctx.info(f"Resolved {len(resolved_ids)} stale threads on PR #{pr_number}")
-    return ResolveStaleResult(resolved_count=len(resolved_ids), resolved_thread_ids=resolved_ids, skipped_count=len(skipped))
+        if blocked_count:
+            await ctx.warning(f"⚠️ {blocked_count} threads blocked by resolve_levels config")
+    return ResolveStaleResult(
+        resolved_count=len(resolved_ids),
+        resolved_thread_ids=resolved_ids,
+        skipped_count=len(skipped),
+        blocked_count=blocked_count,
+    )
 
 
 def reply_to_comment(

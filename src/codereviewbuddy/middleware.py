@@ -72,7 +72,7 @@ class WriteOperationMiddleware(Middleware):
     def _append_log(self, entry: dict[str, Any]) -> None:
         """Append a JSON log entry to the tool_calls.jsonl file."""
         try:
-            with self._log_file.open("a") as f:
+            with self._log_file.open("a", encoding="utf-8") as f:
                 f.write(json.dumps(entry, default=str) + "\n")
         except OSError:
             logger.warning("Could not write to log file: %s", self._log_file)
@@ -82,9 +82,9 @@ class WriteOperationMiddleware(Middleware):
         try:
             if not self._log_file.exists():
                 return
-            lines = self._log_file.read_text().splitlines()
+            lines = self._log_file.read_text(encoding="utf-8").splitlines()
             if len(lines) > MAX_LOG_LINES:
-                self._log_file.write_text("\n".join(lines[-MAX_LOG_LINES:]) + "\n")
+                self._log_file.write_text("\n".join(lines[-MAX_LOG_LINES:]) + "\n", encoding="utf-8")
         except OSError:
             pass
 

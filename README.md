@@ -151,6 +151,69 @@ Add to `.cursor/mcp.json` in your project:
 | `create_issue_from_comment` | Create a GitHub issue from a review comment with labels, PR backlink, and quoted text |
 | `check_for_updates` | Check if a newer version is available on PyPI |
 
+## Configuration
+
+codereviewbuddy works **zero-config** with sensible defaults. To customize per-reviewer behavior, create a `.codereviewbuddy.toml` in your project root:
+
+```bash
+codereviewbuddy init   # generates a self-documenting config file
+```
+
+Or create it manually:
+
+```toml
+# .codereviewbuddy.toml
+
+[reviewers.devin]
+enabled = true                    # Set to false to ignore Devin comments entirely
+auto_resolve_stale = false        # Devin auto-resolves its own threads; we skip them
+resolve_levels = ["info"]         # Only allow resolving info-level threads
+
+[reviewers.unblocked]
+enabled = true
+auto_resolve_stale = true         # We batch-resolve Unblocked's stale threads
+resolve_levels = ["info", "warning", "flagged", "bug"]
+
+[reviewers.coderabbit]
+enabled = true
+auto_resolve_stale = false        # CodeRabbit handles its own resolution
+resolve_levels = []               # Don't resolve any CodeRabbit threads
+```
+
+### Config options
+
+| Option | Type | Default | Description |
+| ------ | ---- | ------- | ----------- |
+| `enabled` | bool | `true` | Whether to include this reviewer's threads in results |
+| `auto_resolve_stale` | bool | varies | Whether `resolve_stale_comments` touches this reviewer's threads |
+| `resolve_levels` | list | varies | Severity levels that are allowed to be resolved |
+
+### Severity levels
+
+Each reviewer adapter classifies comments using its own format. Currently only Devin has a known severity format (emoji markers). Unblocked and CodeRabbit comments default to `info` until their formats are investigated.
+
+**Devin's emoji markers:**
+
+| Emoji | Level | Meaning |
+| ----- | ----- | ------- |
+| 🔴 | `bug` | Critical issue, must fix before merge |
+| 🚩 | `flagged` | Likely needs a code change |
+| 🟡 | `warning` | Worth addressing but not blocking |
+| 📝 | `info` | Informational, no action required |
+| *(none)* | `info` | Default when no marker is present |
+
+Reviewers without a known format classify all comments as `info`. This means `resolve_levels = ["info"]` would allow resolving all their threads, while `resolve_levels = []` blocks everything.
+
+### Resolve enforcement
+
+The `resolve_levels` config is **enforced server-side**. If an agent tries to resolve a thread whose severity exceeds the allowed levels, the server returns an error. This prevents agents from resolving critical review comments regardless of their instructions.
+
+For example, with the default config, resolving a 🔴 bug from Devin is blocked — only 📝 info threads can be resolved.
+
+### Config discovery
+
+The server walks up from the current working directory looking for `.codereviewbuddy.toml`, stopping at the `.git` root. If no config file is found, all defaults apply. The loaded config path is logged at startup.
+
 ## Reviewer behavior
 
 | Reviewer | Auto-reviews on push | Auto-resolves comments | Re-review trigger |
@@ -201,6 +264,7 @@ poe prek          # run all pre-commit hooks
 The server is built on [FastMCP v3](https://github.com/jlowin/fastmcp) with a clean separation:
 
 - **`server.py`** — FastMCP server with tool registration, middleware, and instructions
+- **`config.py`** — Per-reviewer configuration (`.codereviewbuddy.toml` loader, severity classifier, resolve policy)
 - **`tools/`** — Tool implementations (`comments.py`, `issues.py`, `rereview.py`, `version.py`)
 - **`reviewers/`** — Pluggable reviewer adapters with behavior flags (auto-resolve, re-review triggers)
 - **`gh.py`** — Thin wrapper around the `gh` CLI for GraphQL and REST calls

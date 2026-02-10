@@ -51,7 +51,7 @@ class TestLogFile:
         middleware._append_log({"tool": "test", "write": False})
         log_file = tmp_log_dir / "tool_calls.jsonl"
         assert log_file.exists()
-        lines = log_file.read_text().splitlines()
+        lines = log_file.read_text(encoding="utf-8").splitlines()
         assert len(lines) == 1
         entry = json.loads(lines[0])
         assert entry["tool"] == "test"
@@ -61,17 +61,17 @@ class TestLogFile:
         for i in range(5):
             middleware._append_log({"tool": f"tool-{i}"})
         log_file = tmp_log_dir / "tool_calls.jsonl"
-        lines = log_file.read_text().splitlines()
+        lines = log_file.read_text(encoding="utf-8").splitlines()
         assert len(lines) == 5
 
     def test_truncate_keeps_last_n_lines(self, middleware: WriteOperationMiddleware, tmp_log_dir: Path):
         log_file = tmp_log_dir / "tool_calls.jsonl"
         # Write more than MAX_LOG_LINES
-        with log_file.open("w") as f:
+        with log_file.open("w", encoding="utf-8") as f:
             for i in range(1100):
                 f.write(json.dumps({"i": i}) + "\n")
         middleware._truncate_log_if_needed()
-        lines = log_file.read_text().splitlines()
+        lines = log_file.read_text(encoding="utf-8").splitlines()
         assert len(lines) == 1000
         # Should keep the last entries
         assert json.loads(lines[0])["i"] == 100
@@ -148,7 +148,7 @@ class TestTwoPhaseLogging:
         async def call_next(_ctx: Any) -> list[Any]:
             # Snapshot the log file DURING the call — before call_next returns
             if log_file.exists():
-                entries_during_call.extend(json.loads(line) for line in log_file.read_text().splitlines())
+                entries_during_call.extend(json.loads(line) for line in log_file.read_text(encoding="utf-8").splitlines())
             await asyncio.sleep(0)
             return []
 
@@ -160,7 +160,7 @@ class TestTwoPhaseLogging:
         assert entries_during_call[0]["tool"] == "list_review_comments"
 
         # After the call, there should be 2 entries: started + completed
-        all_entries = [json.loads(line) for line in log_file.read_text().splitlines()]
+        all_entries = [json.loads(line) for line in log_file.read_text(encoding="utf-8").splitlines()]
         assert len(all_entries) == 2
         assert all_entries[0]["phase"] == "started"
         assert all_entries[1]["phase"] == "completed"
@@ -187,7 +187,7 @@ class TestTwoPhaseLogging:
         await asyncio.sleep(0.01)
 
         # The log should have exactly 1 entry: started (no completed)
-        entries = [json.loads(line) for line in log_file.read_text().splitlines()]
+        entries = [json.loads(line) for line in log_file.read_text(encoding="utf-8").splitlines()]
         assert len(entries) == 1
         assert entries[0]["phase"] == "started"
         assert entries[0]["tool"] == "list_review_comments"
@@ -206,7 +206,7 @@ class TestTwoPhaseLogging:
 
         await middleware.on_call_tool(_make_context("resolve_comment"), call_next)  # type: ignore[arg-type]
 
-        entries = [json.loads(line) for line in log_file.read_text().splitlines()]
+        entries = [json.loads(line) for line in log_file.read_text(encoding="utf-8").splitlines()]
         completed = [e for e in entries if e["phase"] == "completed"]
         assert len(completed) == 1
         assert "duration_ms" in completed[0]
@@ -223,7 +223,7 @@ class TestTwoPhaseLogging:
         with pytest.raises(RuntimeError):
             await middleware.on_call_tool(_make_context("resolve_comment"), call_next_raises)  # type: ignore[arg-type]
 
-        entries = [json.loads(line) for line in log_file.read_text().splitlines()]
+        entries = [json.loads(line) for line in log_file.read_text(encoding="utf-8").splitlines()]
         assert len(entries) == 2
         assert entries[0]["phase"] == "started"
         assert entries[1]["phase"] == "completed"

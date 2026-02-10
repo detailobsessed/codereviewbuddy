@@ -83,6 +83,7 @@ class ResolveStaleResult(BaseModel):
     resolved_count: int = Field(description="Number of threads resolved")
     resolved_thread_ids: list[str] = Field(default_factory=list, description="Thread IDs that were resolved")
     skipped_count: int = Field(default=0, description="Threads skipped because the reviewer auto-resolves (e.g. Devin, CodeRabbit)")
+    blocked_count: int = Field(default=0, description="Threads blocked by resolve_levels config (severity too high)")
     error: str | None = Field(default=None, description="Error message if the request failed")
 
 

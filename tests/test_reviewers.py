@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import pytest
 
+from codereviewbuddy.config import Severity
 from codereviewbuddy.reviewers import (
     REVIEWERS,
     CodeRabbitAdapter,
@@ -83,6 +84,30 @@ class TestDevinAdapter:
         adapter = DevinAdapter()
         assert adapter.rereview_trigger(42, "owner", "repo") == []
 
+    @pytest.mark.parametrize(
+        ("body", "expected"),
+        [
+            ("🔴 **Bug: null pointer**", Severity.BUG),
+            ("🚩 **check_for_updates not wrapped**", Severity.FLAGGED),
+            ("🟡 Consider adding a docstring", Severity.WARNING),
+            ("📝 **Info: This is informational**", Severity.INFO),
+            ("Some plain comment text", Severity.INFO),
+            ("🔴 bug and 📝 info in same comment", Severity.BUG),
+            ("", Severity.INFO),
+        ],
+    )
+    def test_classify_severity(self, body: str, expected: Severity):
+        adapter = DevinAdapter()
+        assert adapter.classify_severity(body) == expected
+
+
+class TestUnblockedSeverity:
+    def test_defaults_to_info(self):
+        """Unblocked has no known severity format — base class returns info."""
+        adapter = UnblockedAdapter()
+        assert adapter.classify_severity("🔴 some bug text") == Severity.INFO
+        assert adapter.classify_severity("plain comment") == Severity.INFO
+
 
 class TestCodeRabbitAdapter:
     def test_properties(self):
@@ -94,6 +119,11 @@ class TestCodeRabbitAdapter:
     def test_rereview_trigger_empty(self):
         adapter = CodeRabbitAdapter()
         assert adapter.rereview_trigger(42, "owner", "repo") == []
+
+    def test_severity_defaults_to_info(self):
+        """CodeRabbit has no known severity format — base class returns info."""
+        adapter = CodeRabbitAdapter()
+        assert adapter.classify_severity("any comment") == Severity.INFO
 
 
 class TestReviewerRegistry:
