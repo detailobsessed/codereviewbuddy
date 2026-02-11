@@ -361,6 +361,21 @@ async def summarize_review_status(
 
     # Auto-discover stack if no PR numbers provided
     if pr_numbers is None:
+        # Guard: auto-discovery uses `gh pr view` which reads the current branch.
+        # If `repo` was explicitly provided, verify it matches the cwd repo —
+        # otherwise we'd detect a PR from the wrong repo (#115).
+        if repo:
+            try:
+                cwd_owner, cwd_repo = await call_sync_fn_in_threadpool(gh.get_repo_info, cwd=cwd)
+                cwd_full = f"{cwd_owner}/{cwd_repo}"
+            except gh.GhError:
+                cwd_full = None
+            if cwd_full is None or cwd_full.lower() != full_repo.lower():
+                return StackReviewStatusResult(
+                    error=f"Auto-discovery unavailable: working directory is {cwd_full or 'unknown'}, "
+                    f"but target repo is {full_repo}. Pass pr_numbers explicitly.",
+                )
+
         current_pr = await call_sync_fn_in_threadpool(gh.get_current_pr_number, cwd=cwd)
         stack_prs = await discover_stack(current_pr, repo=full_repo, cwd=cwd, ctx=ctx)
         pr_numbers = [p.pr_number for p in stack_prs]
