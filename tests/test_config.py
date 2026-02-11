@@ -95,6 +95,37 @@ class TestConfig:
         assert rc.auto_resolve_stale is True
         assert set(rc.resolve_levels) == set(Severity)
 
+    def test_self_improvement_defaults(self):
+        config = Config()
+        assert config.self_improvement.enabled is False
+        assert config.self_improvement.repo == ""
+
+    def test_self_improvement_configured(self):
+        from codereviewbuddy.config import SelfImprovementConfig
+
+        config = Config(self_improvement=SelfImprovementConfig(enabled=True, repo="owner/repo"))
+        assert config.self_improvement.enabled is True
+        assert config.self_improvement.repo == "owner/repo"
+
+    def test_self_improvement_enabled_without_repo_raises(self):
+        from codereviewbuddy.config import SelfImprovementConfig
+
+        with pytest.raises(ValueError, match="requires a non-empty 'repo' field"):
+            SelfImprovementConfig(enabled=True)
+
+    def test_self_improvement_enabled_with_whitespace_repo_raises(self):
+        """Regression: whitespace-only repo must not bypass validation."""
+        from codereviewbuddy.config import SelfImprovementConfig
+
+        with pytest.raises(ValueError, match="requires a non-empty 'repo' field"):
+            SelfImprovementConfig(enabled=True, repo="  ")
+
+    def test_self_improvement_disabled_without_repo_ok(self):
+        from codereviewbuddy.config import SelfImprovementConfig
+
+        config = SelfImprovementConfig(enabled=False)
+        assert config.repo == ""
+
 
 class TestCanResolve:
     def test_allowed_severity(self):
@@ -165,6 +196,20 @@ auto_resolve_stale = false
         assert config.reviewers["unblocked"].auto_resolve_stale is False
         # coderabbit still gets defaults
         assert config.reviewers["coderabbit"].auto_resolve_stale is False
+
+    def test_load_self_improvement_from_toml(self, tmp_path: Path):
+        (tmp_path / ".git").mkdir()
+        (tmp_path / ".codereviewbuddy.toml").write_text(
+            """\
+[self_improvement]
+enabled = true
+repo = "detailobsessed/codereviewbuddy"
+""",
+            encoding="utf-8",
+        )
+        config = load_config(cwd=tmp_path)
+        assert config.self_improvement.enabled is True
+        assert config.self_improvement.repo == "detailobsessed/codereviewbuddy"
 
     def test_load_walks_up_to_git_root(self, tmp_path: Path):
         (tmp_path / ".git").mkdir()
