@@ -126,6 +126,24 @@ class TestConfig:
         config = SelfImprovementConfig(enabled=False)
         assert config.repo == ""
 
+    def test_diagnostics_defaults(self):
+        from codereviewbuddy.config import DiagnosticsConfig
+
+        config = DiagnosticsConfig()
+        assert config.io_tap is False
+
+    def test_diagnostics_enabled(self):
+        from codereviewbuddy.config import DiagnosticsConfig
+
+        config = DiagnosticsConfig(io_tap=True)
+        assert config.io_tap is True
+
+    def test_diagnostics_from_toml(self, tmp_path: Path):
+        toml_file = tmp_path / ".codereviewbuddy.toml"
+        toml_file.write_text("[diagnostics]\nio_tap = true\n")
+        config = load_config(cwd=tmp_path)
+        assert config.diagnostics.io_tap is True
+
 
 class TestCanResolve:
     def test_allowed_severity(self):
