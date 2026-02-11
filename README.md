@@ -149,6 +149,8 @@ Add to `.cursor/mcp.json` in your project:
 | `reply_to_comment` | Reply to inline threads (`PRRT_`), PR-level reviews (`PRR_`), or bot comments (`IC_`) |
 | `request_rereview` | Trigger re-reviews per reviewer (handles differences automatically) |
 | `create_issue_from_comment` | Create a GitHub issue from a review comment with labels, PR backlink, and quoted text |
+| `review_pr_descriptions` | Analyze PR descriptions across a stack for quality issues (empty body, boilerplate, missing linked issues) |
+| `update_pr_description` | Update a PR's description, with optional require-review gating |
 | `check_for_updates` | Check if a newer version is available on PyPI |
 
 ## Configuration
@@ -156,7 +158,8 @@ Add to `.cursor/mcp.json` in your project:
 codereviewbuddy works **zero-config** with sensible defaults. To customize per-reviewer behavior, create a `.codereviewbuddy.toml` in your project root:
 
 ```bash
-codereviewbuddy init   # generates a self-documenting config file
+uvx codereviewbuddy config --init     # generates a self-documenting config file
+uvx codereviewbuddy config --update   # appends new sections without overwriting existing values
 ```
 
 Or create it manually:
@@ -178,6 +181,10 @@ resolve_levels = ["info", "warning", "flagged", "bug"]
 enabled = true
 auto_resolve_stale = false        # CodeRabbit handles its own resolution
 resolve_levels = []               # Don't resolve any CodeRabbit threads
+
+[pr_descriptions]
+enabled = true                    # Set to false to disable PR description tools
+require_review = false            # Set to true to require user approval before updating
 ```
 
 ### Config options
@@ -187,6 +194,14 @@ resolve_levels = []               # Don't resolve any CodeRabbit threads
 | `enabled` | bool | `true` | Whether to include this reviewer's threads in results |
 | `auto_resolve_stale` | bool | varies | Whether `resolve_stale_comments` touches this reviewer's threads |
 | `resolve_levels` | list | varies | Severity levels that are allowed to be resolved |
+| `rereview_message` | string | `null` | Custom message for `request_rereview` (only for manual-trigger reviewers) |
+
+### PR description options (`[pr_descriptions]`)
+
+| Option | Type | Default | Description |
+| ------ | ---- | ------- | ----------- |
+| `enabled` | bool | `true` | Whether PR description tools are available |
+| `require_review` | bool | `false` | If true, return a preview instead of directly updating — user must approve |
 
 ### Severity levels
 
@@ -218,7 +233,7 @@ The server walks up from the current working directory looking for `.codereviewb
 
 | Reviewer | Auto-reviews on push | Auto-resolves comments | Re-review trigger |
 | -------- | ------------------- | -------------------- | ----------------- |
-| **Unblocked** | No | No | `request_rereview` posts "@unblocked please re-review" |
+| **Unblocked** | No | No | `request_rereview` posts a configurable comment (default: "@unblocked please re-review") |
 | **Devin** | Yes | Yes | Auto on push (no action needed) |
 | **CodeRabbit** | Yes | Yes | Auto on push (no action needed) |
 
@@ -265,7 +280,7 @@ The server is built on [FastMCP v3](https://github.com/jlowin/fastmcp) with a cl
 
 - **`server.py`** — FastMCP server with tool registration, middleware, and instructions
 - **`config.py`** — Per-reviewer configuration (`.codereviewbuddy.toml` loader, severity classifier, resolve policy)
-- **`tools/`** — Tool implementations (`comments.py`, `issues.py`, `rereview.py`, `version.py`)
+- **`tools/`** — Tool implementations (`comments.py`, `descriptions.py`, `issues.py`, `rereview.py`, `version.py`)
 - **`reviewers/`** — Pluggable reviewer adapters with behavior flags (auto-resolve, re-review triggers)
 - **`gh.py`** — Thin wrapper around the `gh` CLI for GraphQL and REST calls
 - **`models.py`** — Pydantic models for typed tool outputs

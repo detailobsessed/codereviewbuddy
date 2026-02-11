@@ -79,13 +79,19 @@ PR's latest commit timestamp. If a reviewer posted before the latest push, their
 is "pending". Only reviewers that have actually commented on the PR are tracked — we
 don't assume which reviewers are installed.
 
+## Responding to review comments
+
+Always reply to bug (🔴) and flagged (🚩) level comments with `reply_to_comment`
+explaining what you fixed, the commit hash, and any regression test added. Do not
+silently push — reviewers need to see that their finding was acknowledged. For info
+(📝) and warning (🟡) comments, a reply is optional but appreciated when you made
+changes based on them.
+
 ## Reviewer behavior differences
 
-- **Unblocked**: Does NOT auto-review on new pushes. You MUST call `request_rereview`
-  (which posts "@unblocked please re-review") after pushing fixes.
-- **Devin**: Auto-triggers a new review on every push. No action needed, but you can
-  still call `request_rereview` if you want to force one.
-- **CodeRabbit**: Auto-triggers on push. Same as Devin — no action needed.
+Some reviewers auto-trigger a new review on every push (e.g. Devin, CodeRabbit) while
+others require a manual trigger via `request_rereview` (e.g. Unblocked). The trigger
+message is configurable per-reviewer via `rereview_message` in `.codereviewbuddy.toml`.
 
 ## Staleness
 
@@ -283,10 +289,10 @@ async def request_rereview(
 ) -> RereviewResult:
     """Trigger a re-review for AI reviewers on a PR.
 
-    Handles per-reviewer differences automatically:
-    - Unblocked: posts "@unblocked please re-review" comment (manual trigger needed)
-    - Devin: auto-triggers on push (no action needed)
-    - CodeRabbit: auto-triggers on push (no action needed)
+    Handles per-reviewer differences automatically. Reviewers that need manual
+    triggers get a configurable comment posted (see ``rereview_message`` in
+    ``.codereviewbuddy.toml``). Reviewers that auto-trigger on push are reported
+    as needing no action.
 
     Args:
         pr_number: PR number. Auto-detected from current branch if omitted.

@@ -40,6 +40,7 @@ _REVIEWER_DEFAULTS: dict[str, dict[str, Any]] = {
         "enabled": True,
         "auto_resolve_stale": True,  # We batch-resolve Unblocked's stale threads
         "resolve_levels": [Severity.INFO, Severity.WARNING, Severity.FLAGGED, Severity.BUG],
+        # rereview_message intentionally omitted — None means "use adapter default"
     },
     "coderabbit": {
         "enabled": True,
@@ -60,6 +61,11 @@ class ReviewerConfig(BaseModel):
     resolve_levels: list[Severity] = Field(
         default_factory=lambda: list(Severity),
         description="Severity levels that are allowed to be resolved",
+    )
+    rereview_message: str | None = Field(
+        default=None,
+        min_length=1,
+        description="Custom message to post when triggering a re-review (only for manual-trigger reviewers)",
     )
 
 
@@ -230,6 +236,7 @@ _TEMPLATE_SECTIONS: list[tuple[str, str]] = [
 # enabled = true
 # auto_resolve_stale = true       # We batch-resolve Unblocked's stale threads
 # resolve_levels = ["info", "warning", "flagged", "bug"]  # All levels allowed
+# rereview_message = "@unblocked please re-review"  # Message posted to trigger re-review
 """,
     ),
     (
