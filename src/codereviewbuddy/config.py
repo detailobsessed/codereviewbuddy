@@ -95,6 +95,14 @@ class SelfImprovementConfig(BaseModel):
         return self
 
 
+class DiagnosticsConfig(BaseModel):
+    """Configuration for diagnostic and debugging features."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    io_tap: bool = Field(default=False, description="Enable stdin/stdout logging for transport debugging (#65)")
+
+
 class Config(BaseModel):
     """Top-level codereviewbuddy configuration."""
 
@@ -111,6 +119,10 @@ class Config(BaseModel):
     self_improvement: SelfImprovementConfig = Field(
         default_factory=SelfImprovementConfig,
         description="Agent self-improvement feedback loop settings",
+    )
+    diagnostics: DiagnosticsConfig = Field(
+        default_factory=DiagnosticsConfig,
+        description="Diagnostic and debugging settings",
     )
 
     @model_validator(mode="after")
@@ -286,18 +298,18 @@ _TEMPLATE_SECTIONS: list[tuple[str, str]] = [
         "[reviewers.devin]",
         """\
 [reviewers.devin]
-# enabled = true                  # Set to false to ignore Devin comments entirely
-# auto_resolve_stale = false      # Devin auto-resolves its own bug threads; we skip them
-# resolve_levels = ["info"]       # Only allow resolving info-level threads from Devin
+enabled = true                    # Set to false to ignore Devin comments entirely
+auto_resolve_stale = false        # Devin auto-resolves its own bug threads; we skip them
+resolve_levels = ["info"]         # Only allow resolving info-level threads from Devin
 """,
     ),
     (
         "[reviewers.unblocked]",
         """\
 [reviewers.unblocked]
-# enabled = true
-# auto_resolve_stale = true       # We batch-resolve Unblocked's stale threads
-# resolve_levels = ["info", "warning", "flagged", "bug"]  # All levels allowed
+enabled = true
+auto_resolve_stale = true         # We batch-resolve Unblocked's stale threads
+resolve_levels = ["info", "warning", "flagged", "bug"]  # All levels allowed
 # rereview_message = "@unblocked please re-review"  # Message posted to trigger re-review
 """,
     ),
@@ -305,24 +317,31 @@ _TEMPLATE_SECTIONS: list[tuple[str, str]] = [
         "[reviewers.coderabbit]",
         """\
 [reviewers.coderabbit]
-# enabled = true
-# auto_resolve_stale = false      # CodeRabbit handles its own resolution
-# resolve_levels = []             # Don't resolve any CodeRabbit threads
+enabled = true
+auto_resolve_stale = false        # CodeRabbit handles its own resolution
+resolve_levels = []               # Don't resolve any CodeRabbit threads
 """,
     ),
     (
         "[pr_descriptions]",
         """\
 [pr_descriptions]
-# enabled = true                  # Set to false to disable PR description review tool
+enabled = true                    # Set to false to disable PR description review tool
 """,
     ),
     (
         "[self_improvement]",
         """\
 [self_improvement]
-# enabled = false                 # Set to true to instruct agents to file issues for server gaps
-# repo = ""                       # Repository to file issues against (e.g. "owner/codereviewbuddy")
+enabled = true                    # Agents file issues when they encounter server gaps
+repo = "detailobsessed/codereviewbuddy"  # Repository to file issues against
+""",
+    ),
+    (
+        "[diagnostics]",
+        """\
+[diagnostics]
+io_tap = true                     # Log stdin/stdout for transport debugging (#65)
 """,
     ),
 ]

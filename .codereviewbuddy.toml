@@ -11,7 +11,7 @@
 [reviewers.devin]
 enabled = true                  # Set to false to ignore Devin comments entirely
 auto_resolve_stale = false      # Devin auto-resolves its own bug threads; we skip them
-resolve_levels = ["info"]       # Only allow resolving info-level threads from Devin
+resolve_levels = ["info", "warning", "flagged"]  # Resolve threads we've addressed; bugs stay for Devin to auto-resolve
 
 [reviewers.unblocked]
 # enabled = true
@@ -23,8 +23,12 @@ resolve_levels = ["info"]       # Only allow resolving info-level threads from D
 # auto_resolve_stale = false      # CodeRabbit handles its own resolution
 # resolve_levels = []             # Don't resolve any CodeRabbit threads
 
-# --- New sections added by 'codereviewbuddy config --update' ---
-
 [pr_descriptions]
 enabled = true                  # Set to false to disable PR description tools entirely
-# DEPRECATED: require_review = false
+
+[self_improvement]
+enabled = true                 # Set to true to instruct agents to file issues for server gaps
+repo = "detailobsessed/codereviewbuddy"                       # Repository to file issues against (e.g. "owner/codereviewbuddy")
+
+[diagnostics]
+io_tap = true                  # Log stdin/stdout for transport debugging (#65)

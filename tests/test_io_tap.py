@@ -15,6 +15,7 @@ if TYPE_CHECKING:
 
 from codereviewbuddy.io_tap import (
     _log_entry,
+    _should_enable_io_tap,
     _TappedBuffer,
     _TappedStream,
     install_io_tap,
@@ -279,9 +280,42 @@ class TestTappedStream:
 # ---------------------------------------------------------------------------
 
 
-class TestInstallIoTap:
-    def test_returns_false_when_env_not_set(self, monkeypatch: pytest.MonkeyPatch):
+class TestShouldEnableIoTap:
+    def test_env_var_1_enables(self, monkeypatch: pytest.MonkeyPatch):
+        monkeypatch.setenv("CODEREVIEWBUDDY_IO_TAP", "1")
+        assert _should_enable_io_tap() is True
+
+    def test_env_var_0_disables(self, monkeypatch: pytest.MonkeyPatch):
+        monkeypatch.setenv("CODEREVIEWBUDDY_IO_TAP", "0")
+        assert _should_enable_io_tap() is False
+
+    def test_env_var_overrides_config(self, monkeypatch: pytest.MonkeyPatch, mocker: MockerFixture):
+        """Env var takes precedence even when config says True."""
+        monkeypatch.setenv("CODEREVIEWBUDDY_IO_TAP", "0")
+        from codereviewbuddy.config import Config, DiagnosticsConfig
+
+        mock_config = Config(diagnostics=DiagnosticsConfig(io_tap=True))
+        mocker.patch("codereviewbuddy.config.load_config", return_value=mock_config)
+        assert _should_enable_io_tap() is False
+
+    def test_config_enables_when_no_env_var(self, monkeypatch: pytest.MonkeyPatch, mocker: MockerFixture):
         monkeypatch.delenv("CODEREVIEWBUDDY_IO_TAP", raising=False)
+        from codereviewbuddy.config import Config, DiagnosticsConfig
+
+        mock_config = Config(diagnostics=DiagnosticsConfig(io_tap=True))
+        mocker.patch("codereviewbuddy.config.load_config", return_value=mock_config)
+        assert _should_enable_io_tap() is True
+
+    def test_defaults_false_when_no_env_and_no_config(self, monkeypatch: pytest.MonkeyPatch, mocker: MockerFixture):
+        monkeypatch.delenv("CODEREVIEWBUDDY_IO_TAP", raising=False)
+        mocker.patch("codereviewbuddy.config.load_config", side_effect=FileNotFoundError)
+        assert _should_enable_io_tap() is False
+
+
+class TestInstallIoTap:
+    def test_returns_false_when_env_not_set(self, monkeypatch: pytest.MonkeyPatch, mocker: MockerFixture):
+        monkeypatch.delenv("CODEREVIEWBUDDY_IO_TAP", raising=False)
+        mocker.patch("codereviewbuddy.config.load_config", side_effect=FileNotFoundError)
         assert install_io_tap() is False
 
     def test_returns_false_when_env_is_zero(self, monkeypatch: pytest.MonkeyPatch):

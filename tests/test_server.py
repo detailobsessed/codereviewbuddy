@@ -39,6 +39,10 @@ class TestInitConfig:
         content = path.read_text(encoding="utf-8")
         assert "[reviewers.devin]" in content
         assert "[pr_descriptions]" in content
+        assert "[self_improvement]" in content
+        assert "[diagnostics]" in content
+        assert "io_tap = true" in content
+        assert 'repo = "detailobsessed/codereviewbuddy"' in content
 
     def test_fails_if_file_exists(self, tmp_path: Path):
         (tmp_path / CONFIG_FILENAME).write_text("existing", encoding="utf-8")
