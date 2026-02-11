@@ -12,7 +12,7 @@ from enum import StrEnum
 from pathlib import Path
 from typing import Any
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 logger = logging.getLogger(__name__)
 
@@ -53,6 +53,8 @@ _REVIEWER_DEFAULTS: dict[str, dict[str, Any]] = {
 class ReviewerConfig(BaseModel):
     """Configuration for a single reviewer."""
 
+    model_config = ConfigDict(extra="ignore")
+
     enabled: bool = Field(default=True, description="Whether this reviewer integration is active")
     auto_resolve_stale: bool = Field(
         default=True,
@@ -72,15 +74,15 @@ class ReviewerConfig(BaseModel):
 class PRDescriptionsConfig(BaseModel):
     """Configuration for PR description management tools."""
 
+    model_config = ConfigDict(extra="ignore")
+
     enabled: bool = Field(default=True, description="Whether PR description tools are available")
-    require_review: bool = Field(
-        default=False,
-        description="If true, return a preview instead of directly updating — user must approve changes",
-    )
 
 
 class Config(BaseModel):
     """Top-level codereviewbuddy configuration."""
+
+    model_config = ConfigDict(extra="ignore")
 
     reviewers: dict[str, ReviewerConfig] = Field(
         default_factory=dict,
@@ -252,8 +254,7 @@ _TEMPLATE_SECTIONS: list[tuple[str, str]] = [
         "[pr_descriptions]",
         """\
 [pr_descriptions]
-# enabled = true                  # Set to false to disable PR description tools entirely
-# require_review = false          # Set to true to require user approval before updating descriptions
+# enabled = true                  # Set to false to disable PR description review tool
 """,
     ),
 ]

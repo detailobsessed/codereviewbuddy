@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from typing import TYPE_CHECKING
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -266,6 +267,7 @@ class TestListReviewComments:
         )
         mocker.patch("codereviewbuddy.tools.comments.gh.get_repo_info", return_value=("owner", "repo"))
         mocker.patch("codereviewbuddy.tools.comments._compute_staleness")
+        mocker.patch("codereviewbuddy.tools.stack._fetch_open_prs", return_value=[])
 
     async def test_returns_all_threads(self):
         summary = await list_review_comments(42)
@@ -290,6 +292,21 @@ class TestListReviewComments:
         mocker.patch("codereviewbuddy.tools.comments._compute_staleness")
         summary = await list_review_comments(42, repo="myorg/myrepo")
         assert len(summary.threads) == 2
+
+    async def test_discover_stack_failure_preserves_threads(self, mocker: MockerFixture):
+        """Regression: discover_stack failure must not discard fetched thread data."""
+        mocker.patch("codereviewbuddy.tools.comments.gh.graphql", return_value=SAMPLE_GRAPHQL_RESPONSE)
+        mocker.patch(
+            "codereviewbuddy.tools.comments.gh.rest",
+            side_effect=[SAMPLE_COMMITS_RESPONSE, [], []],
+        )
+        mocker.patch("codereviewbuddy.tools.comments.gh.get_repo_info", return_value=("owner", "repo"))
+        mocker.patch("codereviewbuddy.tools.comments._compute_staleness")
+        mocker.patch("codereviewbuddy.tools.stack._fetch_open_prs", side_effect=RuntimeError("network error"))
+
+        summary = await list_review_comments(42)
+        assert len(summary.threads) == 2  # threads preserved despite stack failure
+        assert summary.stack == []  # stack gracefully empty
 
     async def test_returns_reviewer_statuses(self):
         summary = await list_review_comments(42)
@@ -334,6 +351,7 @@ class TestNonExistentPR:
         )
         mocker.patch("codereviewbuddy.tools.comments._compute_staleness")
         mocker.patch("codereviewbuddy.tools.comments.gh.get_repo_info", return_value=("owner", "repo"))
+        mocker.patch("codereviewbuddy.tools.stack._fetch_open_prs", return_value=[])
 
         summary = await list_review_comments(42)
         assert summary.threads == []
@@ -391,6 +409,10 @@ def _mark_all_stale(threads, _commits, _owner, _repo, cwd=None):  # noqa: ARG001
 
 
 class TestResolveStaleComments:
+    @pytest.fixture(autouse=True)
+    def _mock_stack(self, mocker: MockerFixture):
+        mocker.patch("codereviewbuddy.tools.stack._fetch_open_prs", return_value=[])
+
     async def test_resolves_stale(self, mocker: MockerFixture):
         stale_thread = SAMPLE_THREAD_NODE.copy()
 
@@ -672,6 +694,7 @@ class TestListIncludesPrReviews:
         mocker.patch("codereviewbuddy.tools.comments.gh.graphql", return_value=SAMPLE_GRAPHQL_RESPONSE)
         mocker.patch("codereviewbuddy.tools.comments._compute_staleness")
         mocker.patch("codereviewbuddy.tools.comments.gh.get_repo_info", return_value=("owner", "repo"))
+        mocker.patch("codereviewbuddy.tools.stack._fetch_open_prs", return_value=[])
         mocker.patch(
             "codereviewbuddy.tools.comments.gh.rest",
             side_effect=[
@@ -740,6 +763,7 @@ class TestThreadsPagination:
         )
         mocker.patch("codereviewbuddy.tools.comments._compute_staleness")
         mocker.patch("codereviewbuddy.tools.comments.gh.get_repo_info", return_value=("owner", "repo"))
+        mocker.patch("codereviewbuddy.tools.stack._fetch_open_prs", return_value=[])
 
         summary = await list_review_comments(42)
         assert len(summary.threads) == 2
@@ -774,6 +798,7 @@ class TestThreadsPagination:
         )
         mocker.patch("codereviewbuddy.tools.comments._compute_staleness")
         mocker.patch("codereviewbuddy.tools.comments.gh.get_repo_info", return_value=("owner", "repo"))
+        mocker.patch("codereviewbuddy.tools.stack._fetch_open_prs", return_value=[])
 
         summary = await list_review_comments(42)
         assert len(summary.threads) == 1
@@ -815,8 +840,6 @@ class TestListStackReviewComments:
         summary_11 = ReviewSummary(threads=[thread_11])
         summary_12 = ReviewSummary()
 
-        from unittest.mock import AsyncMock
-
         mock_list = mocker.patch(
             "codereviewbuddy.tools.comments.list_review_comments",
             new_callable=AsyncMock,
@@ -833,8 +856,6 @@ class TestListStackReviewComments:
 
     async def test_passes_status_filter(self, mocker: MockerFixture):
         """Should forward status filter to each list_review_comments call."""
-        from unittest.mock import AsyncMock
-
         from codereviewbuddy.models import ReviewSummary
 
         mock_list = mocker.patch(
@@ -850,8 +871,6 @@ class TestListStackReviewComments:
 
     async def test_empty_pr_list(self, mocker: MockerFixture):
         """Should return empty dict for empty input."""
-        from unittest.mock import AsyncMock
-
         mocker.patch("codereviewbuddy.tools.comments.list_review_comments", new_callable=AsyncMock)
 
         result = await list_stack_review_comments([], repo="owner/repo")

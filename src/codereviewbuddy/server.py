@@ -15,6 +15,7 @@ from fastmcp.server.dependencies import get_context
 from fastmcp.server.lifespan import lifespan
 from fastmcp.server.middleware.error_handling import ErrorHandlingMiddleware
 from fastmcp.server.middleware.logging import LoggingMiddleware
+from fastmcp.server.middleware.ping import PingMiddleware
 from fastmcp.server.middleware.timing import TimingMiddleware
 
 from codereviewbuddy import gh
@@ -26,11 +27,10 @@ from codereviewbuddy.models import (
     RereviewResult,
     ResolveStaleResult,
     ReviewSummary,
-    UpdateCheckResult,
-    UpdatePRDescriptionResult,
+    StackReviewStatusResult,
 )
 from codereviewbuddy.reviewers import apply_config
-from codereviewbuddy.tools import comments, descriptions, issues, rereview, version
+from codereviewbuddy.tools import comments, descriptions, issues, rereview, stack
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
@@ -62,22 +62,33 @@ mcp = FastMCP(
 AI code review buddy — fetch, resolve, and manage PR review comments
 across Unblocked, Devin, and CodeRabbit with staleness detection.
 
+## Stack discovery
+
+`list_review_comments` automatically discovers the full PR stack by walking the branch
+chain (works with Graphite, Git Town, or manual stacking). The `stack` field in the
+response lists all PRs in order, bottom-to-top. This is cached per session — the first
+call fetches, subsequent calls reuse. Use `list_stack_review_comments` with the
+discovered PR numbers to get full thread details across the stack.
+
 ## Typical workflow after pushing a fix
 
-1. Call `list_review_comments` to see all threads with staleness info.
+1. Call `summarize_review_status` for a quick stack-wide overview (severity counts,
+   no full bodies — saves tokens). It auto-discovers the stack if you omit `pr_numbers`.
+2. Call `list_review_comments` for the specific PR(s) that need attention.
    - Check `reviews_in_progress` — if true, reviewers haven't finished yet.
    - Check `reviewer_statuses` for per-reviewer detail.
-2. For threads on files you changed, call `resolve_stale_comments` to batch-resolve them.
-3. Reply to non-stale threads with `reply_to_comment` if you addressed them differently.
-4. Call `request_rereview` to trigger a fresh review cycle.
+   - Check `stack` for the full list of PRs in the stack.
+3. For threads on files you changed, call `resolve_stale_comments` to batch-resolve them.
+4. Reply to non-stale threads with `reply_to_comment` if you addressed them differently.
+5. Call `request_rereview` to trigger a fresh review cycle.
 
 ## Review status detection
 
-`list_review_comments` automatically detects whether AI reviewers have finished reviewing
-the latest push. It compares each reviewer's most recent comment timestamp against the
-PR's latest commit timestamp. If a reviewer posted before the latest push, their status
-is "pending". Only reviewers that have actually commented on the PR are tracked — we
-don't assume which reviewers are installed.
+`list_review_comments` and `summarize_review_status` automatically detect whether AI
+reviewers have finished reviewing the latest push. They compare each reviewer's most
+recent comment timestamp against the PR's latest commit timestamp. If a reviewer posted
+before the latest push, their status is "pending". Only reviewers that have actually
+commented on the PR are tracked — we don't assume which reviewers are installed.
 
 ## Responding to review comments
 
@@ -132,17 +143,13 @@ fixed in the PR), use `create_issue_from_comment` to create a GitHub issue. Use 
 to classify: type labels (bug, enhancement, documentation) and priority labels (P0-P3).
 Don't file issues for nitpicks or things already being addressed.
 
-## Updates
-
-Call `check_for_updates` periodically to see if a newer version is available on PyPI.
-If an update is found, suggest the user run the upgrade command and restart their
-MCP client.
 """,
 )
 
 mcp.add_middleware(ErrorHandlingMiddleware(include_traceback=True, transform_errors=True))
 mcp.add_middleware(TimingMiddleware())
 mcp.add_middleware(LoggingMiddleware(include_payloads=True, max_payload_length=500))
+mcp.add_middleware(PingMiddleware(interval_ms=30_000))
 mcp.add_middleware(WriteOperationMiddleware())
 
 
@@ -380,68 +387,35 @@ async def review_pr_descriptions(
 
 
 @mcp.tool
-async def update_pr_description(
-    body: str,
-    pr_number: int | None = None,
+async def summarize_review_status(
+    pr_numbers: list[int] | None = None,
     repo: str | None = None,
-) -> UpdatePRDescriptionResult:
-    """Update a PR's description.
+) -> StackReviewStatusResult:
+    """Get a lightweight stack-wide review status overview with severity counts.
 
-    Respects config settings:
-    - If ``pr_descriptions.enabled`` is false, returns an error.
-    - If ``pr_descriptions.require_review`` is true, returns a preview
-      instead of applying the update. Present the preview to the user
-      for approval before calling again.
+    Much fewer tokens than full thread data — use this to quickly scan which PRs
+    need attention before diving into details with ``list_review_comments``.
+
+    When ``pr_numbers`` is omitted, auto-discovers the stack from the current branch
+    using the same branch-chain walking as ``list_review_comments``.
 
     Args:
-        body: New description body (markdown).
-        pr_number: PR number. Auto-detected from current branch if omitted.
+        pr_numbers: PR numbers to summarize. Auto-discovers stack if omitted.
         repo: Repository in "owner/repo" format. Auto-detected if not provided.
 
     Returns:
-        Update result with status and optional preview.
+        Per-PR status with unresolved/resolved counts, severity breakdown
+        (bugs, flagged, warnings, info), staleness, and reviewer progress.
     """
     try:
-        pr_number = _resolve_pr_number(pr_number)
         ctx = get_context()
-        return await descriptions.update_pr_description(pr_number, body, repo=repo, ctx=ctx)
+        return await stack.summarize_review_status(pr_numbers=pr_numbers, repo=repo, ctx=ctx)
     except Exception as exc:
-        logger.exception("update_pr_description failed for PR #%s", pr_number)
-        return UpdatePRDescriptionResult(pr_number=pr_number or 0, error=f"Error: {exc}")
+        logger.exception("summarize_review_status failed")
+        return StackReviewStatusResult(error=f"Error: {exc}")
     except asyncio.CancelledError:
-        logger.warning("update_pr_description cancelled for PR #%s", pr_number)
-        return UpdatePRDescriptionResult(pr_number=pr_number or 0, error="Cancelled")
-
-
-@mcp.tool
-async def check_for_updates() -> UpdateCheckResult:
-    """Check if a newer version of codereviewbuddy is available on PyPI.
-
-    Compares the running server version against the latest published release.
-    If an update is available, returns the upgrade command for the user.
-    Useful for long-running MCP sessions where the server may fall behind.
-
-    Returns:
-        Current version, latest version, whether an update is available, and upgrade command.
-    """
-    try:
-        return await version.check_for_updates()
-    except Exception as exc:
-        logger.exception("check_for_updates failed")
-        return UpdateCheckResult(
-            current_version="unknown",
-            latest_version="unknown",
-            update_available=False,
-            error=f"Error: {exc}",
-        )
-    except asyncio.CancelledError:
-        logger.warning("check_for_updates cancelled")
-        return UpdateCheckResult(
-            current_version="unknown",
-            latest_version="unknown",
-            update_available=False,
-            error="Cancelled",
-        )
+        logger.warning("summarize_review_status cancelled")
+        return StackReviewStatusResult(error="Cancelled")
 
 
 def main() -> None:

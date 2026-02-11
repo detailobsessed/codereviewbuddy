@@ -3,7 +3,10 @@
 from __future__ import annotations
 
 import time
-from unittest.mock import patch
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from pytest_mock import MockerFixture
 
 from codereviewbuddy import cache
 
@@ -36,12 +39,12 @@ class TestGetPut:
         cache.put("k1", {"data": "hello"})
         assert cache.get("k1") == {"data": "hello"}
 
-    def test_expired_entry_returns_sentinel(self):
+    def test_expired_entry_returns_sentinel(self, mocker: MockerFixture):
         cache.put("k1", "value")
-        with patch.object(cache, "_DEFAULT_TTL", 0):
-            # Force expiration by advancing time
-            cache._cache["k1"] = (time.monotonic() - 1, "value")
-            assert cache.get("k1") is cache._SENTINEL
+        mocker.patch.object(cache, "_DEFAULT_TTL", 0)
+        # Force expiration by advancing time
+        cache._cache["k1"] = (time.monotonic() - 1, "value")
+        assert cache.get("k1") is cache._SENTINEL
 
     def test_expired_entry_is_removed(self):
         cache.put("k1", "value")

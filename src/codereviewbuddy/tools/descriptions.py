@@ -9,7 +9,7 @@ from fastmcp.utilities.async_utils import call_sync_fn_in_threadpool
 
 from codereviewbuddy import gh
 from codereviewbuddy.config import get_config
-from codereviewbuddy.models import PRDescriptionInfo, PRDescriptionReviewResult, UpdatePRDescriptionResult
+from codereviewbuddy.models import PRDescriptionInfo, PRDescriptionReviewResult
 
 if TYPE_CHECKING:
     from fastmcp.server.context import Context
@@ -127,58 +127,3 @@ async def review_pr_descriptions(
         await ctx.info(f"Reviewed {total} PR description(s)")
 
     return PRDescriptionReviewResult(descriptions=descriptions)
-
-
-async def update_pr_description(
-    pr_number: int,
-    body: str,
-    repo: str | None = None,
-    ctx: Context | None = None,
-) -> UpdatePRDescriptionResult:
-    """Update a PR's description.
-
-    Respects config settings:
-    - If ``pr_descriptions.enabled`` is false, returns an error.
-    - If ``pr_descriptions.require_review`` is true, returns a preview
-      instead of applying the update. The agent should present the
-      preview to the user for approval.
-
-    Args:
-        pr_number: PR number to update.
-        body: New description body.
-        repo: Repository in "owner/repo" format. Auto-detected if not provided.
-        ctx: FastMCP context for logging.
-
-    Returns:
-        Update result with status and optional preview.
-    """
-    config = get_config()
-    if not config.pr_descriptions.enabled:
-        return UpdatePRDescriptionResult(
-            pr_number=pr_number,
-            error="PR description tools are disabled in config",
-        )
-
-    if config.pr_descriptions.require_review:
-        if ctx:
-            await ctx.info(f"PR #{pr_number}: require_review is on \u2014 returning preview for user approval")
-        return UpdatePRDescriptionResult(
-            pr_number=pr_number,
-            updated=False,
-            requires_review=True,
-            preview=body,
-        )
-
-    # Apply the update
-    args = ["pr", "edit", str(pr_number), "--body", body]
-    if repo:
-        args.extend(["--repo", repo])
-    await call_sync_fn_in_threadpool(gh.run_gh, *args)
-
-    if ctx:
-        await ctx.info(f"Updated description for PR #{pr_number}")
-
-    return UpdatePRDescriptionResult(
-        pr_number=pr_number,
-        updated=True,
-    )

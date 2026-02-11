@@ -142,7 +142,8 @@ Add to `.cursor/mcp.json` in your project:
 
 | Tool | Description |
 | ---- | ----------- |
-| `list_review_comments` | Fetch all review threads, PR-level reviews, and bot comments with reviewer ID, status, and staleness |
+| `summarize_review_status` | Lightweight stack-wide overview with severity counts — auto-discovers stack when `pr_numbers` omitted |
+| `list_review_comments` | Fetch all review threads with reviewer ID, status, staleness, and auto-discovered `stack` field |
 | `list_stack_review_comments` | Fetch comments for multiple PRs in a stack in one call, grouped by PR number |
 | `resolve_comment` | Resolve a single inline thread by GraphQL node ID (`PRRT_...`) |
 | `resolve_stale_comments` | Bulk-resolve threads on files modified since the review, with smart skip for auto-resolving reviewers |
@@ -150,8 +151,6 @@ Add to `.cursor/mcp.json` in your project:
 | `request_rereview` | Trigger re-reviews per reviewer (handles differences automatically) |
 | `create_issue_from_comment` | Create a GitHub issue from a review comment with labels, PR backlink, and quoted text |
 | `review_pr_descriptions` | Analyze PR descriptions across a stack for quality issues (empty body, boilerplate, missing linked issues) |
-| `update_pr_description` | Update a PR's description, with optional require-review gating |
-| `check_for_updates` | Check if a newer version is available on PyPI |
 
 ## Configuration
 
@@ -183,8 +182,7 @@ auto_resolve_stale = false        # CodeRabbit handles its own resolution
 resolve_levels = []               # Don't resolve any CodeRabbit threads
 
 [pr_descriptions]
-enabled = true                    # Set to false to disable PR description tools
-require_review = false            # Set to true to require user approval before updating
+enabled = true                    # Set to false to disable PR description review tool
 ```
 
 ### Config options
@@ -200,8 +198,7 @@ require_review = false            # Set to true to require user approval before 
 
 | Option | Type | Default | Description |
 | ------ | ---- | ------- | ----------- |
-| `enabled` | bool | `true` | Whether PR description tools are available |
-| `require_review` | bool | `false` | If true, return a preview instead of directly updating — user must approve |
+| `enabled` | bool | `true` | Whether `review_pr_descriptions` tool is available |
 
 ### Severity levels
 
@@ -280,7 +277,7 @@ The server is built on [FastMCP v3](https://github.com/jlowin/fastmcp) with a cl
 
 - **`server.py`** — FastMCP server with tool registration, middleware, and instructions
 - **`config.py`** — Per-reviewer configuration (`.codereviewbuddy.toml` loader, severity classifier, resolve policy)
-- **`tools/`** — Tool implementations (`comments.py`, `descriptions.py`, `issues.py`, `rereview.py`, `version.py`)
+- **`tools/`** — Tool implementations (`comments.py`, `stack.py`, `descriptions.py`, `issues.py`, `rereview.py`)
 - **`reviewers/`** — Pluggable reviewer adapters with behavior flags (auto-resolve, re-review triggers)
 - **`gh.py`** — Thin wrapper around the `gh` CLI for GraphQL and REST calls
 - **`models.py`** — Pydantic models for typed tool outputs

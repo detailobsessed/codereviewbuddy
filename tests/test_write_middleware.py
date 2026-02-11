@@ -38,12 +38,11 @@ class TestWriteToolClassification:
             "reply_to_comment",
             "request_rereview",
             "create_issue_from_comment",
-            "update_pr_description",
         }
         assert expected == WRITE_TOOLS
 
     def test_read_tools_not_in_write_set(self):
-        read_tools = {"list_review_comments", "list_stack_review_comments", "check_for_updates"}
+        read_tools = {"list_review_comments", "list_stack_review_comments", "review_pr_descriptions"}
         assert not read_tools & WRITE_TOOLS
 
 
