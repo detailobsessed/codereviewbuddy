@@ -28,6 +28,7 @@ from codereviewbuddy.models import (
     ResolveStaleResult,
     ReviewSummary,
     StackReviewStatusResult,
+    TriageResult,
 )
 from codereviewbuddy.reviewers import apply_config
 from codereviewbuddy.tools import comments, descriptions, issues, rereview, stack
@@ -74,13 +75,14 @@ discovered PR numbers to get full thread details across the stack.
 
 1. Call `summarize_review_status` for a quick stack-wide overview (severity counts,
    no full bodies — saves tokens). It auto-discovers the stack if you omit `pr_numbers`.
-2. Call `list_review_comments` for the specific PR(s) that need attention.
-   - Check `reviews_in_progress` — if true, reviewers haven't finished yet.
-   - Check `reviewer_statuses` for per-reviewer detail.
-   - Check `stack` for the full list of PRs in the stack.
+2. Call `triage_review_comments` with the PR numbers to get only threads needing action.
+   Each item has a pre-classified severity and suggested action (`fix`, `reply`, or
+   `create_issue`). This replaces manual filtering of `list_review_comments` output.
 3. For threads on files you changed, call `resolve_stale_comments` to batch-resolve them.
 4. Reply to non-stale threads with `reply_to_comment` if you addressed them differently.
 5. Call `request_rereview` to trigger a fresh review cycle.
+6. If you need full thread details (all comments, reviewer statuses), fall back to
+   `list_review_comments` for a specific PR.
 
 ## Review status detection
 
@@ -416,6 +418,41 @@ async def summarize_review_status(
     except asyncio.CancelledError:
         logger.warning("summarize_review_status cancelled")
         return StackReviewStatusResult(error="Cancelled")
+
+
+@mcp.tool
+async def triage_review_comments(
+    pr_numbers: list[int],
+    repo: str | None = None,
+    owner_logins: list[str] | None = None,
+) -> TriageResult:
+    """Show only review threads that need agent action — no noise, no full bodies.
+
+    Filters out PR-level reviews, already-replied threads, and resolved threads.
+    Pre-classifies severity and suggests an action for each thread.
+
+    Also flags "noted for followup" replies that forgot to include a GH issue
+    reference — these need a ``create_issue_from_comment`` call.
+
+    Args:
+        pr_numbers: PR numbers to triage (use stack from ``summarize_review_status``).
+        repo: Repository in "owner/repo" format. Auto-detected if not provided.
+        owner_logins: GitHub usernames considered "ours" (agent + human).
+            Defaults to ["ichoosetoaccept"]. Add your own username if needed.
+
+    Returns:
+        TriageResult with actionable items sorted by severity (bugs first),
+        plus counts of items needing fixes, replies, or issue creation.
+    """
+    try:
+        ctx = get_context()
+        return await comments.triage_review_comments(pr_numbers, repo=repo, owner_logins=owner_logins, ctx=ctx)
+    except Exception as exc:
+        logger.exception("triage_review_comments failed")
+        return TriageResult(error=f"Error: {exc}")
+    except asyncio.CancelledError:
+        logger.warning("triage_review_comments cancelled")
+        return TriageResult(error="Cancelled")
 
 
 def main() -> None:

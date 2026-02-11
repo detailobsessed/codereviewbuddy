@@ -140,3 +140,31 @@ class CreateIssueResult(BaseModel):
     issue_url: str = Field(default="", description="URL of the created issue")
     title: str = Field(default="", description="Issue title")
     error: str | None = Field(default=None, description="Error message if the request failed")
+
+
+class TriageItem(BaseModel):
+    """A single review thread that needs agent action."""
+
+    thread_id: str = Field(description="GraphQL node ID (PRRT_...) for replying/resolving")
+    pr_number: int = Field(description="PR number this thread belongs to")
+    file: str | None = Field(default=None, description="File path the comment is on")
+    line: int | None = Field(default=None, description="Line number in the file")
+    reviewer: str = Field(description="Which reviewer posted this (e.g. devin, unblocked)")
+    severity: str = Field(description="Classified severity: bug, flagged, warning, info")
+    title: str = Field(default="", description="Short title extracted from the comment (first bold text)")
+    is_stale: bool = Field(default=False, description="Whether the commented file changed since the review")
+    action: str = Field(
+        description="Suggested action: 'fix' (bug/flagged), 'reply' (info/warning), or 'create_issue' (followup without issue ref)"
+    )
+    snippet: str = Field(default="", description="First 200 chars of the comment body for context")
+
+
+class TriageResult(BaseModel):
+    """Triage result for one or more PRs — only threads needing agent action."""
+
+    items: list[TriageItem] = Field(default_factory=list, description="Threads needing action, ordered by severity (bugs first)")
+    needs_fix: int = Field(default=0, description="Count of threads that need a code fix (bug/flagged)")
+    needs_reply: int = Field(default=0, description="Count of threads that need a reply (info/warning)")
+    needs_issue: int = Field(default=0, description="Count of 'noted for followup' replies missing a GH issue reference")
+    total: int = Field(default=0, description="Total actionable threads")
+    error: str | None = Field(default=None, description="Error message if the request failed")
