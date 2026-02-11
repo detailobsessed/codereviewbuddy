@@ -79,6 +79,22 @@ class PRDescriptionsConfig(BaseModel):
     enabled: bool = Field(default=True, description="Whether PR description tools are available")
 
 
+class SelfImprovementConfig(BaseModel):
+    """Configuration for agent-driven self-improvement feedback loop."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    enabled: bool = Field(default=False, description="Whether agents should file issues for server gaps they encounter")
+    repo: str = Field(default="", description="Repository to file issues against (e.g. 'owner/codereviewbuddy')")
+
+    @model_validator(mode="after")
+    def _validate_repo_when_enabled(self) -> SelfImprovementConfig:
+        if self.enabled and not self.repo.strip():
+            msg = "[self_improvement] enabled=true requires a non-empty 'repo' field"
+            raise ValueError(msg)
+        return self
+
+
 class Config(BaseModel):
     """Top-level codereviewbuddy configuration."""
 
@@ -91,6 +107,10 @@ class Config(BaseModel):
     pr_descriptions: PRDescriptionsConfig = Field(
         default_factory=PRDescriptionsConfig,
         description="PR description management settings",
+    )
+    self_improvement: SelfImprovementConfig = Field(
+        default_factory=SelfImprovementConfig,
+        description="Agent self-improvement feedback loop settings",
     )
 
     @model_validator(mode="after")
@@ -295,6 +315,14 @@ _TEMPLATE_SECTIONS: list[tuple[str, str]] = [
         """\
 [pr_descriptions]
 # enabled = true                  # Set to false to disable PR description review tool
+""",
+    ),
+    (
+        "[self_improvement]",
+        """\
+[self_improvement]
+# enabled = false                 # Set to true to instruct agents to file issues for server gaps
+# repo = ""                       # Repository to file issues against (e.g. "owner/codereviewbuddy")
 """,
     ),
 ]

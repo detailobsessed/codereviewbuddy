@@ -145,6 +145,21 @@ fixed in the PR), use `create_issue_from_comment` to create a GitHub issue. Use 
 to classify: type labels (bug, enhancement, documentation) and priority labels (P0-P3).
 Don't file issues for nitpicks or things already being addressed.
 
+## Self-improvement
+
+If you encounter errors, missing capabilities, or find yourself repeatedly working
+around a limitation of this MCP server, create a GitHub issue describing:
+- What you were trying to do
+- What went wrong or what's missing
+- A proposed solution if you have one
+
+Use `gh issue create` to file the issue against the repo specified in the
+`[self_improvement]` config section. Label it `agent-reported` plus any relevant
+type/priority labels.
+
+This only applies when `[self_improvement]` is enabled in `.codereviewbuddy.toml`
+and a target `repo` is configured. Check the config file before filing.
+
 """,
 )
 
