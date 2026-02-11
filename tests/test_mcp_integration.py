@@ -24,6 +24,7 @@ if TYPE_CHECKING:
 SAMPLE_THREAD_NODE = {
     "id": "PRRT_kwDOtest123",
     "isResolved": False,
+    "isOutdated": False,
     "comments": {
         "nodes": [
             {
@@ -40,6 +41,7 @@ SAMPLE_THREAD_NODE = {
 SAMPLE_RESOLVED_THREAD = {
     "id": "PRRT_kwDOresolved",
     "isResolved": True,
+    "isOutdated": False,
     "comments": {
         "nodes": [
             {
@@ -194,7 +196,6 @@ class TestListReviewCommentsMCP:
             side_effect=[SAMPLE_COMMITS_RESPONSE, [], []],
         )
         mocker.patch("codereviewbuddy.tools.comments.gh.get_repo_info", return_value=("owner", "repo"))
-        mocker.patch("codereviewbuddy.tools.comments._compute_staleness")
 
         result = await client.call_tool("list_review_comments", {"pr_number": 42})
         assert not result.is_error
@@ -208,7 +209,6 @@ class TestListReviewCommentsMCP:
             side_effect=[SAMPLE_COMMITS_RESPONSE, [], []],
         )
         mocker.patch("codereviewbuddy.tools.comments.gh.get_repo_info", return_value=("owner", "repo"))
-        mocker.patch("codereviewbuddy.tools.comments._compute_staleness")
 
         result = await client.call_tool("list_review_comments", {"pr_number": 42, "status": "unresolved"})
         assert not result.is_error
@@ -219,7 +219,7 @@ class TestListReviewCommentsMCP:
             "codereviewbuddy.tools.comments.gh.rest",
             side_effect=[SAMPLE_COMMITS_RESPONSE, [], []],
         )
-        mocker.patch("codereviewbuddy.tools.comments._compute_staleness")
+        mocker.patch("codereviewbuddy.tools.comments.gh.get_repo_info", return_value=("owner", "repo"))
 
         result = await client.call_tool("list_review_comments", {"pr_number": 42, "repo": "myorg/myrepo"})
         assert not result.is_error
@@ -256,13 +256,24 @@ class TestResolveCommentMCP:
 
 class TestResolveStaleCommentsMCP:
     async def test_resolves_stale_through_mcp(self, client: Client, mocker: MockerFixture):
-        def _mark_all_stale(threads, _commits, _owner, _repo, cwd=None):  # noqa: ARG001
-            for t in threads:
-                if t.file:
-                    t.is_stale = True
+        stale_thread = {**SAMPLE_THREAD_NODE, "isOutdated": True}
+        stale_response = {
+            "data": {
+                "repository": {
+                    "pullRequest": {
+                        "title": "Test PR",
+                        "url": "https://github.com/owner/repo/pull/42",
+                        "reviewThreads": {
+                            "pageInfo": {"hasNextPage": False, "endCursor": None},
+                            "nodes": [stale_thread, SAMPLE_RESOLVED_THREAD],
+                        },
+                    }
+                }
+            },
+        }
 
         graphql_responses = [
-            SAMPLE_GRAPHQL_RESPONSE,
+            stale_response,
             {"data": {"t0": {"thread": {"id": "PRRT_kwDOtest123", "isResolved": True}}}},
         ]
         mocker.patch("codereviewbuddy.tools.comments.gh.graphql", side_effect=graphql_responses)
@@ -271,7 +282,6 @@ class TestResolveStaleCommentsMCP:
             side_effect=[SAMPLE_COMMITS_RESPONSE, [], []],
         )
         mocker.patch("codereviewbuddy.tools.comments.gh.get_repo_info", return_value=("owner", "repo"))
-        mocker.patch("codereviewbuddy.tools.comments._compute_staleness", side_effect=_mark_all_stale)
 
         result = await client.call_tool("resolve_stale_comments", {"pr_number": 42})
         assert not result.is_error
@@ -298,7 +308,6 @@ class TestListStackReviewCommentsMCP:
             side_effect=[SAMPLE_COMMITS_RESPONSE, [], []] * 2,
         )
         mocker.patch("codereviewbuddy.tools.comments.gh.get_repo_info", return_value=("owner", "repo"))
-        mocker.patch("codereviewbuddy.tools.comments._compute_staleness")
 
         result = await client.call_tool("list_stack_review_comments", {"pr_numbers": [42, 43]})
         assert not result.is_error

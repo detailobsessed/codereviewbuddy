@@ -176,6 +176,7 @@ query($owner: String!, $repo: String!, $pr: Int!, $cursor: String) {
         pageInfo { hasNextPage endCursor }
         nodes {
           isResolved
+          isOutdated
           comments(first: 1) {
             nodes {
               author { login }
@@ -269,12 +270,22 @@ def _fetch_pr_summary(
             else:
                 info_count += 1
 
+    # Count stale threads using native isOutdated from GraphQL
+    stale = 0
+    for node in raw_threads:
+        if not node.get("isResolved") and node.get("isOutdated"):
+            comments = node.get("comments", {}).get("nodes", [])
+            if comments:
+                author = (comments[0].get("author") or {}).get("login", "unknown")
+                reviewer = identify_reviewer(author)
+                if config.get_reviewer(reviewer).enabled:
+                    stale += 1
+
     # Reviewer status detection
     from codereviewbuddy.tools.comments import _build_reviewer_statuses, _latest_push_time_from_commits
 
     last_push = _latest_push_time_from_commits(commits or [])
 
-    # Build minimal reviewer threads for status detection
     from codereviewbuddy.models import CommentStatus as CS
     from codereviewbuddy.models import ReviewComment, ReviewThread
 
@@ -304,12 +315,6 @@ def _fetch_pr_summary(
                 ],
             )
         )
-
-    # Compute staleness on the mini threads
-    from codereviewbuddy.tools.comments import _compute_staleness
-
-    _compute_staleness(mini_threads, commits or [], owner, repo, cwd=cwd)
-    stale = sum(1 for t in mini_threads if t.is_stale and t.status == CS.UNRESOLVED)
 
     reviewer_statuses = _build_reviewer_statuses(mini_threads, last_push)
     reviews_in_progress = any(s.status == "pending" for s in reviewer_statuses)

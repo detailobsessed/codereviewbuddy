@@ -137,6 +137,7 @@ SAMPLE_SUMMARY_GRAPHQL_RESPONSE = {
                     "nodes": [
                         {
                             "isResolved": False,
+                            "isOutdated": True,
                             "comments": {
                                 "nodes": [
                                     {
@@ -150,6 +151,7 @@ SAMPLE_SUMMARY_GRAPHQL_RESPONSE = {
                         },
                         {
                             "isResolved": False,
+                            "isOutdated": True,
                             "comments": {
                                 "nodes": [
                                     {
@@ -163,6 +165,7 @@ SAMPLE_SUMMARY_GRAPHQL_RESPONSE = {
                         },
                         {
                             "isResolved": True,
+                            "isOutdated": True,
                             "comments": {
                                 "nodes": [
                                     {
@@ -202,7 +205,6 @@ class TestClassifySeverity:
 class TestFetchPrSummary:
     def test_counts_severity(self, mocker: MockerFixture):
         mocker.patch("codereviewbuddy.tools.stack.gh.graphql", return_value=SAMPLE_SUMMARY_GRAPHQL_RESPONSE)
-        mocker.patch("codereviewbuddy.tools.comments._compute_staleness")
 
         summary = _fetch_pr_summary("o", "r", 42, commits=[])
         assert summary.pr_number == 42
@@ -216,7 +218,6 @@ class TestFetchPrSummary:
         """Regression: createdAt must be in the GraphQL query for status detection."""
 
         mocker.patch("codereviewbuddy.tools.stack.gh.graphql", return_value=SAMPLE_SUMMARY_GRAPHQL_RESPONSE)
-        mocker.patch("codereviewbuddy.tools.comments._compute_staleness")
         # Push happened AFTER the review comments (10:00) → reviews_in_progress=True
         commits = [{"sha": "abc", "commit": {"committer": {"date": "2026-02-10T12:00:00Z"}}}]
 
@@ -229,7 +230,6 @@ class TestFetchPrSummary:
         set_config(Config(reviewers={"devin": ReviewerConfig(enabled=False)}))
         try:
             mocker.patch("codereviewbuddy.tools.stack.gh.graphql", return_value=SAMPLE_SUMMARY_GRAPHQL_RESPONSE)
-            mocker.patch("codereviewbuddy.tools.comments._compute_staleness")
 
             summary = _fetch_pr_summary("o", "r", 42, commits=[])
             assert summary.unresolved == 0
@@ -239,37 +239,17 @@ class TestFetchPrSummary:
 
     def test_stale_count_excludes_resolved_threads(self, mocker: MockerFixture):
         """Regression (#94): stale count must only include unresolved threads."""
-
-        def mark_all_stale(threads, _commits, _owner, _repo, **_kw):
-            for t in threads:
-                t.is_stale = True
-
-        mocker.patch("codereviewbuddy.tools.comments._compute_staleness", side_effect=mark_all_stale)
         mocker.patch("codereviewbuddy.tools.stack.gh.graphql", return_value=SAMPLE_SUMMARY_GRAPHQL_RESPONSE)
 
         summary = _fetch_pr_summary("o", "r", 42, commits=[])
-        # Sample data: 2 unresolved + 1 resolved. All marked stale.
-        # Only the 2 unresolved should count.
+        # Sample data: all 3 threads have isOutdated=True, but only 2 are unresolved.
         assert summary.stale == 2
-
-    def test_each_thread_gets_own_file_path(self, mocker: MockerFixture):
-        """Regression: mini_threads must read file path per-node, not reuse a leaked variable."""
-        staleness_mock = mocker.patch("codereviewbuddy.tools.comments._compute_staleness")
-        mocker.patch("codereviewbuddy.tools.stack.gh.graphql", return_value=SAMPLE_SUMMARY_GRAPHQL_RESPONSE)
-
-        _fetch_pr_summary("o", "r", 42, commits=[])
-
-        # _compute_staleness is called with mini_threads — verify file paths are per-thread
-        mini_threads = staleness_mock.call_args[0][0]
-        files = [t.file for t in mini_threads]
-        assert files == ["a.py", "b.py", "c.py"]
 
 
 class TestSummarizeReviewStatus:
     async def test_with_explicit_pr_numbers(self, mocker: MockerFixture):
         mocker.patch("codereviewbuddy.tools.stack.gh.graphql", return_value=SAMPLE_SUMMARY_GRAPHQL_RESPONSE)
         mocker.patch("codereviewbuddy.tools.stack.gh.get_repo_info", return_value=("o", "r"))
-        mocker.patch("codereviewbuddy.tools.comments._compute_staleness")
         mocker.patch("codereviewbuddy.tools.comments._get_pr_commits", return_value=[])
 
         result = await summarize_review_status(pr_numbers=[42])
@@ -283,7 +263,6 @@ class TestSummarizeReviewStatus:
         mocker.patch("codereviewbuddy.tools.stack.gh.get_repo_info", return_value=("o", "r"))
         mocker.patch("codereviewbuddy.tools.stack.gh.get_current_pr_number", return_value=74)
         mocker.patch("codereviewbuddy.tools.stack._fetch_open_prs", return_value=SAMPLE_PRS)
-        mocker.patch("codereviewbuddy.tools.comments._compute_staleness")
         mocker.patch("codereviewbuddy.tools.comments._get_pr_commits", return_value=[])
 
         result = await summarize_review_status(repo="o/r")
