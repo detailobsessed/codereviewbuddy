@@ -202,9 +202,6 @@ verify-scaffold = "bash scripts/verify-scaffold.sh"
 check-template = "bash scripts/check-template-update.sh"
 update-template = "copier update --trust . --skip-answered"
 
-# Git utilities
-tags = "sh -c 'git fetch --tags && git tag --sort=-version:refname'"
-
 # GitHub utilities
 # actions-up: https://github.com/azat-io/actions-up
 actionsup = "actions-up"
@@ -213,18 +210,21 @@ runs = "gh run list --limit 10"
 checks = "gh pr checks --watch"
 watch = "gh run watch"
 
-# Testing — conditionally set PYTHON_GIL=0 only on freethreaded builds (3.14t)
+# Table-style tasks below (inline tasks must come before these due to TOML scoping)
+
+# Git utilities
+[tool.poe.tasks.tags]
+shell = "git fetch --tags && git tag --sort=-version:refname"
+
+# Testing
 [tool.poe.tasks.test]
-shell = "python -c 'import sys; exit(0 if \"t\" in sys.abiflags else 1)' 2>/dev/null && export PYTHON_GIL=0; pytest -m 'not slow'"
-interpreter = "bash"
+cmd = "pytest -m 'not slow'"
 
 [tool.poe.tasks.test-all]
-shell = "python -c 'import sys; exit(0 if \"t\" in sys.abiflags else 1)' 2>/dev/null && export PYTHON_GIL=0; pytest"
-interpreter = "bash"
+cmd = "pytest"
 
 [tool.poe.tasks.test-cov]
-shell = "python -c 'import sys; exit(0 if \"t\" in sys.abiflags else 1)' 2>/dev/null && export PYTHON_GIL=0; pytest --cov=src --cov-report=term-missing --cov-report=html"
-interpreter = "bash"
+cmd = "pytest --cov=src --cov-report=term-missing --cov-report=html"
 
 [tool.semantic_release]
 version_toml = ["pyproject.toml:project.version"]
