@@ -116,6 +116,7 @@ class TestToolRegistration:
         "create_issue_from_comment",
         "review_pr_descriptions",
         "summarize_review_status",
+        "triage_review_comments",
     })
 
     async def test_all_tools_registered(self, client: Client):
@@ -125,7 +126,7 @@ class TestToolRegistration:
 
     async def test_tool_count(self, client: Client):
         tools = await client.list_tools()
-        assert len(tools) == 9
+        assert len(tools) == 10
 
     async def test_list_review_comments_schema(self, client: Client):
         tools = await client.list_tools()

@@ -4,13 +4,23 @@ from __future__ import annotations
 
 import logging
 import operator
+import re
 from typing import TYPE_CHECKING
 
 from fastmcp.utilities.async_utils import call_sync_fn_in_threadpool
 
 from codereviewbuddy import gh
 from codereviewbuddy.config import Severity, get_config
-from codereviewbuddy.models import CommentStatus, ResolveStaleResult, ReviewComment, ReviewerStatus, ReviewSummary, ReviewThread
+from codereviewbuddy.models import (
+    CommentStatus,
+    ResolveStaleResult,
+    ReviewComment,
+    ReviewerStatus,
+    ReviewSummary,
+    ReviewThread,
+    TriageItem,
+    TriageResult,
+)
 from codereviewbuddy.reviewers import get_reviewer, identify_reviewer
 from codereviewbuddy.tools.stack import discover_stack
 
@@ -811,3 +821,148 @@ def _reply_to_pr_comment(
         cwd=cwd,
     )
     return f"Replied to {kind} on PR #{pr_number}"
+
+
+# ---------------------------------------------------------------------------
+# Triage — actionable threads only (#96)
+# ---------------------------------------------------------------------------
+
+_BOLD_TITLE_RE = re.compile(r"\*\*(?:Bug|Info|Warning|Flagged)?:?\s*(.+?)\*\*", re.IGNORECASE)
+_ISSUE_REF_RE = re.compile(r"#\d+")
+_FOLLOWUP_KEYWORDS = re.compile(r"noted for followup|tracked for later|will address later|followup", re.IGNORECASE)
+
+_SEVERITY_ORDER = {"bug": 0, "flagged": 1, "warning": 2, "info": 3}
+
+
+def _extract_title(body: str) -> str:
+    """Extract a short title from the first bold text in a comment."""
+    match = _BOLD_TITLE_RE.search(body)
+    return match.group(1).strip() if match else ""
+
+
+def _has_owner_reply(thread: ReviewThread, owner_logins: frozenset[str]) -> bool:
+    """Check if any comment in the thread is from the repo owner / agent."""
+    return any(c.author in owner_logins for c in thread.comments)
+
+
+def _has_followup_without_issue(thread: ReviewThread, owner_logins: frozenset[str]) -> bool:
+    """Check if the owner replied with a 'noted for followup' but no issue reference anywhere in the thread."""
+    owner_comments = [c for c in thread.comments if c.author in owner_logins]
+    has_followup = any(_FOLLOWUP_KEYWORDS.search(c.body) for c in owner_comments)
+    if not has_followup:
+        return False
+    has_issue_ref = any(_ISSUE_REF_RE.search(c.body) for c in owner_comments)
+    return not has_issue_ref
+
+
+def _classify_action(severity: str) -> str:
+    """Map severity to suggested action."""
+    if severity in ("bug", "flagged"):
+        return "fix"
+    return "reply"
+
+
+async def triage_review_comments(
+    pr_numbers: list[int],
+    repo: str | None = None,
+    owner_logins: list[str] | None = None,
+    cwd: str | None = None,
+    ctx: Context | None = None,
+) -> TriageResult:
+    """Return only threads that need agent action — no noise, no full bodies.
+
+    Filters:
+    - Unresolved inline threads only (excludes PR-level reviews).
+    - Excludes threads that already have an owner reply.
+    - Pre-classifies severity using reviewer adapters.
+    - Flags 'noted for followup' replies that don't reference a GH issue.
+
+    Args:
+        pr_numbers: PR numbers to triage.
+        repo: Repository in "owner/repo" format. Auto-detected if not provided.
+        owner_logins: GitHub usernames considered "ours" (agent + human).
+            Defaults to ``["ichoosetoaccept"]`` if not provided.
+        cwd: Working directory for git operations.
+        ctx: FastMCP context for progress reporting.
+
+    Returns:
+        TriageResult with only actionable items, sorted by severity.
+    """
+    from codereviewbuddy.tools.stack import _classify_severity
+
+    owners = frozenset(owner_logins or ["ichoosetoaccept"])
+    items: list[TriageItem] = []
+    issue_items: list[TriageItem] = []
+
+    total = len(pr_numbers)
+    for i, pr_number in enumerate(pr_numbers):
+        if ctx:
+            await ctx.report_progress(i, total)
+
+        summary = await list_review_comments(pr_number, repo=repo, status="unresolved", cwd=cwd, ctx=ctx)
+
+        for thread in summary.threads:
+            # Skip PR-level reviews — they're summary wrappers, not actionable
+            if thread.is_pr_review:
+                continue
+
+            # Check for "noted for followup" without issue ref (even if owner already replied)
+            if _has_followup_without_issue(thread, owners):
+                first_body = thread.comments[0].body if thread.comments else ""
+                severity = _classify_severity(thread.reviewer, first_body).value
+                issue_items.append(
+                    TriageItem(
+                        thread_id=thread.thread_id,
+                        pr_number=thread.pr_number,
+                        file=thread.file,
+                        line=thread.line,
+                        reviewer=thread.reviewer,
+                        severity=severity,
+                        title=_extract_title(first_body),
+                        is_stale=thread.is_stale,
+                        action="create_issue",
+                        snippet=first_body[:200],
+                    )
+                )
+                continue
+
+            # Skip threads that already have an owner reply
+            if _has_owner_reply(thread, owners):
+                continue
+
+            first_body = thread.comments[0].body if thread.comments else ""
+            severity = _classify_severity(thread.reviewer, first_body).value
+            action = _classify_action(severity)
+
+            items.append(
+                TriageItem(
+                    thread_id=thread.thread_id,
+                    pr_number=thread.pr_number,
+                    file=thread.file,
+                    line=thread.line,
+                    reviewer=thread.reviewer,
+                    severity=severity,
+                    title=_extract_title(first_body),
+                    is_stale=thread.is_stale,
+                    action=action,
+                    snippet=first_body[:200],
+                )
+            )
+
+    if ctx:
+        await ctx.report_progress(total, total)
+
+    # Sort all items by severity (bugs first)
+    all_items = items + issue_items
+    all_items.sort(key=lambda x: _SEVERITY_ORDER.get(x.severity, 99))
+    needs_fix = sum(1 for item in all_items if item.action == "fix")
+    needs_reply = sum(1 for item in all_items if item.action == "reply")
+    needs_issue = len(issue_items)
+
+    return TriageResult(
+        items=all_items,
+        needs_fix=needs_fix,
+        needs_reply=needs_reply,
+        needs_issue=needs_issue,
+        total=len(all_items),
+    )
