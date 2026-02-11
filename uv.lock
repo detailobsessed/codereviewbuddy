@@ -209,6 +209,7 @@ version = "0.11.0"
 source = { editable = "." }
 dependencies = [
     { name = "fastmcp" },
+    { name = "tomlkit" },
 ]
 
 [package.dev-dependencies]
@@ -244,7 +245,10 @@ maintain = [
 ]
 
 [package.metadata]
-requires-dist = [{ name = "fastmcp", specifier = ">=3.0.0b2" }]
+requires-dist = [
+    { name = "fastmcp", specifier = ">=3.0.0b2" },
+    { name = "tomlkit", specifier = ">=0.13" },
+]
 
 [package.metadata.requires-dev]
 ci = [
