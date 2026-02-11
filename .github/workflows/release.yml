@@ -31,11 +31,10 @@ jobs:
       contents: read
       id-token: write
     steps:
-    - name: Checkout
+    - name: Checkout release tag
       uses: actions/checkout@v6
       with:
-        ref: main
-        fetch-tags: true
+        ref: ${{ needs.release.outputs.version }}
     - name: Setup uv
       uses: astral-sh/setup-uv@v7
       with:
