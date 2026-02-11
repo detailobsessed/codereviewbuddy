@@ -12,10 +12,10 @@ if TYPE_CHECKING:
 from codereviewbuddy.gh import GhError
 from codereviewbuddy.tools.comments import (
     _build_reviewer_statuses,
-    _get_changed_files,
-    _get_latest_push_time,
+    _compute_staleness,
     _get_pr_issue_comments,
     _get_pr_reviews,
+    _latest_push_time_from_commits,
     _parse_threads,
     list_review_comments,
     list_stack_review_comments,
@@ -75,22 +75,6 @@ SAMPLE_GRAPHQL_RESPONSE = {
     },
 }
 
-SAMPLE_DIFF_RESPONSE = {
-    "data": {
-        "repository": {
-            "pullRequest": {
-                "files": {
-                    "pageInfo": {"hasNextPage": False, "endCursor": None},
-                    "nodes": [
-                        {"path": "src/codereviewbuddy/gh.py", "additions": 5, "deletions": 2, "changeType": "MODIFIED"},
-                        {"path": "README.md", "additions": 1, "deletions": 0, "changeType": "MODIFIED"},
-                    ],
-                }
-            }
-        }
-    },
-}
-
 
 # ---------------------------------------------------------------------------
 # Tests
@@ -111,14 +95,9 @@ class TestParseThreads:
         assert len(t.comments) == 1
         assert t.comments[0].author == "unblocked[bot]"
 
-    def test_staleness_detection(self):
-        changed = {"src/codereviewbuddy/gh.py"}
-        threads = _parse_threads([SAMPLE_THREAD_NODE], pr_number=42, changed_files=changed)
-        assert threads[0].is_stale is True
-
-    def test_not_stale_when_file_unchanged(self):
-        changed = {"README.md"}
-        threads = _parse_threads([SAMPLE_THREAD_NODE], pr_number=42, changed_files=changed)
+    def test_always_not_stale_after_parse(self):
+        """_parse_threads no longer computes staleness — always False."""
+        threads = _parse_threads([SAMPLE_THREAD_NODE], pr_number=42)
         assert threads[0].is_stale is False
 
     def test_empty_comments_skipped(self):
@@ -153,11 +132,112 @@ class TestParseThreads:
         assert threads[0].comments[0].author == "unknown"
 
 
-class TestGetChangedFiles:
-    def test_extracts_paths(self, mocker: MockerFixture):
-        mocker.patch("codereviewbuddy.tools.comments.gh.graphql", return_value=SAMPLE_DIFF_RESPONSE)
-        files = _get_changed_files("owner", "repo", 42)
-        assert files == {"src/codereviewbuddy/gh.py", "README.md"}
+class TestComputeStaleness:
+    """Tests for _compute_staleness — per-thread staleness via compare API."""
+
+    def test_stale_when_file_changed_after_comment(self, mocker: MockerFixture):
+        """Thread on a file modified by a commit after the comment → stale."""
+        threads = _parse_threads([SAMPLE_THREAD_NODE], pr_number=42)
+        commits = [
+            {"sha": "aaa", "commit": {"committer": {"date": "2026-02-06T09:00:00Z"}}},
+            {"sha": "bbb", "commit": {"committer": {"date": "2026-02-06T12:00:00Z"}}},
+        ]
+        # Comment at 10:00, commit aaa at 09:00, commit bbb at 12:00
+        # Review point = aaa, compare aaa...bbb returns gh.py → stale
+        mocker.patch(
+            "codereviewbuddy.tools.comments.gh.rest",
+            return_value={"files": [{"filename": "src/codereviewbuddy/gh.py"}]},
+        )
+        _compute_staleness(threads, commits, "owner", "repo")
+        assert threads[0].is_stale is True
+
+    def test_not_stale_when_file_unchanged_after_comment(self, mocker: MockerFixture):
+        """Thread on a file NOT modified after the comment → not stale."""
+        threads = _parse_threads([SAMPLE_THREAD_NODE], pr_number=42)
+        commits = [
+            {"sha": "aaa", "commit": {"committer": {"date": "2026-02-06T09:00:00Z"}}},
+            {"sha": "bbb", "commit": {"committer": {"date": "2026-02-06T12:00:00Z"}}},
+        ]
+        # Compare returns only README.md, not gh.py
+        mocker.patch(
+            "codereviewbuddy.tools.comments.gh.rest",
+            return_value={"files": [{"filename": "README.md"}]},
+        )
+        _compute_staleness(threads, commits, "owner", "repo")
+        assert threads[0].is_stale is False
+
+    def test_not_stale_when_no_commits_after_comment(self):
+        """All commits before the comment → not stale (no compare call needed)."""
+        threads = _parse_threads([SAMPLE_THREAD_NODE], pr_number=42)
+        commits = [
+            {"sha": "aaa", "commit": {"committer": {"date": "2026-02-06T09:00:00Z"}}},
+        ]
+        # Comment at 10:00, only commit at 09:00 → review_point == head → not stale
+        _compute_staleness(threads, commits, "owner", "repo")
+        assert threads[0].is_stale is False
+
+    def test_not_stale_with_empty_commits(self):
+        threads = _parse_threads([SAMPLE_THREAD_NODE], pr_number=42)
+        _compute_staleness(threads, [], "owner", "repo")
+        assert threads[0].is_stale is False
+
+    def test_head_sha_uses_api_order_not_timestamp(self, mocker: MockerFixture):
+        """Regression: head_sha must be commits[-1] (API topological order),
+        not the commit with the latest timestamp. The compare API target must
+        use the real HEAD, not the timestamp-sorted last entry."""
+        threads = _parse_threads([SAMPLE_THREAD_NODE], pr_number=42)
+        # API returns [aaa, bbb] — bbb is the actual HEAD (topological order).
+        # But aaa has a LATER timestamp (e.g. rebased with old date on bbb).
+        commits = [
+            {"sha": "aaa", "commit": {"committer": {"date": "2026-02-06T14:00:00Z"}}},
+            {"sha": "bbb", "commit": {"committer": {"date": "2026-02-06T08:00:00Z"}}},
+        ]
+        # Comment at 10:00. Timeline sorted = [(08:00,bbb), (14:00,aaa)].
+        # review_point = bbb (08:00 <= 10:00), but 14:00 > 10:00 breaks.
+        # Timeline[-1] = aaa, so review_point(bbb) != timeline[-1](aaa) → compare.
+        # Compare must target head_sha=bbb (topological), not aaa.
+        mock_rest = mocker.patch(
+            "codereviewbuddy.tools.comments.gh.rest",
+            return_value={"files": [{"filename": "src/codereviewbuddy/gh.py"}]},
+        )
+        _compute_staleness(threads, commits, "owner", "repo")
+        # Should compare bbb...bbb (review_point...head), both are bbb
+        mock_rest.assert_called_once()
+        call_url = mock_rest.call_args.args[0]
+        assert "bbb...bbb" in call_url
+
+    def test_not_stale_when_comment_after_all_timestamps(self):
+        """Regression: when comment is after ALL commits by timestamp,
+        review_point == timeline[-1], so no compare call → not stale.
+        Even if head_sha (topological) differs from timeline[-1]."""
+        threads = _parse_threads([SAMPLE_THREAD_NODE], pr_number=42)
+        # API order: [aaa, bbb] — bbb is HEAD. But aaa has later timestamp.
+        commits = [
+            {"sha": "aaa", "commit": {"committer": {"date": "2026-02-06T14:00:00Z"}}},
+            {"sha": "bbb", "commit": {"committer": {"date": "2026-02-06T08:00:00Z"}}},
+        ]
+        # Comment at 15:00 — AFTER both timestamps (08:00, 14:00).
+        # review_point walks: 08:00<=15:00→bbb, 14:00<=15:00→aaa. Result: aaa.
+        # timeline[-1] = (14:00, aaa). review_point(aaa) == timeline[-1](aaa) → skip.
+        # Bug: old code checked review_point(aaa) == head_sha(bbb) → NOT equal →
+        # would falsely call compare and mark stale.
+        threads[0].comments[0].created_at = threads[0].comments[0].created_at.replace(hour=15, minute=0, second=0)
+        _compute_staleness(threads, commits, "owner", "repo")
+        assert threads[0].is_stale is False
+
+    def test_caches_compare_calls(self, mocker: MockerFixture):
+        """Multiple threads with the same review point should share one compare call."""
+        threads = _parse_threads([SAMPLE_THREAD_NODE, SAMPLE_THREAD_NODE], pr_number=42)
+        commits = [
+            {"sha": "aaa", "commit": {"committer": {"date": "2026-02-06T09:00:00Z"}}},
+            {"sha": "bbb", "commit": {"committer": {"date": "2026-02-06T12:00:00Z"}}},
+        ]
+        mock_rest = mocker.patch(
+            "codereviewbuddy.tools.comments.gh.rest",
+            return_value={"files": [{"filename": "src/codereviewbuddy/gh.py"}]},
+        )
+        _compute_staleness(threads, commits, "owner", "repo")
+        assert mock_rest.call_count == 1  # Only one compare call, not two
 
 
 SAMPLE_COMMITS_RESPONSE = [
@@ -179,13 +259,13 @@ class TestListReviewComments:
         mocker.patch(
             "codereviewbuddy.tools.comments.gh.rest",
             side_effect=[
+                SAMPLE_COMMITS_RESPONSE,  # _get_pr_commits
                 [],  # _get_pr_reviews
                 [],  # _get_pr_issue_comments
-                SAMPLE_COMMITS_RESPONSE,  # _get_latest_push_time
             ],
         )
         mocker.patch("codereviewbuddy.tools.comments.gh.get_repo_info", return_value=("owner", "repo"))
-        mocker.patch("codereviewbuddy.tools.comments._get_changed_files", return_value=set())
+        mocker.patch("codereviewbuddy.tools.comments._compute_staleness")
 
     async def test_returns_all_threads(self):
         summary = await list_review_comments(42)
@@ -205,9 +285,9 @@ class TestListReviewComments:
         mocker.patch("codereviewbuddy.tools.comments.gh.graphql", return_value=SAMPLE_GRAPHQL_RESPONSE)
         mocker.patch(
             "codereviewbuddy.tools.comments.gh.rest",
-            side_effect=[[], [], SAMPLE_COMMITS_RESPONSE],
+            side_effect=[SAMPLE_COMMITS_RESPONSE, [], []],
         )
-        mocker.patch("codereviewbuddy.tools.comments._get_changed_files", return_value=set())
+        mocker.patch("codereviewbuddy.tools.comments._compute_staleness")
         summary = await list_review_comments(42, repo="myorg/myrepo")
         assert len(summary.threads) == 2
 
@@ -252,20 +332,11 @@ class TestNonExistentPR:
             "codereviewbuddy.tools.comments.gh.rest",
             side_effect=[[], [], []],
         )
+        mocker.patch("codereviewbuddy.tools.comments._compute_staleness")
         mocker.patch("codereviewbuddy.tools.comments.gh.get_repo_info", return_value=("owner", "repo"))
 
         summary = await list_review_comments(42)
         assert summary.threads == []
-
-    def test_get_changed_files_returns_empty_for_null_pr(self, mocker: MockerFixture):
-        """Regression: pullRequest=null must not crash with AttributeError."""
-        null_pr_response = {
-            "data": {"repository": {"pullRequest": None}},
-        }
-        mocker.patch("codereviewbuddy.tools.comments.gh.graphql", return_value=null_pr_response)
-
-        result = _get_changed_files("owner", "repo", 99999)
-        assert result == set()
 
 
 class TestResolveComment:
@@ -312,13 +383,19 @@ class TestResolveComment:
         assert "Resolved" in result
 
 
+def _mark_all_stale(threads, _commits, _owner, _repo, cwd=None):  # noqa: ARG001
+    """Test helper: mark all inline threads as stale."""
+    for t in threads:
+        if t.file:
+            t.is_stale = True
+
+
 class TestResolveStaleComments:
     async def test_resolves_stale(self, mocker: MockerFixture):
         stale_thread = SAMPLE_THREAD_NODE.copy()
 
         graphql_responses = [
             SAMPLE_GRAPHQL_RESPONSE,  # list_review_comments → threads query
-            SAMPLE_DIFF_RESPONSE,  # list_review_comments → changed files
             {"data": {"t0": {"thread": {"id": stale_thread["id"], "isResolved": True}}}},  # batch resolve
         ]
 
@@ -328,9 +405,10 @@ class TestResolveStaleComments:
         )
         mocker.patch(
             "codereviewbuddy.tools.comments.gh.rest",
-            side_effect=[[], [], SAMPLE_COMMITS_RESPONSE],
+            side_effect=[SAMPLE_COMMITS_RESPONSE, [], []],
         )
         mocker.patch("codereviewbuddy.tools.comments.gh.get_repo_info", return_value=("owner", "repo"))
+        mocker.patch("codereviewbuddy.tools.comments._compute_staleness", side_effect=_mark_all_stale)
 
         result = await resolve_stale_comments(42)
         assert result.resolved_count == 1
@@ -370,16 +448,16 @@ class TestResolveStaleComments:
 
         graphql_responses = [
             mixed_response,  # list_review_comments → threads query
-            SAMPLE_DIFF_RESPONSE,  # list_review_comments → changed files (gh.py is changed)
             {"data": {"t0": {"thread": {"id": "PRRT_kwDOtest123", "isResolved": True}}}},  # batch resolve (only unblocked)
         ]
 
         mocker.patch("codereviewbuddy.tools.comments.gh.graphql", side_effect=graphql_responses)
         mocker.patch(
             "codereviewbuddy.tools.comments.gh.rest",
-            side_effect=[[], [], SAMPLE_COMMITS_RESPONSE],
+            side_effect=[SAMPLE_COMMITS_RESPONSE, [], []],
         )
         mocker.patch("codereviewbuddy.tools.comments.gh.get_repo_info", return_value=("owner", "repo"))
+        mocker.patch("codereviewbuddy.tools.comments._compute_staleness", side_effect=_mark_all_stale)
 
         result = await resolve_stale_comments(42)
         # Only the unblocked thread should be resolved; Devin thread skipped
@@ -422,7 +500,6 @@ class TestResolveStaleComments:
 
         graphql_responses = [
             mixed_response,
-            SAMPLE_DIFF_RESPONSE,
             # Both threads resolved: unblocked + devin info
             {
                 "data": {
@@ -435,9 +512,10 @@ class TestResolveStaleComments:
         mocker.patch("codereviewbuddy.tools.comments.gh.graphql", side_effect=graphql_responses)
         mocker.patch(
             "codereviewbuddy.tools.comments.gh.rest",
-            side_effect=[[], [], SAMPLE_COMMITS_RESPONSE],
+            side_effect=[SAMPLE_COMMITS_RESPONSE, [], []],
         )
         mocker.patch("codereviewbuddy.tools.comments.gh.get_repo_info", return_value=("owner", "repo"))
+        mocker.patch("codereviewbuddy.tools.comments._compute_staleness", side_effect=_mark_all_stale)
 
         result = await resolve_stale_comments(42)
         assert result.resolved_count == 2
@@ -446,27 +524,17 @@ class TestResolveStaleComments:
         assert result.skipped_count == 0
 
     async def test_nothing_to_resolve(self, mocker: MockerFixture):
-        no_diff = {
-            "data": {
-                "repository": {
-                    "pullRequest": {
-                        "files": {
-                            "pageInfo": {"hasNextPage": False, "endCursor": None},
-                            "nodes": [],
-                        }
-                    }
-                }
-            }
-        }
         mocker.patch(
             "codereviewbuddy.tools.comments.gh.graphql",
-            side_effect=[SAMPLE_GRAPHQL_RESPONSE, no_diff],
+            return_value=SAMPLE_GRAPHQL_RESPONSE,
         )
         mocker.patch(
             "codereviewbuddy.tools.comments.gh.rest",
-            side_effect=[[], [], SAMPLE_COMMITS_RESPONSE],
+            side_effect=[SAMPLE_COMMITS_RESPONSE, [], []],
         )
         mocker.patch("codereviewbuddy.tools.comments.gh.get_repo_info", return_value=("owner", "repo"))
+        # No-op staleness → nothing stale → nothing to resolve
+        mocker.patch("codereviewbuddy.tools.comments._compute_staleness")
 
         result = await resolve_stale_comments(42)
         assert result.resolved_count == 0
@@ -602,11 +670,13 @@ class TestListIncludesPrReviews:
 
     async def test_includes_pr_reviews_alongside_threads(self, mocker: MockerFixture):
         mocker.patch("codereviewbuddy.tools.comments.gh.graphql", return_value=SAMPLE_GRAPHQL_RESPONSE)
-        mocker.patch("codereviewbuddy.tools.comments._get_changed_files", return_value=set())
+        mocker.patch("codereviewbuddy.tools.comments._compute_staleness")
         mocker.patch("codereviewbuddy.tools.comments.gh.get_repo_info", return_value=("owner", "repo"))
         mocker.patch(
             "codereviewbuddy.tools.comments.gh.rest",
             side_effect=[
+                # _get_pr_commits call
+                SAMPLE_COMMITS_RESPONSE,
                 # _get_pr_reviews call
                 [
                     {
@@ -619,8 +689,6 @@ class TestListIncludesPrReviews:
                 ],
                 # _get_pr_issue_comments call
                 [],
-                # _get_latest_push_time call
-                SAMPLE_COMMITS_RESPONSE,
             ],
         )
 
@@ -664,12 +732,13 @@ class TestThreadsPagination:
         }
         mock_graphql = mocker.patch(
             "codereviewbuddy.tools.comments.gh.graphql",
-            side_effect=[page1, page2, SAMPLE_DIFF_RESPONSE],
+            side_effect=[page1, page2],
         )
         mocker.patch(
             "codereviewbuddy.tools.comments.gh.rest",
-            side_effect=[[], [], SAMPLE_COMMITS_RESPONSE],
+            side_effect=[SAMPLE_COMMITS_RESPONSE, [], []],
         )
+        mocker.patch("codereviewbuddy.tools.comments._compute_staleness")
         mocker.patch("codereviewbuddy.tools.comments.gh.get_repo_info", return_value=("owner", "repo"))
 
         summary = await list_review_comments(42)
@@ -697,55 +766,17 @@ class TestThreadsPagination:
         }
         mocker.patch(
             "codereviewbuddy.tools.comments.gh.graphql",
-            side_effect=[malformed_page, SAMPLE_DIFF_RESPONSE],
+            return_value=malformed_page,
         )
         mocker.patch(
             "codereviewbuddy.tools.comments.gh.rest",
-            side_effect=[[], [], SAMPLE_COMMITS_RESPONSE],
+            side_effect=[SAMPLE_COMMITS_RESPONSE, [], []],
         )
+        mocker.patch("codereviewbuddy.tools.comments._compute_staleness")
         mocker.patch("codereviewbuddy.tools.comments.gh.get_repo_info", return_value=("owner", "repo"))
 
         summary = await list_review_comments(42)
         assert len(summary.threads) == 1
-
-
-class TestChangedFilesPagination:
-    def test_fetches_multiple_pages(self, mocker: MockerFixture):
-        diff_page1 = {
-            "data": {
-                "repository": {
-                    "pullRequest": {
-                        "files": {
-                            "pageInfo": {"hasNextPage": True, "endCursor": "file_cursor_1"},
-                            "nodes": [
-                                {"path": "src/codereviewbuddy/gh.py", "additions": 5, "deletions": 2, "changeType": "MODIFIED"},
-                            ],
-                        }
-                    }
-                }
-            },
-        }
-        diff_page2 = {
-            "data": {
-                "repository": {
-                    "pullRequest": {
-                        "files": {
-                            "pageInfo": {"hasNextPage": False, "endCursor": None},
-                            "nodes": [
-                                {"path": "README.md", "additions": 1, "deletions": 0, "changeType": "MODIFIED"},
-                            ],
-                        }
-                    }
-                }
-            },
-        }
-        mocker.patch(
-            "codereviewbuddy.tools.comments.gh.graphql",
-            side_effect=[diff_page1, diff_page2],
-        )
-
-        files = _get_changed_files("owner", "repo", 42)
-        assert files == {"src/codereviewbuddy/gh.py", "README.md"}
 
 
 # ---------------------------------------------------------------------------
@@ -997,27 +1028,17 @@ class TestReplyToComment:
 # ---------------------------------------------------------------------------
 
 
-class TestGetLatestPushTime:
-    def test_returns_last_commit_date(self, mocker: MockerFixture):
-        mocker.patch(
-            "codereviewbuddy.tools.comments.gh.rest",
-            return_value=SAMPLE_COMMITS_RESPONSE,
-        )
-        result = _get_latest_push_time("owner", "repo", 42)
+class TestLatestPushTimeFromCommits:
+    def test_returns_last_commit_date(self):
+        result = _latest_push_time_from_commits(SAMPLE_COMMITS_RESPONSE)
         assert result is not None
         assert result.year == 2026
         assert result.month == 2
         assert result.day == 6
         assert result.hour == 12
 
-    def test_returns_none_for_empty_response(self, mocker: MockerFixture):
-        mocker.patch("codereviewbuddy.tools.comments.gh.rest", return_value=[])
-        result = _get_latest_push_time("owner", "repo", 42)
-        assert result is None
-
-    def test_returns_none_for_null_response(self, mocker: MockerFixture):
-        mocker.patch("codereviewbuddy.tools.comments.gh.rest", return_value=None)
-        result = _get_latest_push_time("owner", "repo", 42)
+    def test_returns_none_for_empty_list(self):
+        result = _latest_push_time_from_commits([])
         assert result is None
 
 

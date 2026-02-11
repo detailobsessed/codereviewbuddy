@@ -68,20 +68,16 @@ SAMPLE_GRAPHQL_RESPONSE = {
     },
 }
 
-SAMPLE_DIFF_RESPONSE = {
-    "data": {
-        "repository": {
-            "pullRequest": {
-                "files": {
-                    "pageInfo": {"hasNextPage": False, "endCursor": None},
-                    "nodes": [
-                        {"path": "src/codereviewbuddy/gh.py", "additions": 5, "deletions": 2, "changeType": "MODIFIED"},
-                    ],
-                }
+SAMPLE_COMMITS_RESPONSE = [
+    {
+        "sha": "abc123",
+        "commit": {
+            "committer": {
+                "date": "2026-02-06T12:00:00Z",
             }
-        }
+        },
     },
-}
+]
 
 RESOLVE_SUCCESS = {"data": {"resolveReviewThread": {"thread": {"id": "PRRT_kwDOtest123", "isResolved": True}}}}
 
@@ -191,9 +187,12 @@ class TestToolRegistration:
 class TestListReviewCommentsMCP:
     async def test_returns_serialized_threads(self, client: Client, mocker: MockerFixture):
         mocker.patch("codereviewbuddy.tools.comments.gh.graphql", return_value=SAMPLE_GRAPHQL_RESPONSE)
-        mocker.patch("codereviewbuddy.tools.comments.gh.rest", return_value=[])
+        mocker.patch(
+            "codereviewbuddy.tools.comments.gh.rest",
+            side_effect=[SAMPLE_COMMITS_RESPONSE, [], []],
+        )
         mocker.patch("codereviewbuddy.tools.comments.gh.get_repo_info", return_value=("owner", "repo"))
-        mocker.patch("codereviewbuddy.tools.comments._get_changed_files", return_value=set())
+        mocker.patch("codereviewbuddy.tools.comments._compute_staleness")
 
         result = await client.call_tool("list_review_comments", {"pr_number": 42})
         assert not result.is_error
@@ -202,17 +201,23 @@ class TestListReviewCommentsMCP:
 
     async def test_with_status_filter(self, client: Client, mocker: MockerFixture):
         mocker.patch("codereviewbuddy.tools.comments.gh.graphql", return_value=SAMPLE_GRAPHQL_RESPONSE)
-        mocker.patch("codereviewbuddy.tools.comments.gh.rest", return_value=[])
+        mocker.patch(
+            "codereviewbuddy.tools.comments.gh.rest",
+            side_effect=[SAMPLE_COMMITS_RESPONSE, [], []],
+        )
         mocker.patch("codereviewbuddy.tools.comments.gh.get_repo_info", return_value=("owner", "repo"))
-        mocker.patch("codereviewbuddy.tools.comments._get_changed_files", return_value=set())
+        mocker.patch("codereviewbuddy.tools.comments._compute_staleness")
 
         result = await client.call_tool("list_review_comments", {"pr_number": 42, "status": "unresolved"})
         assert not result.is_error
 
     async def test_with_explicit_repo(self, client: Client, mocker: MockerFixture):
         mocker.patch("codereviewbuddy.tools.comments.gh.graphql", return_value=SAMPLE_GRAPHQL_RESPONSE)
-        mocker.patch("codereviewbuddy.tools.comments.gh.rest", return_value=[])
-        mocker.patch("codereviewbuddy.tools.comments._get_changed_files", return_value=set())
+        mocker.patch(
+            "codereviewbuddy.tools.comments.gh.rest",
+            side_effect=[SAMPLE_COMMITS_RESPONSE, [], []],
+        )
+        mocker.patch("codereviewbuddy.tools.comments._compute_staleness")
 
         result = await client.call_tool("list_review_comments", {"pr_number": 42, "repo": "myorg/myrepo"})
         assert not result.is_error
@@ -249,14 +254,22 @@ class TestResolveCommentMCP:
 
 class TestResolveStaleCommentsMCP:
     async def test_resolves_stale_through_mcp(self, client: Client, mocker: MockerFixture):
+        def _mark_all_stale(threads, _commits, _owner, _repo, cwd=None):  # noqa: ARG001
+            for t in threads:
+                if t.file:
+                    t.is_stale = True
+
         graphql_responses = [
             SAMPLE_GRAPHQL_RESPONSE,
-            SAMPLE_DIFF_RESPONSE,
             {"data": {"t0": {"thread": {"id": "PRRT_kwDOtest123", "isResolved": True}}}},
         ]
         mocker.patch("codereviewbuddy.tools.comments.gh.graphql", side_effect=graphql_responses)
-        mocker.patch("codereviewbuddy.tools.comments.gh.rest", return_value=[])
+        mocker.patch(
+            "codereviewbuddy.tools.comments.gh.rest",
+            side_effect=[SAMPLE_COMMITS_RESPONSE, [], []],
+        )
         mocker.patch("codereviewbuddy.tools.comments.gh.get_repo_info", return_value=("owner", "repo"))
+        mocker.patch("codereviewbuddy.tools.comments._compute_staleness", side_effect=_mark_all_stale)
 
         result = await client.call_tool("resolve_stale_comments", {"pr_number": 42})
         assert not result.is_error
@@ -278,9 +291,12 @@ class TestReplyToCommentMCP:
 class TestListStackReviewCommentsMCP:
     async def test_returns_grouped_results(self, client: Client, mocker: MockerFixture):
         mocker.patch("codereviewbuddy.tools.comments.gh.graphql", return_value=SAMPLE_GRAPHQL_RESPONSE)
-        mocker.patch("codereviewbuddy.tools.comments.gh.rest", return_value=[])
+        mocker.patch(
+            "codereviewbuddy.tools.comments.gh.rest",
+            side_effect=[SAMPLE_COMMITS_RESPONSE, [], []] * 2,
+        )
         mocker.patch("codereviewbuddy.tools.comments.gh.get_repo_info", return_value=("owner", "repo"))
-        mocker.patch("codereviewbuddy.tools.comments._get_changed_files", return_value=set())
+        mocker.patch("codereviewbuddy.tools.comments._compute_staleness")
 
         result = await client.call_tool("list_stack_review_comments", {"pr_numbers": [42, 43]})
         assert not result.is_error
