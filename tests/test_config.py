@@ -140,7 +140,7 @@ class TestConfig:
 
     def test_diagnostics_from_toml(self, tmp_path: Path):
         toml_file = tmp_path / ".codereviewbuddy.toml"
-        toml_file.write_text("[diagnostics]\nio_tap = true\n")
+        toml_file.write_text("[diagnostics]\nio_tap = true\n", encoding="utf-8")
         config = load_config(cwd=tmp_path)
         assert config.diagnostics.io_tap is True
 

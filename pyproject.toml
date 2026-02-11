@@ -58,6 +58,7 @@ ci = [
 ]
 local = [
     "prek>=0.3.1",
+    "pytest-testmon>=2.2",
 ]
 docs = [
     "markdown-callouts>=0.4",
@@ -159,7 +160,7 @@ filterwarnings = [
 [tool.coverage.run]
 branch = true
 parallel = true
-source = ["src/", "tests/"]
+source = ["src/"]
 
 [tool.coverage.report]
 precision = 2
@@ -182,6 +183,9 @@ lint = "ruff check ."
 format = "ruff format ."
 typecheck = "ty check ."
 
+# Testing
+test-affected = "pytest --testmon --no-cov"
+
 # Combined tasks
 check.parallel = ["lint", "typecheck"]
 check.ignore_fail = "return_non_zero"
@@ -200,7 +204,7 @@ verify-scaffold = "bash scripts/verify-scaffold.sh"
 
 # Template utilities
 check-template = "bash scripts/check-template-update.sh"
-update-template = "copier update --trust . --skip-answered"
+update-template = { shell = "copier update --trust . --skip-answered && prek autoupdate && echo '  ✓ Hook versions updated'" }
 
 # GitHub utilities
 # actions-up: https://github.com/azat-io/actions-up
