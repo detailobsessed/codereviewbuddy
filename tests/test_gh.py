@@ -157,6 +157,44 @@ class TestRest:
         rest("/repos/owner/repo/pulls/1/merge", method="PUT")
         assert cache.size() == 0
 
+    def test_paginate_flag_passed(self, mocker: MockerFixture):
+        response = [{"sha": "abc"}, {"sha": "def"}]
+        mock = _patch_run(mocker, stdout=json.dumps(response))
+        result = rest("/repos/o/r/pulls/1/commits?per_page=100", paginate=True)
+        assert result == response
+        args = mock.call_args[0][0]
+        assert "--paginate" in args
+        assert "--slurp" in args
+
+    def test_paginate_false_omits_flag(self, mocker: MockerFixture):
+        response = [{"sha": "abc"}]
+        mock = _patch_run(mocker, stdout=json.dumps(response))
+        rest("/repos/o/r/pulls/1/commits")
+        args = mock.call_args[0][0]
+        assert "--paginate" not in args
+        assert "--slurp" not in args
+
+    def test_paginate_uses_separate_cache_key(self, mocker: MockerFixture):
+        response = [{"sha": "abc"}]
+        mock = _patch_run(mocker, stdout=json.dumps(response))
+        rest("/repos/o/r/pulls/1/commits", paginate=False)
+        rest("/repos/o/r/pulls/1/commits", paginate=True)
+        assert mock.call_count == 2  # different cache keys
+
+    def test_paginate_flattens_multi_page(self, mocker: MockerFixture):
+        """--slurp wraps pages in outer array; rest() must flatten."""
+        multi_page = [[{"sha": "a"}, {"sha": "b"}], [{"sha": "c"}]]
+        _patch_run(mocker, stdout=json.dumps(multi_page))
+        result = rest("/repos/o/r/pulls/1/commits", paginate=True)
+        assert result == [{"sha": "a"}, {"sha": "b"}, {"sha": "c"}]
+
+    def test_paginate_single_page_wrapped(self, mocker: MockerFixture):
+        """--slurp wraps even a single page in an outer array; must flatten."""
+        single_page_wrapped = [[{"sha": "a"}, {"sha": "b"}]]
+        _patch_run(mocker, stdout=json.dumps(single_page_wrapped))
+        result = rest("/repos/o/r/pulls/1/commits", paginate=True)
+        assert result == [{"sha": "a"}, {"sha": "b"}]
+
 
 class TestCheckAuth:
     def test_authenticated(self, mocker: MockerFixture):

@@ -120,7 +120,14 @@ def graphql(query: str, variables: dict[str, Any] | None = None, cwd: str | None
     return result
 
 
-def rest(endpoint: str, method: str = "GET", cwd: str | None = None, **kwargs: str) -> Any:
+def rest(
+    endpoint: str,
+    method: str = "GET",
+    cwd: str | None = None,
+    *,
+    paginate: bool = False,
+    **kwargs: str,
+) -> Any:
     """Execute a GitHub REST API call via gh api.
 
     GET requests are cached with a short TTL. Non-GET requests
@@ -130,6 +137,9 @@ def rest(endpoint: str, method: str = "GET", cwd: str | None = None, **kwargs: s
         endpoint: REST API endpoint (e.g. "/repos/{owner}/{repo}/pulls").
         method: HTTP method.
         cwd: Working directory.
+        paginate: If True, pass ``--paginate --slurp`` to gh api to follow
+            Link headers. ``--slurp`` wraps pages in an outer JSON array;
+            the result is then flattened to a single contiguous list.
         **kwargs: Additional -f parameters.
 
     Returns:
@@ -138,17 +148,24 @@ def rest(endpoint: str, method: str = "GET", cwd: str | None = None, **kwargs: s
     is_read = method.upper() == "GET"
 
     if is_read:
-        key = cache.make_key("rest", endpoint, method, kwargs)
+        key = cache.make_key("rest", endpoint, method, paginate, kwargs)
         cached = cache.get(key)
         if cached is not cache._SENTINEL:
             return cached
 
     args = ["api", endpoint, "--method", method]
+    if paginate:
+        args.extend(["--paginate", "--slurp"])
     for key_, value in kwargs.items():
         args.extend(["-f", f"{key_}={value}"])
 
     raw = run_gh(*args, cwd=cwd)
     result = None if not raw.strip() else json.loads(raw)
+
+    # --slurp wraps pages in an outer array: [[...page1...], [...page2...]].
+    # Flatten to a single list so callers see one contiguous array.
+    if paginate and isinstance(result, list) and result and isinstance(result[0], list):
+        result = [item for page in result for item in page]
 
     if is_read:
         cache.put(key, result)

@@ -141,7 +141,7 @@ def _get_pr_reviews(
     NOT inline code threads. Without this, reviewers like Devin that don't create
     inline threads are completely invisible.
     """
-    result = gh.rest(f"/repos/{owner}/{repo}/pulls/{pr_number}/reviews", cwd=cwd)
+    result = gh.rest(f"/repos/{owner}/{repo}/pulls/{pr_number}/reviews?per_page=100", cwd=cwd, paginate=True)
     if not result:
         return []
 
@@ -193,7 +193,7 @@ def _get_pr_issue_comments(
     threads or PR reviews. Without this, bot feedback like coverage reports and
     deployment previews is invisible.
     """
-    result = gh.rest(f"/repos/{owner}/{repo}/issues/{pr_number}/comments", cwd=cwd)
+    result = gh.rest(f"/repos/{owner}/{repo}/issues/{pr_number}/comments?per_page=100", cwd=cwd, paginate=True)
     if not result:
         return []
 
@@ -239,8 +239,12 @@ def _get_pr_commits(
     pr_number: int,
     cwd: str | None = None,
 ) -> list[dict[str, Any]]:
-    """Fetch all commits on a PR with SHAs and timestamps."""
-    return gh.rest(f"/repos/{owner}/{repo}/pulls/{pr_number}/commits?per_page=100", cwd=cwd) or []
+    """Fetch all commits on a PR with SHAs and timestamps.
+
+    Uses ``--paginate`` to follow Link headers so PRs with >100
+    commits return the complete list (fixes #95).
+    """
+    return gh.rest(f"/repos/{owner}/{repo}/pulls/{pr_number}/commits?per_page=100", cwd=cwd, paginate=True) or []
 
 
 def _get_files_changed_between(

@@ -241,6 +241,30 @@ class TestComputeStaleness:
         assert mock_rest.call_count == 1  # Only one compare call, not two
 
 
+class TestGetPrCommits:
+    """Tests for _get_pr_commits — pagination regression (#95)."""
+
+    def test_passes_paginate_flag(self, mocker: MockerFixture):
+        """_get_pr_commits must use paginate=True so PRs with >100 commits work."""
+        from codereviewbuddy.tools.comments import _get_pr_commits
+
+        mock_rest = mocker.patch("codereviewbuddy.tools.comments.gh.rest", return_value=[{"sha": "abc"}])
+        result = _get_pr_commits("owner", "repo", 42)
+        assert result == [{"sha": "abc"}]
+        mock_rest.assert_called_once_with(
+            "/repos/owner/repo/pulls/42/commits?per_page=100",
+            cwd=None,
+            paginate=True,
+        )
+
+    def test_returns_empty_list_on_none(self, mocker: MockerFixture):
+        """gh.rest returning None should be normalised to an empty list."""
+        from codereviewbuddy.tools.comments import _get_pr_commits
+
+        mocker.patch("codereviewbuddy.tools.comments.gh.rest", return_value=None)
+        assert _get_pr_commits("owner", "repo", 42) == []
+
+
 SAMPLE_COMMITS_RESPONSE = [
     {
         "sha": "abc123",
@@ -686,6 +710,16 @@ class TestGetPrReviews:
         result = _get_pr_reviews("owner", "repo", 42)
         assert result == []
 
+    def test_passes_paginate_flag(self, mocker: MockerFixture):
+        """_get_pr_reviews must use paginate=True (#111)."""
+        mock_rest = mocker.patch("codereviewbuddy.tools.comments.gh.rest", return_value=[])
+        _get_pr_reviews("owner", "repo", 42)
+        mock_rest.assert_called_once_with(
+            "/repos/owner/repo/pulls/42/reviews?per_page=100",
+            cwd=None,
+            paginate=True,
+        )
+
 
 class TestListIncludesPrReviews:
     """Tests that list_review_comments includes PR-level reviews."""
@@ -956,6 +990,16 @@ class TestGetPrIssueComments:
         result = _get_pr_issue_comments("owner", "repo", 42)
         assert len(result) == 1
         assert result[0].reviewer == "unblocked"
+
+    def test_passes_paginate_flag(self, mocker: MockerFixture):
+        """_get_pr_issue_comments must use paginate=True (#111)."""
+        mock_rest = mocker.patch("codereviewbuddy.tools.comments.gh.rest", return_value=[])
+        _get_pr_issue_comments("owner", "repo", 42)
+        mock_rest.assert_called_once_with(
+            "/repos/owner/repo/issues/42/comments?per_page=100",
+            cwd=None,
+            paginate=True,
+        )
 
 
 class TestReplyToComment:
