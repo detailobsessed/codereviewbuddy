@@ -11,8 +11,9 @@ if TYPE_CHECKING:
 
     from pytest_mock import MockerFixture
 
+from codereviewbuddy.config import CONFIG_FILENAME, init_config, update_config
 from codereviewbuddy.gh import GhError, GhNotAuthenticatedError, GhNotFoundError
-from codereviewbuddy.server import _init_config, _resolve_pr_number, check_prerequisites
+from codereviewbuddy.server import _config_cmd, _resolve_pr_number, check_prerequisites
 
 
 class TestCheckPrerequisites:
@@ -32,20 +33,66 @@ class TestCheckPrerequisites:
 
 
 class TestInitConfig:
-    def test_creates_config_file(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-        monkeypatch.chdir(tmp_path)
-        _init_config()
-        from codereviewbuddy.config import CONFIG_FILENAME
+    def test_creates_config_file(self, tmp_path: Path):
+        path = init_config(cwd=tmp_path)
+        assert path.exists()
+        content = path.read_text(encoding="utf-8")
+        assert "[reviewers.devin]" in content
+        assert "[pr_descriptions]" in content
 
-        assert (tmp_path / CONFIG_FILENAME).exists()
-
-    def test_fails_if_file_exists(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-        monkeypatch.chdir(tmp_path)
-        from codereviewbuddy.config import CONFIG_FILENAME
-
+    def test_fails_if_file_exists(self, tmp_path: Path):
         (tmp_path / CONFIG_FILENAME).write_text("existing", encoding="utf-8")
         with pytest.raises(SystemExit):
-            _init_config()
+            init_config(cwd=tmp_path)
+
+    def test_hint_mentions_update(self, tmp_path: Path, capsys: pytest.CaptureFixture[str]):
+        (tmp_path / CONFIG_FILENAME).write_text("existing", encoding="utf-8")
+        with pytest.raises(SystemExit):
+            init_config(cwd=tmp_path)
+        assert "--update" in capsys.readouterr().out
+
+
+class TestUpdateConfig:
+    def test_appends_missing_sections(self, tmp_path: Path):
+        config_file = tmp_path / CONFIG_FILENAME
+        config_file.write_text("[reviewers.devin]\nenabled = true\n", encoding="utf-8")
+        _, added = update_config(cwd=tmp_path)
+        assert "[pr_descriptions]" in added
+        assert "[reviewers.unblocked]" in added
+        assert "[reviewers.devin]" not in added  # already existed
+        updated = config_file.read_text(encoding="utf-8")
+        assert "[pr_descriptions]" in updated
+        assert "enabled = true" in updated  # original value preserved
+
+    def test_no_changes_when_up_to_date(self, tmp_path: Path):
+        init_config(cwd=tmp_path)
+        _, added = update_config(cwd=tmp_path)
+        assert added == []
+
+    def test_fails_if_no_config(self, tmp_path: Path):
+        with pytest.raises(SystemExit):
+            update_config(cwd=tmp_path)
+
+    def test_hint_mentions_init(self, tmp_path: Path, capsys: pytest.CaptureFixture[str]):
+        with pytest.raises(SystemExit):
+            update_config(cwd=tmp_path)
+        assert "--init" in capsys.readouterr().out
+
+
+class TestConfigCmd:
+    def test_no_flags_shows_usage(self):
+        with pytest.raises(SystemExit):
+            _config_cmd([])
+
+    def test_init_flag(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+        monkeypatch.chdir(tmp_path)
+        _config_cmd(["--init"])
+        assert (tmp_path / CONFIG_FILENAME).exists()
+
+    def test_update_flag(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+        monkeypatch.chdir(tmp_path)
+        (tmp_path / CONFIG_FILENAME).write_text("[reviewers.devin]\n", encoding="utf-8")
+        _config_cmd(["--update"])
 
 
 class TestResolvePrNumber:
@@ -66,14 +113,12 @@ class TestResolvePrNumber:
 
 
 class TestMain:
-    def test_init_subcommand(self, mocker: MockerFixture, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    def test_config_init_subcommand(self, mocker: MockerFixture, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         monkeypatch.chdir(tmp_path)
-        mocker.patch("sys.argv", ["codereviewbuddy", "init"])
+        mocker.patch("sys.argv", ["codereviewbuddy", "config", "--init"])
         from codereviewbuddy.server import main
 
         main()
-        from codereviewbuddy.config import CONFIG_FILENAME
-
         assert (tmp_path / CONFIG_FILENAME).exists()
 
     def test_run_server(self, mocker: MockerFixture):
