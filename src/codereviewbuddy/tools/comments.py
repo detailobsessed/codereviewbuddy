@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import logging
+import operator
 from typing import TYPE_CHECKING
 
 from fastmcp.utilities.async_utils import call_sync_fn_in_threadpool
@@ -10,6 +12,8 @@ from codereviewbuddy import gh
 from codereviewbuddy.config import Severity, get_config
 from codereviewbuddy.models import CommentStatus, ResolveStaleResult, ReviewComment, ReviewerStatus, ReviewSummary, ReviewThread
 from codereviewbuddy.reviewers import get_reviewer, identify_reviewer
+
+logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
     from datetime import datetime
@@ -54,25 +58,6 @@ mutation($threadId: ID!) {
 }
 """
 
-# GraphQL query to get the diff for staleness detection (paginated)
-_DIFF_QUERY = """
-query($owner: String!, $repo: String!, $pr: Int!, $cursor: String) {
-  repository(owner: $owner, name: $repo) {
-    pullRequest(number: $pr) {
-      files(first: 100, after: $cursor) {
-        pageInfo { hasNextPage endCursor }
-        nodes {
-          path
-          additions
-          deletions
-          changeType
-        }
-      }
-    }
-  }
-}
-"""
-
 
 def _reviewer_auto_resolves(reviewer_name: str, comment_body: str = "") -> bool:
     """Check if a reviewer will auto-resolve a specific thread.
@@ -97,7 +82,7 @@ def _reviewer_auto_resolves(reviewer_name: str, comment_body: str = "") -> bool:
     return adapter.auto_resolves_thread(comment_body)
 
 
-def _parse_threads(raw_threads: list[dict[str, Any]], pr_number: int, changed_files: set[str] | None = None) -> list[ReviewThread]:
+def _parse_threads(raw_threads: list[dict[str, Any]], pr_number: int) -> list[ReviewThread]:
     """Parse raw GraphQL thread nodes into ReviewThread models."""
     threads = []
     for node in raw_threads:
@@ -108,11 +93,6 @@ def _parse_threads(raw_threads: list[dict[str, Any]], pr_number: int, changed_fi
         first_comment = comments_raw[0]
         author = (first_comment.get("author") or {}).get("login", "unknown")
         file_path = first_comment.get("path")
-
-        # Staleness: if the file has been modified since the review, it's stale
-        is_stale = False
-        if changed_files and file_path:
-            is_stale = file_path in changed_files
 
         comments = [
             ReviewComment(
@@ -132,7 +112,7 @@ def _parse_threads(raw_threads: list[dict[str, Any]], pr_number: int, changed_fi
                 line=first_comment.get("line"),
                 reviewer=identify_reviewer(author),
                 comments=comments,
-                is_stale=is_stale,
+                is_stale=False,
             )
         )
     return threads
@@ -252,47 +232,124 @@ def _get_pr_issue_comments(
     return threads
 
 
-def _get_changed_files(owner: str, repo: str, pr_number: int, cwd: str | None = None) -> set[str]:
-    """Get the set of files changed in the latest push of a PR."""
-    all_files: list[dict[str, Any]] = []
-    cursor = None
-
-    while True:
-        variables: dict[str, Any] = {"owner": owner, "repo": repo, "pr": pr_number}
-        if cursor:
-            variables["cursor"] = cursor
-
-        result = gh.graphql(_DIFF_QUERY, variables=variables, cwd=cwd)
-        pr_data = result.get("data", {}).get("repository", {}).get("pullRequest") or {}
-        files_data = pr_data.get("files", {})
-        all_files.extend(files_data.get("nodes", []))
-
-        page_info = files_data.get("pageInfo", {})
-        if page_info.get("hasNextPage") and page_info.get("endCursor"):
-            cursor = page_info["endCursor"]
-        else:
-            break
-
-    return {f["path"] for f in all_files if f.get("path")}
-
-
-def _get_latest_push_time(
+def _get_pr_commits(
     owner: str,
     repo: str,
     pr_number: int,
     cwd: str | None = None,
-) -> datetime | None:
-    """Get the timestamp of the latest commit on a PR.
+) -> list[dict[str, Any]]:
+    """Fetch all commits on a PR with SHAs and timestamps."""
+    return gh.rest(f"/repos/{owner}/{repo}/pulls/{pr_number}/commits?per_page=100", cwd=cwd) or []
 
-    Uses the PR commits endpoint and returns the committer date of the last commit.
+
+def _get_files_changed_between(
+    owner: str,
+    repo: str,
+    base_sha: str,
+    head_sha: str,
+    cwd: str | None = None,
+) -> set[str]:
+    """Get files changed between two commits using the compare API.
+
+    Returns an empty set on API errors (e.g. 404 after force-push
+    rewrites history and the SHA no longer exists).
     """
+    try:
+        result = gh.rest(f"/repos/{owner}/{repo}/compare/{base_sha}...{head_sha}", cwd=cwd)
+    except gh.GhError:
+        logger.debug("Compare API failed for %s...%s, treating as empty", base_sha[:7], head_sha[:7])
+        return set()
+    if not result:
+        return set()
+    return {f["filename"] for f in result.get("files", []) if f.get("filename")}
+
+
+def _compute_staleness(
+    threads: list[ReviewThread],
+    commits: list[dict[str, Any]],
+    owner: str,
+    repo: str,
+    cwd: str | None = None,
+) -> None:
+    """Compute per-thread staleness by checking if the file changed after the comment.
+
+    A thread is stale when commits pushed AFTER the comment's timestamp
+    modify the same file the comment is on.  Uses the GitHub compare API,
+    cached by review-point SHA to minimise API calls.
+    """
+    from datetime import UTC, datetime
+
+    if not commits:
+        return
+
+    # HEAD is the last commit in API order (topological), NOT the latest by timestamp.
+    # Timestamp order can diverge after rebases, cherry-picks, or --amend --date.
+    head_sha = commits[-1].get("sha")
+    if not head_sha:
+        return
+
+    # Build a sorted timeline of (timestamp, sha) for review-point lookup
+    timeline: list[tuple[datetime, str]] = []
+    for c in commits:
+        date_str = c.get("commit", {}).get("committer", {}).get("date")
+        sha = c.get("sha")
+        if date_str and sha:
+            ts = datetime.fromisoformat(date_str)
+            if ts.tzinfo is None:
+                ts = ts.replace(tzinfo=UTC)
+            timeline.append((ts, sha))
+    timeline.sort(key=operator.itemgetter(0))
+
+    if not timeline:
+        return
+    # Cache compare results keyed by review-point SHA
+    compare_cache: dict[str, set[str]] = {}
+
+    for thread in threads:
+        if not thread.file or not thread.comments:
+            continue
+        comment_time = thread.comments[0].created_at
+        if comment_time is None:
+            continue
+        if comment_time.tzinfo is None:
+            comment_time = comment_time.replace(tzinfo=UTC)
+
+        # Find the latest commit that existed when the comment was posted
+        review_point_sha: str | None = None
+        for ts, sha in timeline:
+            if ts <= comment_time:
+                review_point_sha = sha
+            else:
+                break
+
+        # If the comment predates all commits, every commit is "after" it —
+        # fall back to comparing the first commit's parent (base).
+        # For simplicity, skip staleness in this edge case.
+        if review_point_sha is None:
+            continue
+
+        # No commits after the review (by timestamp) → not stale.
+        # Compare against the last timeline entry, NOT head_sha, because
+        # timestamps can be non-monotonic (rebase/cherry-pick) while head_sha
+        # is topological — they can diverge.
+        if review_point_sha == timeline[-1][1]:
+            continue
+
+        # Fetch (cached) files changed since review point
+        if review_point_sha not in compare_cache:
+            compare_cache[review_point_sha] = _get_files_changed_between(owner, repo, review_point_sha, head_sha, cwd=cwd)
+
+        thread.is_stale = thread.file in compare_cache[review_point_sha]
+
+
+def _latest_push_time_from_commits(commits: list[dict[str, Any]]) -> datetime | None:
+    """Extract the latest commit timestamp from a pre-fetched commits list."""
     from datetime import datetime
 
-    result = gh.rest(f"/repos/{owner}/{repo}/pulls/{pr_number}/commits", cwd=cwd)
-    if not result:
+    if not commits:
         return None
 
-    last_commit = result[-1]
+    last_commit = commits[-1]
     date_str = last_commit.get("commit", {}).get("committer", {}).get("date")
     if not date_str:
         return None
@@ -426,9 +483,13 @@ async def list_review_comments(
         else:
             break
 
-    changed_files = await call_sync_fn_in_threadpool(_get_changed_files, owner, repo_name, pr_number, cwd=cwd)
+    # Fetch commits once — reused for staleness and reviewer status
+    commits = await call_sync_fn_in_threadpool(_get_pr_commits, owner, repo_name, pr_number, cwd=cwd)
 
-    threads = _parse_threads(raw_threads, pr_number, changed_files)
+    threads = _parse_threads(raw_threads, pr_number)
+
+    # Compute per-thread staleness (file changed after comment was posted)
+    await call_sync_fn_in_threadpool(_compute_staleness, threads, commits, owner, repo_name, cwd=cwd)
 
     # Include PR-level reviews from AI reviewers (e.g. Devin summaries)
     pr_reviews = await call_sync_fn_in_threadpool(_get_pr_reviews, owner, repo_name, pr_number, cwd=cwd)
@@ -443,13 +504,7 @@ async def list_review_comments(
     threads = [t for t in threads if config.get_reviewer(t.reviewer).enabled]
 
     # Build reviewer statuses (timestamp heuristic)
-    last_push_at = await call_sync_fn_in_threadpool(
-        _get_latest_push_time,
-        owner,
-        repo_name,
-        pr_number,
-        cwd=cwd,
-    )
+    last_push_at = _latest_push_time_from_commits(commits)
     reviewer_statuses = _build_reviewer_statuses(threads, last_push_at)
     reviews_in_progress = any(s.status == "pending" for s in reviewer_statuses)
 
