@@ -270,6 +270,28 @@ class TestSummarizeReviewStatus:
         # Stack has 3 PRs (73, 74, 80)
         assert len(result.prs) == 3
 
+    async def test_auto_discovery_repo_mismatch_returns_error(self, mocker: MockerFixture):
+        """Regression (#115): when repo is explicitly provided but cwd is a different repo,
+        auto-discovery must fail with a clear error instead of silently returning empty."""
+        mocker.patch("codereviewbuddy.tools.stack.gh.get_repo_info", return_value=("other_owner", "other_repo"))
+
+        result = await summarize_review_status(repo="o/r")
+        assert result.error is not None
+        assert "Auto-discovery unavailable" in result.error
+        assert "other_owner/other_repo" in result.error
+        assert "o/r" in result.error
+
+    async def test_auto_discovery_gh_error_returns_mismatch(self, mocker: MockerFixture):
+        """When get_repo_info raises GhError, treat cwd as unknown and report mismatch."""
+        from codereviewbuddy.gh import GhError
+
+        mocker.patch("codereviewbuddy.tools.stack.gh.get_repo_info", side_effect=GhError("not a repo"))
+
+        result = await summarize_review_status(repo="o/r")
+        assert result.error is not None
+        assert "Auto-discovery unavailable" in result.error
+        assert "unknown" in result.error
+
     async def test_empty_pr_list(self, mocker: MockerFixture):
         mocker.patch("codereviewbuddy.tools.stack.gh.get_repo_info", return_value=("o", "r"))
         result = await summarize_review_status(pr_numbers=[])
