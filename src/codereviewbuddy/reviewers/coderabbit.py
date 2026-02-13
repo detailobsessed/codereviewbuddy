@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import override
+
 from codereviewbuddy.reviewers.base import ReviewerAdapter
 
 
@@ -25,9 +27,11 @@ class CodeRabbitAdapter(ReviewerAdapter):
     def auto_resolves_comments(self) -> bool:
         return True
 
+    @override
     def identify(self, author: str) -> bool:
         normalized = author.lower().strip()
         return "coderabbit" in normalized
 
-    def rereview_trigger(self, pr_number: int, owner: str, repo: str) -> list[str]:  # noqa: ARG002
+    @override
+    def rereview_trigger(self, pr_number: int, owner: str, repo: str) -> list[str]:
         return []  # CodeRabbit auto-triggers on push

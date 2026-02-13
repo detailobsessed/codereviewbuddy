@@ -259,7 +259,7 @@ def _get_pr_commits(
 
 def _latest_push_time_from_commits(commits: list[dict[str, Any]]) -> datetime | None:
     """Extract the latest commit timestamp from a pre-fetched commits list."""
-    from datetime import datetime
+    from datetime import datetime  # noqa: PLC0415
 
     if not commits:
         return None
@@ -272,17 +272,10 @@ def _latest_push_time_from_commits(commits: list[dict[str, Any]]) -> datetime | 
     return datetime.fromisoformat(date_str)
 
 
-def _build_reviewer_statuses(
-    threads: list[ReviewThread],
-    last_push_at: datetime | None,
-) -> list[ReviewerStatus]:
-    """Build per-reviewer status by comparing review timestamps against latest push.
+def _collect_reviewer_latest(threads: list[ReviewThread]) -> dict[str, datetime]:
+    """Collect the latest comment timestamp per known AI reviewer."""
+    from datetime import UTC  # noqa: PLC0415
 
-    Only reports on reviewers that have actually posted on this PR (data-driven).
-    """
-    from datetime import UTC
-
-    # Collect the latest comment timestamp per known reviewer
     reviewer_latest: dict[str, datetime] = {}
     for thread in threads:
         if thread.reviewer == "unknown":
@@ -302,50 +295,120 @@ def _build_reviewer_statuses(
                 ts = ts.replace(tzinfo=UTC)
             if thread.reviewer not in reviewer_latest or ts > reviewer_latest[thread.reviewer]:
                 reviewer_latest[thread.reviewer] = ts
+    return reviewer_latest
 
+
+def _compare_review_to_push(
+    reviewer_name: str,
+    latest_review: datetime,
+    last_push_at: datetime | None,
+) -> ReviewerStatus:
+    """Compare a reviewer's latest comment against the last push to determine status."""
+    from datetime import UTC  # noqa: PLC0415
+
+    if last_push_at is None:
+        return ReviewerStatus(
+            reviewer=reviewer_name,
+            status="completed",
+            detail="Could not determine push time; assuming completed",
+            last_review_at=latest_review,
+            last_push_at=None,
+        )
+
+    push_at = last_push_at
+    if push_at.tzinfo is None:
+        push_at = push_at.replace(tzinfo=UTC)
+
+    if latest_review >= push_at:
+        return ReviewerStatus(
+            reviewer=reviewer_name,
+            status="completed",
+            detail=f"{reviewer_name} reviewed after latest push",
+            last_review_at=latest_review,
+            last_push_at=push_at,
+        )
+    return ReviewerStatus(
+        reviewer=reviewer_name,
+        status="pending",
+        detail=f"{reviewer_name} has not reviewed since latest push",
+        last_review_at=latest_review,
+        last_push_at=push_at,
+    )
+
+
+def _build_reviewer_statuses(
+    threads: list[ReviewThread],
+    last_push_at: datetime | None,
+) -> list[ReviewerStatus]:
+    """Build per-reviewer status by comparing review timestamps against latest push.
+
+    Only reports on reviewers that have actually posted on this PR (data-driven).
+    """
+    reviewer_latest = _collect_reviewer_latest(threads)
     if not reviewer_latest:
         return []
 
-    statuses: list[ReviewerStatus] = []
-    for reviewer_name, latest_review in reviewer_latest.items():
-        if last_push_at is None:
-            statuses.append(
-                ReviewerStatus(
-                    reviewer=reviewer_name,
-                    status="completed",
-                    detail="Could not determine push time; assuming completed",
-                    last_review_at=latest_review,
-                    last_push_at=None,
-                )
-            )
-            continue
+    return [_compare_review_to_push(name, ts, last_push_at) for name, ts in reviewer_latest.items()]
 
-        push_at = last_push_at
-        if push_at.tzinfo is None:
-            push_at = push_at.replace(tzinfo=UTC)
 
-        if latest_review >= push_at:
-            statuses.append(
-                ReviewerStatus(
-                    reviewer=reviewer_name,
-                    status="completed",
-                    detail=f"{reviewer_name} reviewed after latest push",
-                    last_review_at=latest_review,
-                    last_push_at=push_at,
-                )
-            )
+async def _fetch_raw_threads(
+    owner: str,
+    repo_name: str,
+    pr_number: int,
+    cwd: str | None,
+    ctx: Context | None,
+) -> list[dict[str, Any]]:
+    """Paginate through all review threads for a PR via GraphQL."""
+    raw_threads: list[dict[str, Any]] = []
+    cursor = None
+    page = 0
+
+    while True:
+        page += 1
+        if ctx:
+            await ctx.report_progress(progress=page, total=None)
+            await ctx.info(f"Fetching review threads for PR #{pr_number} (page {page})")
+
+        variables: dict[str, Any] = {"owner": owner, "repo": repo_name, "pr": pr_number}
+        if cursor:
+            variables["cursor"] = cursor
+
+        result = await call_sync_fn_in_threadpool(gh.graphql, _THREADS_QUERY, variables=variables, cwd=cwd)
+        pr_data = result.get("data", {}).get("repository", {}).get("pullRequest") or {}
+        threads_data = pr_data.get("reviewThreads", {})
+        raw_threads.extend(threads_data.get("nodes", []))
+
+        page_info = threads_data.get("pageInfo", {})
+        if page_info.get("hasNextPage") and page_info.get("endCursor"):
+            cursor = page_info["endCursor"]
         else:
-            statuses.append(
-                ReviewerStatus(
-                    reviewer=reviewer_name,
-                    status="pending",
-                    detail=f"{reviewer_name} has not reviewed since latest push",
-                    last_review_at=latest_review,
-                    last_push_at=push_at,
-                )
-            )
+            break
 
-    return statuses
+    return raw_threads
+
+
+async def _collect_all_threads(
+    owner: str,
+    repo_name: str,
+    pr_number: int,
+    cwd: str | None,
+    ctx: Context | None,
+) -> list[ReviewThread]:
+    """Fetch inline threads, PR-level reviews, and bot comments — filtered by config."""
+    raw_threads = await _fetch_raw_threads(owner, repo_name, pr_number, cwd, ctx)
+    threads = _parse_threads(raw_threads, pr_number)
+
+    # Include PR-level reviews from AI reviewers (e.g. Devin summaries)
+    pr_reviews = await call_sync_fn_in_threadpool(_get_pr_reviews, owner, repo_name, pr_number, cwd=cwd)
+    threads.extend(pr_reviews)
+
+    # Include regular PR comments from bots (e.g. codecov, netlify, vercel)
+    bot_comments = await call_sync_fn_in_threadpool(_get_pr_issue_comments, owner, repo_name, pr_number, cwd=cwd)
+    threads.extend(bot_comments)
+
+    # Filter out threads from disabled reviewers
+    config = get_config()
+    return [t for t in threads if config.get_reviewer(t.reviewer).enabled]
 
 
 async def list_review_comments(
@@ -372,50 +435,10 @@ async def list_review_comments(
     else:
         owner, repo_name = await call_sync_fn_in_threadpool(gh.get_repo_info, cwd=cwd)
 
-    # Fetch threads (paginated) and changed files
-    raw_threads: list[dict[str, Any]] = []
-    cursor = None
-    page = 0
-
-    while True:
-        page += 1
-        if ctx:
-            await ctx.report_progress(progress=page, total=None)
-            await ctx.info(f"Fetching review threads for PR #{pr_number} (page {page})")
-
-        variables: dict[str, Any] = {"owner": owner, "repo": repo_name, "pr": pr_number}
-        if cursor:
-            variables["cursor"] = cursor
-
-        result = await call_sync_fn_in_threadpool(gh.graphql, _THREADS_QUERY, variables=variables, cwd=cwd)
-        pr_data = result.get("data", {}).get("repository", {}).get("pullRequest") or {}
-        threads_data = pr_data.get("reviewThreads", {})
-        raw_threads.extend(threads_data.get("nodes", []))
-
-        page_info = threads_data.get("pageInfo", {})
-        if page_info.get("hasNextPage") and page_info.get("endCursor"):
-            cursor = page_info["endCursor"]
-        else:
-            break
-
-    # Fetch commits for reviewer status timestamps
-    commits = await call_sync_fn_in_threadpool(_get_pr_commits, owner, repo_name, pr_number, cwd=cwd)
-
-    threads = _parse_threads(raw_threads, pr_number)
-
-    # Include PR-level reviews from AI reviewers (e.g. Devin summaries)
-    pr_reviews = await call_sync_fn_in_threadpool(_get_pr_reviews, owner, repo_name, pr_number, cwd=cwd)
-    threads.extend(pr_reviews)
-
-    # Include regular PR comments from bots (e.g. codecov, netlify, vercel)
-    bot_comments = await call_sync_fn_in_threadpool(_get_pr_issue_comments, owner, repo_name, pr_number, cwd=cwd)
-    threads.extend(bot_comments)
-
-    # Filter out threads from disabled reviewers
-    config = get_config()
-    threads = [t for t in threads if config.get_reviewer(t.reviewer).enabled]
+    threads = await _collect_all_threads(owner, repo_name, pr_number, cwd, ctx)
 
     # Build reviewer statuses (timestamp heuristic)
+    commits = await call_sync_fn_in_threadpool(_get_pr_commits, owner, repo_name, pr_number, cwd=cwd)
     last_push_at = _latest_push_time_from_commits(commits)
     reviewer_statuses = _build_reviewer_statuses(threads, last_push_at)
     reviews_in_progress = any(s.status == "pending" for s in reviewer_statuses)
@@ -702,7 +725,7 @@ def _reply_to_review_thread(
     return f"Replied to thread {thread_id} on PR #{pr_number}"
 
 
-def _reply_to_pr_comment(
+def _reply_to_pr_comment(  # noqa: PLR0913, PLR0917
     pr_number: int,
     owner: str,
     repo_name: str,
@@ -754,7 +777,7 @@ def _has_followup_without_issue(thread: ReviewThread, owner_logins: frozenset[st
 
 def _classify_action(severity: str) -> str:
     """Map severity to suggested action."""
-    if severity in ("bug", "flagged"):
+    if severity in {"bug", "flagged"}:
         return "fix"
     return "reply"
 
@@ -785,7 +808,7 @@ async def triage_review_comments(
     Returns:
         TriageResult with only actionable items, sorted by severity.
     """
-    from codereviewbuddy.tools.stack import _classify_severity
+    from codereviewbuddy.tools.stack import _classify_severity  # noqa: PLC0415
 
     owners = frozenset(owner_logins or ["ichoosetoaccept"])
     items: list[TriageItem] = []

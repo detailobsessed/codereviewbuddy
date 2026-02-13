@@ -47,32 +47,23 @@ async def request_rereview(
     auto_triggers: list[str] = []
 
     if reviewer:
-        # Trigger a specific reviewer
         adapter = get_reviewer(reviewer)
         if not adapter:
             msg = f"Unknown reviewer: {reviewer}. Known reviewers: {', '.join(r.name for r in REVIEWERS)}"
             raise ValueError(msg)
-
-        if adapter.needs_manual_rereview:
-            args = adapter.rereview_trigger(pr_number, owner, repo_name)
-            if args:
-                await call_sync_fn_in_threadpool(gh.run_gh, *args, cwd=cwd)
-                triggered.append(adapter.name)
-                if ctx:
-                    await ctx.info(f"Triggered re-review from {adapter.name} on PR #{pr_number}")
-        else:
-            auto_triggers.append(adapter.name)
+        adapters = [adapter]
     else:
-        # Trigger all reviewers that need manual re-review
-        for adapter in REVIEWERS:
-            if adapter.needs_manual_rereview:
-                args = adapter.rereview_trigger(pr_number, owner, repo_name)
-                if args:
-                    await call_sync_fn_in_threadpool(gh.run_gh, *args, cwd=cwd)
-                    triggered.append(adapter.name)
-                    if ctx:
-                        await ctx.info(f"Triggered re-review from {adapter.name} on PR #{pr_number}")
-            else:
-                auto_triggers.append(adapter.name)
+        adapters = list(REVIEWERS)
+
+    for adapter in adapters:
+        if not adapter.needs_manual_rereview:
+            auto_triggers.append(adapter.name)
+            continue
+        args = adapter.rereview_trigger(pr_number, owner, repo_name)
+        if args:
+            await call_sync_fn_in_threadpool(gh.run_gh, *args, cwd=cwd)
+            if ctx:
+                await ctx.info(f"Triggered re-review from {adapter.name} on PR #{pr_number}")
+            triggered.append(adapter.name)
 
     return RereviewResult(triggered=triggered, auto_triggers=auto_triggers)

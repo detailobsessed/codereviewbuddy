@@ -18,6 +18,8 @@ if TYPE_CHECKING:
 
     from fastmcp.server.context import Context
 
+    from codereviewbuddy.models import ReviewThread
+
 logger = logging.getLogger(__name__)
 
 
@@ -39,6 +41,20 @@ def _fetch_open_prs(repo: str | None = None, cwd: str | None = None) -> list[dic
     return json.loads(raw)
 
 
+def _index_prs(
+    all_prs: list[dict],
+) -> tuple[dict[str, dict], dict[str, list[dict]], dict[int, dict]]:
+    """Build lookup indices for PRs by head branch, base branch, and number."""
+    by_head: dict[str, dict] = {}
+    by_base: dict[str, list[dict]] = {}
+    by_number: dict[int, dict] = {}
+    for pr in all_prs:
+        by_head[pr.get("headRefName", "")] = pr
+        by_base.setdefault(pr.get("baseRefName", ""), []).append(pr)
+        by_number[pr["number"]] = pr
+    return by_head, by_base, by_number
+
+
 def _build_stack(current_pr_number: int, all_prs: list[dict]) -> list[StackPR]:
     """Walk the branch chain to find PRs in the same stack.
 
@@ -51,18 +67,7 @@ def _build_stack(current_pr_number: int, all_prs: list[dict]) -> list[StackPR]:
     if not all_prs:
         return []
 
-    # Index PRs by head branch (unique per PR)
-    by_head: dict[str, dict] = {}
-    # Index PRs by base branch (multiple PRs can target same base)
-    by_base: dict[str, list[dict]] = {}
-    by_number: dict[int, dict] = {}
-
-    for pr in all_prs:
-        head = pr.get("headRefName", "")
-        base = pr.get("baseRefName", "")
-        by_head[head] = pr
-        by_base.setdefault(base, []).append(pr)
-        by_number[pr["number"]] = pr
+    by_head, by_base, by_number = _index_prs(all_prs)
 
     current = by_number.get(current_pr_number)
     if current is None:
@@ -70,14 +75,12 @@ def _build_stack(current_pr_number: int, all_prs: list[dict]) -> list[StackPR]:
 
     # Collect stack members (use set to avoid duplicates)
     stack_numbers: set[int] = {current_pr_number}
-    ordered: list[dict] = []
 
     # Walk DOWN: follow base branch chain (find PRs this one is stacked on)
     down: list[dict] = []
     pr = current
     while True:
-        base_branch = pr.get("baseRefName", "")
-        parent = by_head.get(base_branch)
+        parent = by_head.get(pr.get("baseRefName", ""))
         if parent is None or parent["number"] in stack_numbers:
             break
         stack_numbers.add(parent["number"])
@@ -88,9 +91,7 @@ def _build_stack(current_pr_number: int, all_prs: list[dict]) -> list[StackPR]:
     up: list[dict] = []
     pr = current
     while True:
-        head_branch = pr.get("headRefName", "")
-        children = by_base.get(head_branch, [])
-        # Pick the first child that isn't already in the stack
+        children = by_base.get(pr.get("headRefName", ""), [])
         child = next((c for c in children if c["number"] not in stack_numbers), None)
         if child is None:
             break
@@ -201,16 +202,20 @@ def _classify_severity(reviewer_name: str, body: str) -> Severity:
     return adapter.classify_severity(body)
 
 
-def _fetch_pr_summary(
+def _paginate_summary_threads(
     owner: str,
     repo: str,
     pr_number: int,
-    commits: list[dict[str, Any]] | None = None,
     cwd: str | None = None,
-) -> PRReviewStatusSummary:
-    """Fetch lightweight review status for a single PR."""
+) -> tuple[list[dict[str, Any]], str, str]:
+    """Paginate through review threads via the lightweight summary query.
+
+    Returns:
+        (raw_thread_nodes, pr_title, pr_url)
+    """
     raw_threads: list[dict[str, Any]] = []
     cursor = None
+    pr_data: dict[str, Any] = {}
 
     while True:
         variables: dict[str, Any] = {"owner": owner, "repo": repo, "pr": pr_number}
@@ -227,79 +232,91 @@ def _fetch_pr_summary(
         else:
             break
 
-    title = pr_data.get("title", "")
-    url = pr_data.get("url", "")
+    return raw_threads, pr_data.get("title", ""), pr_data.get("url", "")
 
+
+def _first_comment_reviewer(node: dict[str, Any]) -> tuple[dict[str, Any], str] | None:
+    """Extract the first comment and reviewer name from a thread node.
+
+    Returns None if the thread has no comments or the reviewer is disabled.
+    """
+    comments = node.get("comments", {}).get("nodes", [])
+    if not comments:
+        return None
+    first = comments[0]
+    author = (first.get("author") or {}).get("login", "unknown")
+    reviewer = identify_reviewer(author)
     config = get_config()
-    unresolved = 0
-    resolved = 0
-    bugs = 0
-    flagged = 0
-    warnings = 0
-    info_count = 0
+    if not config.get_reviewer(reviewer).enabled:
+        return None
+    return first, reviewer
+
+
+_SEVERITY_TO_FIELD: dict[Severity, str] = {
+    Severity.BUG: "bugs",
+    Severity.FLAGGED: "flagged",
+    Severity.WARNING: "warnings",
+    Severity.INFO: "info_count",
+}
+
+
+def _count_thread_statuses(
+    raw_threads: list[dict[str, Any]],
+) -> dict[str, int]:
+    """Count resolved/unresolved threads and severity buckets for unresolved."""
+    counts: dict[str, int] = {
+        "unresolved": 0,
+        "resolved": 0,
+        "bugs": 0,
+        "flagged": 0,
+        "warnings": 0,
+        "info_count": 0,
+    }
 
     for node in raw_threads:
-        comments = node.get("comments", {}).get("nodes", [])
-        if not comments:
+        parsed = _first_comment_reviewer(node)
+        if parsed is None:
             continue
+        first, reviewer = parsed
 
-        first = comments[0]
-        author = (first.get("author") or {}).get("login", "unknown")
-        reviewer = identify_reviewer(author)
-
-        # Skip disabled reviewers
-        if not config.get_reviewer(reviewer).enabled:
-            continue
-
-        is_resolved = node.get("isResolved", False)
-        if is_resolved:
-            resolved += 1
+        if node.get("isResolved", False):
+            counts["resolved"] += 1
         else:
-            unresolved += 1
+            counts["unresolved"] += 1
+            severity = _classify_severity(reviewer, first.get("body", ""))
+            field = _SEVERITY_TO_FIELD.get(severity, "info_count")
+            counts[field] += 1
 
-        # Severity classification (only for unresolved)
-        if not is_resolved:
-            body = first.get("body", "")
-            severity = _classify_severity(reviewer, body)
-            if severity == Severity.BUG:
-                bugs += 1
-            elif severity == Severity.FLAGGED:
-                flagged += 1
-            elif severity == Severity.WARNING:
-                warnings += 1
-            else:
-                info_count += 1
+    return counts
 
-    # Count stale threads using native isOutdated from GraphQL
+
+def _count_stale_threads(raw_threads: list[dict[str, Any]]) -> int:
+    """Count unresolved + outdated threads from enabled reviewers."""
     stale = 0
     for node in raw_threads:
-        if not node.get("isResolved") and node.get("isOutdated"):
-            comments = node.get("comments", {}).get("nodes", [])
-            if comments:
-                author = (comments[0].get("author") or {}).get("login", "unknown")
-                reviewer = identify_reviewer(author)
-                if config.get_reviewer(reviewer).enabled:
-                    stale += 1
+        if node.get("isResolved") or not node.get("isOutdated"):
+            continue
+        if _first_comment_reviewer(node) is not None:
+            stale += 1
+    return stale
 
-    # Reviewer status detection
-    from codereviewbuddy.tools.comments import _build_reviewer_statuses, _latest_push_time_from_commits
 
-    last_push = _latest_push_time_from_commits(commits or [])
+def _build_mini_threads(
+    raw_threads: list[dict[str, Any]],
+    pr_number: int,
+) -> list[ReviewThread]:
+    """Build lightweight ReviewThread objects for reviewer status detection."""
+    from codereviewbuddy.models import CommentStatus as CS  # noqa: PLC0415
+    from codereviewbuddy.models import ReviewComment, ReviewThread  # noqa: PLC0415
 
-    from codereviewbuddy.models import CommentStatus as CS
-    from codereviewbuddy.models import ReviewComment, ReviewThread
-
-    mini_threads: list[ReviewThread] = []
+    mini: list[ReviewThread] = []
     for node in raw_threads:
-        comments = node.get("comments", {}).get("nodes", [])
-        if not comments:
+        parsed = _first_comment_reviewer(node)
+        if parsed is None:
             continue
-        first = comments[0]
+        first, reviewer = parsed
         author = (first.get("author") or {}).get("login", "unknown")
-        reviewer = identify_reviewer(author)
-        if not config.get_reviewer(reviewer).enabled:
-            continue
-        mini_threads.append(
+        mini.append(
             ReviewThread(
                 thread_id="",
                 pr_number=pr_number,
@@ -315,22 +332,34 @@ def _fetch_pr_summary(
                 ],
             )
         )
+    return mini
 
+
+def _fetch_pr_summary(
+    owner: str,
+    repo: str,
+    pr_number: int,
+    commits: list[dict[str, Any]] | None = None,
+    cwd: str | None = None,
+) -> PRReviewStatusSummary:
+    """Fetch lightweight review status for a single PR."""
+    from codereviewbuddy.tools.comments import _build_reviewer_statuses, _latest_push_time_from_commits  # noqa: PLC0415
+
+    raw_threads, title, url = _paginate_summary_threads(owner, repo, pr_number, cwd=cwd)
+    counts = _count_thread_statuses(raw_threads)
+    stale = _count_stale_threads(raw_threads)
+
+    last_push = _latest_push_time_from_commits(commits or [])
+    mini_threads = _build_mini_threads(raw_threads, pr_number)
     reviewer_statuses = _build_reviewer_statuses(mini_threads, last_push)
-    reviews_in_progress = any(s.status == "pending" for s in reviewer_statuses)
 
     return PRReviewStatusSummary(
         pr_number=pr_number,
         title=title,
         url=url,
-        unresolved=unresolved,
-        resolved=resolved,
-        bugs=bugs,
-        flagged=flagged,
-        warnings=warnings,
-        info_count=info_count,
         stale=stale,
-        reviews_in_progress=reviews_in_progress,
+        reviews_in_progress=any(s.status == "pending" for s in reviewer_statuses),
+        **counts,
     )
 
 
@@ -386,7 +415,7 @@ async def summarize_review_status(
     summaries: list[PRReviewStatusSummary] = []
     total = len(pr_numbers)
 
-    from codereviewbuddy.tools.comments import _get_pr_commits
+    from codereviewbuddy.tools.comments import _get_pr_commits  # noqa: PLC0415
 
     for i, pr_num in enumerate(pr_numbers):
         if ctx and total:

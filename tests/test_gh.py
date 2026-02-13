@@ -16,6 +16,7 @@ from codereviewbuddy.gh import (
     GhError,
     GhNotAuthenticatedError,
     GhNotFoundError,
+    _summarize_cmd,
     check_auth,
     get_current_pr_number,
     get_repo_info,
@@ -33,6 +34,7 @@ def _patch_run(
 ):
     """Patch subprocess.run and return the mock."""
     result = subprocess.CompletedProcess(args=[], returncode=returncode, stdout=stdout, stderr=stderr)
+    mocker.patch("codereviewbuddy.gh._log_gh_call")
     return mocker.patch("codereviewbuddy.gh.subprocess.run", return_value=result)
 
 
@@ -194,6 +196,55 @@ class TestRest:
         _patch_run(mocker, stdout=json.dumps(single_page_wrapped))
         result = rest("/repos/o/r/pulls/1/commits", paginate=True)
         assert result == [{"sha": "a"}, {"sha": "b"}]
+
+
+class TestSummarizeCmd:
+    def test_api_graphql(self):
+        assert _summarize_cmd(("api", "graphql", "-f", "query=...")) == "api graphql"
+
+    def test_pr_comment(self):
+        assert _summarize_cmd(("pr", "comment", "42", "--repo", "o/r")) == "pr comment 42"
+
+    def test_empty(self):
+        assert _summarize_cmd(()) == "unknown"
+
+    def test_flag_first(self):
+        assert _summarize_cmd(("-f", "query=...")) == "unknown"
+
+
+class TestRunGhLogging:
+    def test_success_logs_call(self, mocker: MockerFixture):
+        result = subprocess.CompletedProcess(args=[], returncode=0, stdout="ok", stderr="")
+        mocker.patch("codereviewbuddy.gh.subprocess.run", return_value=result)
+        log_mock = mocker.patch("codereviewbuddy.gh._log_gh_call")
+        run_gh("api", "graphql", "-f", "query=test")
+        log_mock.assert_called_once()
+        entry = log_mock.call_args[0][0]
+        assert entry["cmd"] == "api graphql"
+        assert entry["exit_code"] == 0
+        assert entry["stdout_bytes"] == 2
+        assert entry["duration_ms"] >= 0
+        assert "ts" in entry
+        assert "ts_end" in entry
+
+    def test_failure_logs_stderr(self, mocker: MockerFixture):
+        result = subprocess.CompletedProcess(args=[], returncode=1, stdout="", stderr="rate limit exceeded")
+        mocker.patch("codereviewbuddy.gh.subprocess.run", return_value=result)
+        log_mock = mocker.patch("codereviewbuddy.gh._log_gh_call")
+        with pytest.raises(GhError):
+            run_gh("api", "graphql")
+        entry = log_mock.call_args[0][0]
+        assert entry["exit_code"] == 1
+        assert entry["stderr"] == "rate limit exceeded"
+
+    def test_not_found_logs_error(self, mocker: MockerFixture):
+        mocker.patch("codereviewbuddy.gh.subprocess.run", side_effect=FileNotFoundError)
+        log_mock = mocker.patch("codereviewbuddy.gh._log_gh_call")
+        with pytest.raises(GhNotFoundError):
+            run_gh("auth", "status")
+        entry = log_mock.call_args[0][0]
+        assert entry["error"] == "FileNotFoundError"
+        assert entry["cmd"] == "auth status"
 
 
 class TestCheckAuth:
