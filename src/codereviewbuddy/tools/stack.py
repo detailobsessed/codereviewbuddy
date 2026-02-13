@@ -10,7 +10,7 @@ from fastmcp.utilities.async_utils import call_sync_fn_in_threadpool
 
 from codereviewbuddy import gh
 from codereviewbuddy.config import Severity, get_config
-from codereviewbuddy.models import PRReviewStatusSummary, StackPR, StackReviewStatusResult
+from codereviewbuddy.models import ActivityEvent, PRReviewStatusSummary, StackActivityResult, StackPR, StackReviewStatusResult
 from codereviewbuddy.reviewers import get_reviewer, identify_reviewer
 
 if TYPE_CHECKING:
@@ -447,4 +447,179 @@ async def summarize_review_status(
         prs=summaries,
         total_unresolved=total_unresolved,
         any_reviews_in_progress=any_in_progress,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Stack activity timeline (#98)
+# ---------------------------------------------------------------------------
+
+_SETTLED_MINUTES = 10
+
+_TIMELINE_EVENT_MAP: dict[str, str] = {
+    "reviewed": "review",
+    "commented": "comment",
+    "head_ref_force_pushed": "push",
+    "committed": "commit",
+    "labeled": "labeled",
+    "unlabeled": "unlabeled",
+    "merged": "merged",
+    "closed": "closed",
+    "reopened": "reopened",
+}
+
+
+def _fetch_timeline(
+    owner: str,
+    repo: str,
+    pr_number: int,
+    cwd: str | None = None,
+) -> list[dict[str, Any]]:
+    """Fetch timeline events for a single PR via the GitHub REST API."""
+    endpoint = f"/repos/{owner}/{repo}/issues/{pr_number}/timeline"
+    result = gh.rest(endpoint, paginate=True, cwd=cwd)
+    return result if isinstance(result, list) else []
+
+
+def _parse_timeline_events(
+    raw_events: list[dict[str, Any]],
+    pr_number: int,
+) -> list[ActivityEvent]:
+    """Parse raw GitHub timeline events into ActivityEvent models."""
+    from datetime import datetime  # noqa: PLC0415
+
+    events: list[ActivityEvent] = []
+    for raw in raw_events:
+        event_name = raw.get("event", "")
+        mapped = _TIMELINE_EVENT_MAP.get(event_name)
+        if mapped is None:
+            continue
+
+        # Extract timestamp — different event types store it differently
+        ts_str = raw.get("submitted_at") or raw.get("created_at") or raw.get("committer", {}).get("date")
+        if not ts_str:
+            continue
+
+        try:
+            ts = datetime.fromisoformat(ts_str)
+        except ValueError, AttributeError:
+            continue
+
+        # Extract actor
+        actor = ""
+        if raw.get("user"):
+            actor = raw["user"].get("login", "")
+        elif raw.get("actor"):
+            actor = raw["actor"].get("login", "")
+        elif raw.get("author"):
+            actor = raw["author"].get("login", "")
+        elif raw.get("committer"):
+            actor = raw["committer"].get("login", raw["committer"].get("name", ""))
+
+        # Extract detail
+        detail = ""
+        if mapped == "review":
+            detail = raw.get("state", "").lower()
+        elif mapped in {"labeled", "unlabeled"}:
+            detail = raw.get("label", {}).get("name", "")
+        elif mapped == "commit":
+            detail = (raw.get("message") or "")[:80]
+
+        events.append(
+            ActivityEvent(
+                time=ts,
+                pr_number=pr_number,
+                event_type=mapped,
+                actor=actor,
+                detail=detail,
+            )
+        )
+
+    return events
+
+
+async def stack_activity(  # noqa: PLR0914
+    pr_numbers: list[int] | None = None,
+    repo: str | None = None,
+    cwd: str | None = None,
+    ctx: Context | None = None,
+) -> StackActivityResult:
+    """Chronological activity feed across all PRs in a stack.
+
+    Merges timeline events from each PR, sorted by timestamp. The ``settled``
+    flag is True when no activity has occurred for 10+ minutes after the last
+    push+review cycle, helping agents decide whether to wait or proceed.
+
+    Args:
+        pr_numbers: PR numbers to include. Auto-discovers stack if omitted.
+        repo: Repository in "owner/repo" format. Auto-detected if not provided.
+        cwd: Working directory for git operations.
+        ctx: FastMCP context for progress reporting and session caching.
+
+    Returns:
+        StackActivityResult with merged, chronologically ordered events.
+    """
+    from datetime import UTC, datetime  # noqa: PLC0415
+
+    if repo:
+        owner, repo_name = repo.split("/", 1)
+    else:
+        owner, repo_name = await call_sync_fn_in_threadpool(gh.get_repo_info, cwd=cwd)
+    full_repo = f"{owner}/{repo_name}"
+
+    # Auto-discover stack if needed
+    if pr_numbers is None:
+        # Guard: verify explicit repo matches cwd repo before auto-discovery (#115)
+        if repo:
+            try:
+                cwd_owner, cwd_repo = await call_sync_fn_in_threadpool(gh.get_repo_info, cwd=cwd)
+                cwd_full = f"{cwd_owner}/{cwd_repo}"
+            except gh.GhError:
+                cwd_full = None
+            if cwd_full is None or cwd_full.lower() != full_repo.lower():
+                return StackActivityResult(
+                    error=f"Auto-discovery unavailable: working directory is {cwd_full or 'unknown'}, "
+                    f"but target repo is {full_repo}. Pass pr_numbers explicitly.",
+                )
+
+        current_pr = await call_sync_fn_in_threadpool(gh.get_current_pr_number, cwd=cwd)
+        stack_prs = await discover_stack(current_pr, repo=full_repo, cwd=cwd, ctx=ctx)
+        pr_numbers = [p.pr_number for p in stack_prs]
+
+    if not pr_numbers:
+        return StackActivityResult(error="No PRs to fetch activity for")
+
+    all_events: list[ActivityEvent] = []
+    total = len(pr_numbers)
+
+    for i, pr_num in enumerate(pr_numbers):
+        if ctx and total:
+            await ctx.report_progress(i, total)
+        raw = await call_sync_fn_in_threadpool(_fetch_timeline, owner, repo_name, pr_num, cwd=cwd)
+        all_events.extend(_parse_timeline_events(raw, pr_num))
+
+    if ctx and total:
+        await ctx.report_progress(total, total)
+
+    # Sort chronologically
+    all_events.sort(key=lambda e: e.time)
+
+    # Compute settled flag
+    last_activity = all_events[-1].time if all_events else None
+    minutes_since = None
+    settled = False
+
+    if last_activity is not None:
+        now = datetime.now(UTC)
+        minutes_since = int((now - last_activity).total_seconds() / 60)
+        # Settled = no activity for 10+ min AND at least one push and one review exist
+        has_push = any(e.event_type == "push" for e in all_events)
+        has_review = any(e.event_type == "review" for e in all_events)
+        settled = minutes_since >= _SETTLED_MINUTES and has_push and has_review
+
+    return StackActivityResult(
+        events=all_events,
+        last_activity=last_activity,
+        minutes_since_last_activity=minutes_since,
+        settled=settled,
     )

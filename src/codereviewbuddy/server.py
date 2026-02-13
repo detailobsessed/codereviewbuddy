@@ -30,6 +30,7 @@ from codereviewbuddy.models import (
     RereviewResult,
     ResolveStaleResult,
     ReviewSummary,
+    StackActivityResult,
     StackReviewStatusResult,
     TriageResult,
 )
@@ -444,6 +445,37 @@ async def summarize_review_status(
     except asyncio.CancelledError:
         logger.warning("summarize_review_status cancelled")
         return StackReviewStatusResult(error="Cancelled")
+
+
+@mcp.tool
+async def stack_activity(
+    pr_numbers: list[int] | None = None,
+    repo: str | None = None,
+) -> StackActivityResult:
+    """Get a chronological activity feed across all PRs in a stack.
+
+    Shows pushes, reviews, comments, labels, merges, and closes in timeline order.
+    The ``settled`` flag is True when no activity for 10+ minutes after a
+    push+review cycle — helps decide whether to wait or proceed.
+
+    When ``pr_numbers`` is omitted, auto-discovers the stack from the current branch.
+
+    Args:
+        pr_numbers: PR numbers to include. Auto-discovers stack if omitted.
+        repo: Repository in "owner/repo" format. Auto-detected if not provided.
+
+    Returns:
+        StackActivityResult with merged chronological events and settled flag.
+    """
+    try:
+        ctx = get_context()
+        return await stack.stack_activity(pr_numbers=pr_numbers, repo=repo, ctx=ctx)
+    except Exception as exc:
+        logger.exception("stack_activity failed")
+        return StackActivityResult(error=f"Error: {exc}")
+    except asyncio.CancelledError:
+        logger.warning("stack_activity cancelled")
+        return StackActivityResult(error="Cancelled")
 
 
 @mcp.tool

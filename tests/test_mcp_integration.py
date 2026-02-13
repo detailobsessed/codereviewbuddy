@@ -111,6 +111,7 @@ class TestToolRegistration:
     EXPECTED_TOOLS = frozenset({
         "list_review_comments",
         "list_stack_review_comments",
+        "stack_activity",
         "resolve_comment",
         "resolve_stale_comments",
         "reply_to_comment",
@@ -128,7 +129,7 @@ class TestToolRegistration:
 
     async def test_tool_count(self, client: Client):
         tools = await client.list_tools()
-        assert len(tools) == 10
+        assert len(tools) == 11
 
     async def test_list_review_comments_schema(self, client: Client):
         tools = await client.list_tools()
