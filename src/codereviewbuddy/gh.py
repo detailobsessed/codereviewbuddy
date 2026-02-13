@@ -9,11 +9,40 @@ from __future__ import annotations
 import json
 import logging
 import subprocess  # noqa: S404
+import time
+from pathlib import Path
 from typing import Any
 
 from codereviewbuddy import cache
 
 logger = logging.getLogger(__name__)
+
+_GH_LOG_DIR = Path.home() / ".codereviewbuddy"
+_GH_LOG_FILE = _GH_LOG_DIR / "gh_calls.jsonl"
+# Unique sentinel to grep/remove all temporary diagnostics once issue #65 is resolved.
+_ISSUE_65_TRACKING_TAG = "CRB-ISSUE-65-TRACKING"
+
+
+def _log_gh_call(entry: dict[str, Any]) -> None:
+    """Append a JSON log entry to gh_calls.jsonl."""
+    try:
+        _GH_LOG_DIR.mkdir(parents=True, exist_ok=True)
+        with _GH_LOG_FILE.open("a", encoding="utf-8") as f:
+            f.write(json.dumps(entry, default=str) + "\n")
+    except OSError:
+        pass
+
+
+def _summarize_cmd(args: tuple[str, ...]) -> str:
+    """Build a short summary of the gh command for logging."""
+    # e.g. ("api", "graphql", "-f", "query=...") -> "api graphql"
+    # e.g. ("pr", "comment", "42", ...) -> "pr comment 42"
+    summary_parts: list[str] = []
+    for arg in args:
+        if arg.startswith("-") or "=" in arg:
+            break
+        summary_parts.append(arg)
+    return " ".join(summary_parts) or "unknown"
 
 
 class GhError(Exception):
@@ -57,7 +86,10 @@ def run_gh(*args: str, cwd: str | None = None) -> str:
         GhError: If the command fails.
     """
     cmd = ["gh", *args]
+    cmd_summary = _summarize_cmd(args)
     logger.debug("Running: %s", " ".join(cmd))
+    start = time.perf_counter()
+    start_ts = time.strftime("%Y-%m-%dT%H:%M:%S%z")
     try:
         result = subprocess.run(  # noqa: S603
             cmd,
@@ -67,7 +99,28 @@ def run_gh(*args: str, cwd: str | None = None) -> str:
             cwd=cwd,
         )
     except FileNotFoundError:
+        duration_ms = round((time.perf_counter() - start) * 1000)
+        _log_gh_call({
+            "ts": start_ts,
+            "cmd": cmd_summary,
+            "duration_ms": duration_ms,
+            "error": "FileNotFoundError",
+            "tracking_tag": _ISSUE_65_TRACKING_TAG,
+        })
         raise GhNotFoundError from None
+
+    duration_ms = round((time.perf_counter() - start) * 1000)
+    stderr_text = result.stderr.strip()
+    _log_gh_call({
+        "ts": start_ts,
+        "ts_end": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
+        "cmd": cmd_summary,
+        "duration_ms": duration_ms,
+        "exit_code": result.returncode,
+        "stdout_bytes": len(result.stdout),
+        "stderr": stderr_text[:500] if stderr_text else None,
+        "tracking_tag": _ISSUE_65_TRACKING_TAG,
+    })
 
     if result.returncode != 0:
         logger.debug("gh stderr: %s", result.stderr)

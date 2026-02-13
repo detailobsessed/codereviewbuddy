@@ -3,9 +3,13 @@
 from __future__ import annotations
 
 import logging
+from typing import TYPE_CHECKING
 
 from codereviewbuddy import gh
 from codereviewbuddy.models import CreateIssueResult
+
+if TYPE_CHECKING:
+    from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -28,7 +32,58 @@ query($threadId: ID!) {
 """
 
 
-def create_issue_from_comment(
+def _fetch_thread_comment(thread_id: str, cwd: str | None = None) -> dict[str, Any]:
+    """Fetch the first comment from a review thread, raising on failure."""
+    result = gh.graphql(_THREAD_QUERY, variables={"threadId": thread_id}, cwd=cwd)
+    node = result.get("data", {}).get("node") or {}
+    comment_nodes = node.get("comments", {}).get("nodes", [])
+    if not comment_nodes:
+        msg = f"Could not find comment content for thread {thread_id}"
+        raise gh.GhError(msg)
+    return comment_nodes[0]
+
+
+def _build_issue_body(comment: dict[str, Any], pr_number: int) -> tuple[str, str]:
+    """Build the markdown body for a GitHub issue from a review comment.
+
+    Returns:
+        (issue_body, author)
+    """
+    body_text = comment.get("body", "")
+    file_path = comment.get("path")
+    line = comment.get("line")
+    author = (comment.get("author") or {}).get("login", "unknown")
+    comment_url = comment.get("url", "")
+
+    parts = [f"From review comment on PR #{pr_number}"]
+    if comment_url:
+        parts[0] = f"From [review comment]({comment_url}) on PR #{pr_number}"
+
+    if file_path:
+        location = f"`{file_path}`"
+        if line:
+            location += f" line {line}"
+        parts.append(f"**Location:** {location}")
+
+    parts.extend([
+        f"**Reviewer:** {author}",
+        "",
+        f"> {body_text.replace(chr(10), chr(10) + '> ')}",
+    ])
+
+    return "\n\n".join(parts), author
+
+
+def _parse_issue_number(issue_url: str) -> int:
+    """Extract issue number from a GitHub issue URL."""
+    try:
+        return int(issue_url.rstrip("/").split("/")[-1])
+    except ValueError, IndexError:
+        logger.warning("Could not parse issue number from: %s", issue_url)
+        return 0
+
+
+def create_issue_from_comment(  # noqa: PLR0913, PLR0917
     pr_number: int,
     thread_id: str,
     title: str,
@@ -54,44 +109,10 @@ def create_issue_from_comment(
     else:
         owner, repo_name = gh.get_repo_info(cwd=cwd)
 
+    comment = _fetch_thread_comment(thread_id, cwd=cwd)
+    issue_body, _author = _build_issue_body(comment, pr_number)
+
     full_repo = f"{owner}/{repo_name}"
-
-    # Fetch the thread content
-    result = gh.graphql(_THREAD_QUERY, variables={"threadId": thread_id}, cwd=cwd)
-    node = result.get("data", {}).get("node") or {}
-    comment_nodes = node.get("comments", {}).get("nodes", [])
-
-    if not comment_nodes:
-        msg = f"Could not find comment content for thread {thread_id}"
-        raise gh.GhError(msg)
-
-    comment = comment_nodes[0]
-    body_text = comment.get("body", "")
-    file_path = comment.get("path")
-    line = comment.get("line")
-    author = (comment.get("author") or {}).get("login", "unknown")
-    comment_url = comment.get("url", "")
-
-    # Build issue body
-    parts = [f"From review comment on PR #{pr_number}"]
-    if comment_url:
-        parts[0] = f"From [review comment]({comment_url}) on PR #{pr_number}"
-
-    if file_path:
-        location = f"`{file_path}`"
-        if line:
-            location += f" line {line}"
-        parts.append(f"**Location:** {location}")
-
-    parts.extend([
-        f"**Reviewer:** {author}",
-        "",
-        f"> {body_text.replace(chr(10), chr(10) + '> ')}",
-    ])
-
-    issue_body = "\n\n".join(parts)
-
-    # Create issue via gh CLI
     args = [
         "issue",
         "create",
@@ -106,20 +127,10 @@ def create_issue_from_comment(
         for label in labels:
             args.extend(["--label", label])
 
-    raw = gh.run_gh(*args, cwd=cwd)
-
-    # Parse the issue URL from output (gh issue create prints the URL)
-    issue_url = raw.strip()
-
-    # Extract issue number from URL (e.g. https://github.com/owner/repo/issues/42)
-    try:
-        issue_number = int(issue_url.rstrip("/").split("/")[-1])
-    except ValueError, IndexError:
-        logger.warning("Could not parse issue number from: %s", issue_url)
-        issue_number = 0
+    issue_url = gh.run_gh(*args, cwd=cwd).strip()
 
     return CreateIssueResult(
-        issue_number=issue_number,
+        issue_number=_parse_issue_number(issue_url),
         issue_url=issue_url,
         title=title,
     )

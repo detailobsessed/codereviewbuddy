@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import time
 from typing import TYPE_CHECKING, Any
@@ -13,7 +14,7 @@ import pytest
 if TYPE_CHECKING:
     from pathlib import Path
 
-from codereviewbuddy.middleware import WRITE_TOOLS, WriteOperationMiddleware
+from codereviewbuddy.middleware import ISSUE_65_TRACKING_TAG, WRITE_TOOLS, WriteOperationMiddleware
 
 
 @pytest.fixture
@@ -125,11 +126,12 @@ class TestRapidWriteDetection:
         assert "2 writes" in result
 
 
-def _make_context(tool_name: str) -> MagicMock:
+def _make_context(tool_name: str, arguments: dict[str, Any] | None = None) -> MagicMock:
     """Create a mock MiddlewareContext with the given tool name."""
     ctx = MagicMock()
     ctx.message = MagicMock()
     ctx.message.name = tool_name
+    ctx.message.arguments = arguments
     return ctx
 
 
@@ -158,6 +160,10 @@ class TestTwoPhaseLogging:
         assert len(entries_during_call) == 1
         assert entries_during_call[0]["phase"] == "started"
         assert entries_during_call[0]["tool"] == "list_review_comments"
+        assert entries_during_call[0]["call_type"] == "read"
+        assert "task_id" in entries_during_call[0]
+        assert "mono_start" in entries_during_call[0]
+        assert entries_during_call[0]["tracking_tag"] == ISSUE_65_TRACKING_TAG
 
         # After the call, there should be 2 entries: started + completed
         all_entries = [json.loads(line) for line in log_file.read_text(encoding="utf-8").splitlines()]
@@ -210,7 +216,50 @@ class TestTwoPhaseLogging:
         completed = [e for e in entries if e["phase"] == "completed"]
         assert len(completed) == 1
         assert "duration_ms" in completed[0]
+        assert "elapsed_ms_precise" in completed[0]
+        assert "mono_end" in completed[0]
         assert completed[0]["duration_ms"] >= 10  # at least 10ms from the sleep
+
+    async def test_logs_args_size_and_fingerprint(self, middleware: WriteOperationMiddleware, tmp_log_dir: Path):
+        """Started entries should include deterministic args metadata when provided."""
+        log_file = tmp_log_dir / "tool_calls.jsonl"
+        args = {"repo": "detailobsessed/surfmon", "pr_number": 23}
+
+        async def call_next(_ctx: Any) -> list[Any]:
+            await asyncio.sleep(0)
+            return []
+
+        await middleware.on_call_tool(_make_context("list_review_comments", args), call_next)  # type: ignore[arg-type]
+
+        entries = [json.loads(line) for line in log_file.read_text(encoding="utf-8").splitlines()]
+        started = next(e for e in entries if e["phase"] == "started")
+        expected_payload = json.dumps(args, sort_keys=True, separators=(",", ":"), default=str).encode("utf-8")
+        assert started["args_size_bytes"] == len(expected_payload)
+        assert started["args_fingerprint"] == hashlib.sha256(expected_payload).hexdigest()
+
+    async def test_heartbeat_logs_while_call_pending(self, tmp_log_dir: Path):
+        """When enabled, heartbeat entries should appear during long-running calls."""
+        middleware = WriteOperationMiddleware(
+            log_dir=tmp_log_dir,
+            heartbeat_enabled=True,
+            heartbeat_interval_ms=50,
+        )
+        log_file = tmp_log_dir / "tool_calls.jsonl"
+        hung = asyncio.Event()
+
+        async def call_next_hangs(_ctx: Any) -> list[Any]:
+            hung.set()
+            await asyncio.sleep(0.16)
+            return []
+
+        await middleware.on_call_tool(_make_context("list_review_comments"), call_next_hangs)  # type: ignore[arg-type]
+        await asyncio.wait_for(hung.wait(), timeout=1.0)
+
+        entries = [json.loads(line) for line in log_file.read_text(encoding="utf-8").splitlines()]
+        heartbeat_entries = [e for e in entries if e["phase"] == "heartbeat"]
+        assert heartbeat_entries
+        assert all(e["tool"] == "list_review_comments" for e in heartbeat_entries)
+        assert all(e["tracking_tag"] == ISSUE_65_TRACKING_TAG for e in heartbeat_entries)
 
     async def test_error_logged_with_both_phases(self, middleware: WriteOperationMiddleware, tmp_log_dir: Path):
         """Verify that errors still produce both started and completed entries."""
@@ -218,7 +267,8 @@ class TestTwoPhaseLogging:
 
         async def call_next_raises(_ctx: Any) -> list[Any]:
             await asyncio.sleep(0)
-            raise RuntimeError("boom")
+            message = "boom"
+            raise RuntimeError(message)
 
         with pytest.raises(RuntimeError):
             await middleware.on_call_tool(_make_context("resolve_comment"), call_next_raises)  # type: ignore[arg-type]

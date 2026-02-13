@@ -73,7 +73,7 @@ class TestExtractTitle:
         assert _extract_title("**Some title here**\nBody text") == "Some title here"
 
     def test_no_bold(self):
-        assert _extract_title("No bold text here") == ""
+        assert not _extract_title("No bold text here")
 
 
 class TestHasOwnerReply:

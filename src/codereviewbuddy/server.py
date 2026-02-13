@@ -41,6 +41,7 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 _FASTMCP_TASK_ROUTING_MODULE = "fastmcp.server.tasks.routing"
+write_operation_middleware = WriteOperationMiddleware()
 
 
 def _resolve_pr_number(pr_number: int | None) -> int:
@@ -58,6 +59,11 @@ async def check_gh_cli(server: FastMCP) -> AsyncIterator[dict[str, object] | Non
     config = load_config()
     set_config(config)
     apply_config(config)
+    write_operation_middleware.configure_diagnostics(
+        heartbeat_enabled=config.diagnostics.tool_call_heartbeat,
+        heartbeat_interval_ms=config.diagnostics.heartbeat_interval_ms,
+        include_args_fingerprint=config.diagnostics.include_args_fingerprint,
+    )
     yield {}
 
 
@@ -172,7 +178,7 @@ mcp.add_middleware(ErrorHandlingMiddleware(include_traceback=True, transform_err
 mcp.add_middleware(TimingMiddleware())
 mcp.add_middleware(LoggingMiddleware(include_payloads=True, max_payload_length=500))
 mcp.add_middleware(PingMiddleware(interval_ms=30_000))
-mcp.add_middleware(WriteOperationMiddleware())
+mcp.add_middleware(write_operation_middleware)
 
 
 @mcp.tool

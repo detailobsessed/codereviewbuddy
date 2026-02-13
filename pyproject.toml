@@ -158,10 +158,15 @@ select = [
     "ARG002",     # Unused method arguments (fixtures)
     "DTZ005",     # Naive datetime in tests is fine
     "PLR0904",    # Test classes naturally have many test methods
+    "PLR0913",    # Test factories with many defaulted kwargs are idiomatic
+    "PLR0917",    # (same — positional arg count)
 ]
 
 [tool.ruff.lint.pylint]
 # All values are pylint defaults — do not inflate to hide violations.
+# Complexity limits (PLR0912/0914/0915) are enforced; fix by extracting helpers.
+# Arg-count limits (PLR0913/0917) are suppressed only on MCP tool entry points
+# whose signatures are public API contracts — not on internal helpers.
 
 [tool.ruff.lint.flake8-pytest-style]
 fixture-parentheses = false

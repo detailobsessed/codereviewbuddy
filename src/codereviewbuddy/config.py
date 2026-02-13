@@ -101,6 +101,19 @@ class DiagnosticsConfig(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
     io_tap: bool = Field(default=False, description="Enable stdin/stdout logging for transport debugging (#65)")
+    tool_call_heartbeat: bool = Field(
+        default=False,
+        description="Emit periodic in-flight heartbeat entries while tool calls are pending",
+    )
+    heartbeat_interval_ms: int = Field(
+        default=5000,
+        ge=100,
+        description="Heartbeat interval in milliseconds for in-flight tool calls",
+    )
+    include_args_fingerprint: bool = Field(
+        default=True,
+        description="Include argument payload fingerprint and size metadata in tool call logs",
+    )
 
 
 class Config(BaseModel):
@@ -271,7 +284,7 @@ def get_config() -> Config:
 
 def set_config(config: Config) -> None:
     """Set the active configuration (called during server startup)."""
-    global _config
+    global _config  # noqa: PLW0603
     _config = config
 
 
@@ -342,6 +355,9 @@ repo = "detailobsessed/codereviewbuddy"  # Repository to file issues against
         """\
 [diagnostics]
 io_tap = true                     # Log stdin/stdout for transport debugging (#65)
+tool_call_heartbeat = false       # Emit heartbeat entries for long-running tool calls
+heartbeat_interval_ms = 5000      # Heartbeat cadence when enabled
+include_args_fingerprint = true   # Log args hash/size (no raw args)
 """,
     ),
 ]
@@ -372,7 +388,7 @@ def _comment_out_unknown_keys(target: Path) -> list[str]:
 
     Returns list of dotted key paths that were commented out.
     """
-    import tomlkit
+    import tomlkit  # noqa: PLC0415
 
     raw = target.read_text(encoding="utf-8")
     data = tomllib.loads(raw)
@@ -412,7 +428,7 @@ def _remove_unknown_keys(target: Path) -> list[str]:
 
     Returns list of dotted key paths that were removed.
     """
-    import tomlkit
+    import tomlkit  # noqa: PLC0415
 
     raw = target.read_text(encoding="utf-8")
     data = tomllib.loads(raw)

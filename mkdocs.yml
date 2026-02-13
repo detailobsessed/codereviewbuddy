@@ -22,6 +22,7 @@ nav:
 - Development:
   - Contributing: contributing.md
   - Code of Conduct: code_of_conduct.md
+  - Issue 65 Observability: issue-65-observability.md
   - Coverage report: coverage.md
 
 theme:

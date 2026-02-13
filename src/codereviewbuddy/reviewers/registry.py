@@ -11,9 +11,9 @@ if TYPE_CHECKING:
 
 def _build_registry() -> list[ReviewerAdapter]:
     """Instantiate all known reviewer adapters."""
-    from codereviewbuddy.reviewers.coderabbit import CodeRabbitAdapter
-    from codereviewbuddy.reviewers.devin import DevinAdapter
-    from codereviewbuddy.reviewers.unblocked import UnblockedAdapter
+    from codereviewbuddy.reviewers.coderabbit import CodeRabbitAdapter  # noqa: PLC0415
+    from codereviewbuddy.reviewers.devin import DevinAdapter  # noqa: PLC0415
+    from codereviewbuddy.reviewers.unblocked import UnblockedAdapter  # noqa: PLC0415
 
     return [
         UnblockedAdapter(),

@@ -182,9 +182,9 @@ class TestListReviewComments:
         mocker.patch(
             "codereviewbuddy.tools.comments.gh.rest",
             side_effect=[
-                SAMPLE_COMMITS_RESPONSE,  # _get_pr_commits
                 [],  # _get_pr_reviews
                 [],  # _get_pr_issue_comments
+                SAMPLE_COMMITS_RESPONSE,  # _get_pr_commits
             ],
         )
         mocker.patch("codereviewbuddy.tools.comments.gh.get_repo_info", return_value=("owner", "repo"))
@@ -208,7 +208,7 @@ class TestListReviewComments:
         mocker.patch("codereviewbuddy.tools.comments.gh.graphql", return_value=SAMPLE_GRAPHQL_RESPONSE)
         mocker.patch(
             "codereviewbuddy.tools.comments.gh.rest",
-            side_effect=[SAMPLE_COMMITS_RESPONSE, [], []],
+            side_effect=[[], [], SAMPLE_COMMITS_RESPONSE],
         )
         summary = await list_review_comments(42, repo="myorg/myrepo")
         assert len(summary.threads) == 2
@@ -218,7 +218,7 @@ class TestListReviewComments:
         mocker.patch("codereviewbuddy.tools.comments.gh.graphql", return_value=SAMPLE_GRAPHQL_RESPONSE)
         mocker.patch(
             "codereviewbuddy.tools.comments.gh.rest",
-            side_effect=[SAMPLE_COMMITS_RESPONSE, [], []],
+            side_effect=[[], [], SAMPLE_COMMITS_RESPONSE],
         )
         mocker.patch("codereviewbuddy.tools.comments.gh.get_repo_info", return_value=("owner", "repo"))
         mocker.patch("codereviewbuddy.tools.stack._fetch_open_prs", side_effect=RuntimeError("network error"))
@@ -357,7 +357,7 @@ class TestResolveStaleComments:
         )
         mocker.patch(
             "codereviewbuddy.tools.comments.gh.rest",
-            side_effect=[SAMPLE_COMMITS_RESPONSE, [], []],
+            side_effect=[[], [], SAMPLE_COMMITS_RESPONSE],
         )
         mocker.patch("codereviewbuddy.tools.comments.gh.get_repo_info", return_value=("owner", "repo"))
 
@@ -406,7 +406,7 @@ class TestResolveStaleComments:
         mocker.patch("codereviewbuddy.tools.comments.gh.graphql", side_effect=graphql_responses)
         mocker.patch(
             "codereviewbuddy.tools.comments.gh.rest",
-            side_effect=[SAMPLE_COMMITS_RESPONSE, [], []],
+            side_effect=[[], [], SAMPLE_COMMITS_RESPONSE],
         )
         mocker.patch("codereviewbuddy.tools.comments.gh.get_repo_info", return_value=("owner", "repo"))
 
@@ -464,7 +464,7 @@ class TestResolveStaleComments:
         mocker.patch("codereviewbuddy.tools.comments.gh.graphql", side_effect=graphql_responses)
         mocker.patch(
             "codereviewbuddy.tools.comments.gh.rest",
-            side_effect=[SAMPLE_COMMITS_RESPONSE, [], []],
+            side_effect=[[], [], SAMPLE_COMMITS_RESPONSE],
         )
         mocker.patch("codereviewbuddy.tools.comments.gh.get_repo_info", return_value=("owner", "repo"))
 
@@ -481,7 +481,7 @@ class TestResolveStaleComments:
         )
         mocker.patch(
             "codereviewbuddy.tools.comments.gh.rest",
-            side_effect=[SAMPLE_COMMITS_RESPONSE, [], []],
+            side_effect=[[], [], SAMPLE_COMMITS_RESPONSE],
         )
         mocker.patch("codereviewbuddy.tools.comments.gh.get_repo_info", return_value=("owner", "repo"))
 
@@ -634,8 +634,6 @@ class TestListIncludesPrReviews:
         mocker.patch(
             "codereviewbuddy.tools.comments.gh.rest",
             side_effect=[
-                # _get_pr_commits call
-                SAMPLE_COMMITS_RESPONSE,
                 # _get_pr_reviews call
                 [
                     {
@@ -648,6 +646,8 @@ class TestListIncludesPrReviews:
                 ],
                 # _get_pr_issue_comments call
                 [],
+                # _get_pr_commits call
+                SAMPLE_COMMITS_RESPONSE,
             ],
         )
 
@@ -695,7 +695,7 @@ class TestThreadsPagination:
         )
         mocker.patch(
             "codereviewbuddy.tools.comments.gh.rest",
-            side_effect=[SAMPLE_COMMITS_RESPONSE, [], []],
+            side_effect=[[], [], SAMPLE_COMMITS_RESPONSE],
         )
         mocker.patch("codereviewbuddy.tools.comments.gh.get_repo_info", return_value=("owner", "repo"))
         mocker.patch("codereviewbuddy.tools.stack._fetch_open_prs", return_value=[])
@@ -729,7 +729,7 @@ class TestThreadsPagination:
         )
         mocker.patch(
             "codereviewbuddy.tools.comments.gh.rest",
-            side_effect=[SAMPLE_COMMITS_RESPONSE, [], []],
+            side_effect=[[], [], SAMPLE_COMMITS_RESPONSE],
         )
         mocker.patch("codereviewbuddy.tools.comments.gh.get_repo_info", return_value=("owner", "repo"))
         mocker.patch("codereviewbuddy.tools.stack._fetch_open_prs", return_value=[])

@@ -4,10 +4,10 @@ The server becomes unresponsive after a sequence of rapid write operations
 (resolve_stale → reply → resolve → resolve → request_rereview). This test
 uses a mock server over stdio transport to isolate the transport-layer bug.
 
-Marked xfail because the hang is believed to originate in the client-side
-stdio transport (mcp-go in Windsurf), not in FastMCP's Python server.
-However, having this test lets us verify the server side is clean and
-gives us a regression test if the root cause turns out to be server-side.
+Observability analysis (tool_calls.jsonl + io_tap.jsonl) confirmed the hang
+originates in the gh CLI subprocess, not in the MCP transport or FastMCP
+server. These tests verify the server side is clean and serve as regression
+tests.
 """
 
 from __future__ import annotations
@@ -67,12 +67,6 @@ class TestStdioRapidWrites:
                     })
         return results
 
-    @pytest.mark.xfail(
-        reason="Issue #65: MCP server hangs after rapid write tool calls. "
-        "Believed to be a client-side stdio transport bug (mcp-go), "
-        "but this test verifies the server side is clean.",
-        strict=False,
-    )
     async def test_rapid_sequential_writes_no_hang(self):
         """Fire the exact write sequence from issue #65 multiple rounds — no call should hang."""
         transport = PythonStdioTransport(MOCK_SERVER)
@@ -82,10 +76,6 @@ class TestStdioRapidWrites:
         timeouts = [r for r in results if r["timed_out"]]
         assert not timeouts, f"{len(timeouts)} calls timed out (hung): " + ", ".join(f"round {r['round']} {r['tool']}" for r in timeouts)
 
-    @pytest.mark.xfail(
-        reason="Issue #65: concurrent writes through stdio may corrupt JSON framing",
-        strict=False,
-    )
     async def test_concurrent_writes_no_hang(self):
         """Fire multiple write calls concurrently — tests JSON framing under load."""
         transport = PythonStdioTransport(MOCK_SERVER)
@@ -115,10 +105,6 @@ class TestStdioRapidWrites:
         assert not timeouts, f"{len(timeouts)} calls timed out"
         assert not errors, f"{len(errors)} calls errored: {errors}"
 
-    @pytest.mark.xfail(
-        reason="Issue #65: rapid cancel+retry pattern may leave transport in bad state",
-        strict=False,
-    )
     async def test_cancel_and_retry_no_hang(self):
         """Cancel a write mid-flight, then immediately retry — transport should recover."""
         transport = PythonStdioTransport(MOCK_SERVER)
