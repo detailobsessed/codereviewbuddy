@@ -470,10 +470,10 @@ async def list_stack_review_comments(
     results: dict[int, ReviewSummary] = {}
     total = len(pr_numbers)
     for i, pr_number in enumerate(pr_numbers):
-        if ctx:
+        if ctx and total:
             await ctx.report_progress(progress=i, total=total)
         results[pr_number] = await list_review_comments(pr_number, repo=repo, status=status, cwd=cwd, ctx=ctx)
-    if ctx:
+    if ctx and total:
         await ctx.report_progress(progress=total, total=total)
     return results
 
@@ -793,7 +793,7 @@ async def triage_review_comments(
 
     total = len(pr_numbers)
     for i, pr_number in enumerate(pr_numbers):
-        if ctx:
+        if ctx and total:
             await ctx.report_progress(i, total)
 
         summary = await list_review_comments(pr_number, repo=repo, status="unresolved", cwd=cwd, ctx=ctx)
@@ -846,7 +846,7 @@ async def triage_review_comments(
                 )
             )
 
-    if ctx:
+    if ctx and total:
         await ctx.report_progress(total, total)
 
     # Sort all items by severity (bugs first)
