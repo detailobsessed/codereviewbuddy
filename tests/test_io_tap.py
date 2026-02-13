@@ -14,6 +14,7 @@ if TYPE_CHECKING:
     from pytest_mock import MockerFixture
 
 from codereviewbuddy.io_tap import (
+    ISSUE_65_TRACKING_TAG,
     _extract_jsonrpc_info,
     _log_entry,
     _should_enable_io_tap,
@@ -46,6 +47,27 @@ class TestExtractJsonrpcInfo:
         assert info["rpc_id"] == "7"
         assert "rpc_method" not in info
 
+    def test_classifies_request_envelope(self):
+        info = _extract_jsonrpc_info('{"jsonrpc":"2.0","id":42,"method":"tools/call"}')
+        assert info["rpc_envelope"] == "request"
+
+    def test_classifies_notification_envelope(self):
+        info = _extract_jsonrpc_info('{"jsonrpc":"2.0","method":"notifications/progress"}')
+        assert info["rpc_envelope"] == "notification"
+
+    def test_classifies_response_envelope(self):
+        info = _extract_jsonrpc_info('{"jsonrpc":"2.0","id":9,"result":{"ok":true}}')
+        assert info["rpc_envelope"] == "response"
+
+    def test_extracts_error_code(self):
+        info = _extract_jsonrpc_info('{"jsonrpc":"2.0","id":3,"error":{"code":-32603,"message":"boom"}}')
+        assert info["rpc_envelope"] == "response"
+        assert info["rpc_error_code"] == -32603
+
+    def test_non_json_sets_parse_error_envelope(self):
+        info = _extract_jsonrpc_info("not-json")
+        assert info["rpc_envelope"] == "parse_error"
+
 
 class TestLogEntry:
     def test_writes_jsonl_entry(self, tmp_path: Path):
@@ -61,6 +83,7 @@ class TestLogEntry:
         assert "ts" in entry
         assert "mono" in entry
         assert entry["phase"] == "data"
+        assert entry["tracking_tag"] == ISSUE_65_TRACKING_TAG
 
     def test_phase_and_extra(self, tmp_path: Path):
         log_file = tmp_path / "tap.jsonl"
@@ -75,6 +98,14 @@ class TestLogEntry:
         entry = json.loads(log_file.read_text(encoding="utf-8"))
         assert entry["rpc_id"] == "5"
         assert entry["rpc_method"] == "tools/call"
+        assert entry["rpc_envelope"] == "request"
+
+    def test_logs_rpc_error_code(self, tmp_path: Path):
+        log_file = tmp_path / "tap.jsonl"
+        _log_entry(log_file, "stdout", b'{"jsonrpc":"2.0","id":11,"error":{"code":-32000,"message":"failed"}}')
+        entry = json.loads(log_file.read_text(encoding="utf-8"))
+        assert entry["rpc_envelope"] == "response"
+        assert entry["rpc_error_code"] == -32000
 
     def test_skips_empty_data(self, tmp_path: Path):
         log_file = tmp_path / "tap.jsonl"
@@ -262,6 +293,7 @@ class TestTappedStream:
         inner.buffer = io.BytesIO(b"")  # type: ignore[attr-defined]
         stream = _TappedStream(inner, "stdin", log_file)
         result = stream.readline()
+        assert isinstance(result, str)
         assert not result
         assert not log_file.exists()
 
@@ -280,6 +312,7 @@ class TestTappedStream:
         inner.buffer = io.BytesIO(b"")  # type: ignore[attr-defined]
         stream = _TappedStream(inner, "stdin", log_file)
         result = stream.read()
+        assert isinstance(result, str)
         assert not result
         assert not log_file.exists()
 

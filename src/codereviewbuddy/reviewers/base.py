@@ -49,14 +49,14 @@ class ReviewerAdapter(ABC):
     def auto_resolves_comments(self) -> bool:
         """Whether this reviewer auto-resolves addressed comments on new pushes."""
 
-    def classify_severity(self, comment_body: str) -> Severity:  # noqa: ARG002
+    def classify_severity(self, comment_body: str) -> Severity:  # noqa: ARG002, PLR6301
         """Classify the severity of a comment based on reviewer-specific markers.
 
         Each reviewer uses different formats (emojis, labels, etc.) to indicate
         severity.  Override in subclasses that have known formats.  The default
         returns ``info`` — the safest assumption for unknown formats.
         """
-        from codereviewbuddy.config import Severity
+        from codereviewbuddy.config import Severity  # noqa: PLC0415
 
         return Severity.INFO
 

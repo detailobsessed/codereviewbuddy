@@ -24,21 +24,48 @@ logger = logging.getLogger(__name__)
 IO_TAP_ENV = "CODEREVIEWBUDDY_IO_TAP"
 LOG_DIR = Path.home() / ".codereviewbuddy"
 LOG_FILE = LOG_DIR / "io_tap.jsonl"
+# Unique sentinel to grep/remove temporary diagnostics once issue #65 is resolved.
+ISSUE_65_TRACKING_TAG = "CRB-ISSUE-65-TRACKING"
 
 
 _JSONRPC_ID_RE = re.compile(r'"id"\s*:\s*(\d+|"[^"]*")')
 _JSONRPC_METHOD_RE = re.compile(r'"method"\s*:\s*"([^"]+)"')
 
 
-def _extract_jsonrpc_info(text: str) -> dict[str, str]:
+def _extract_jsonrpc_info(text: str) -> dict[str, str | int]:
     """Extract JSON-RPC id and method from a line for correlation."""
-    info: dict[str, str] = {}
+    info: dict[str, str | int] = {}
     m = _JSONRPC_ID_RE.search(text)
     if m:
         info["rpc_id"] = m.group(1).strip('"')
     m = _JSONRPC_METHOD_RE.search(text)
     if m:
         info["rpc_method"] = m.group(1)
+
+    try:
+        payload = json.loads(text)
+    except json.JSONDecodeError:
+        info["rpc_envelope"] = "parse_error"
+        return info
+
+    if not isinstance(payload, dict):
+        return info
+
+    has_method = "method" in payload
+    has_id = "id" in payload
+    has_result_or_error = "result" in payload or "error" in payload
+
+    if has_method and has_id:
+        info["rpc_envelope"] = "request"
+    elif has_method and not has_id:
+        info["rpc_envelope"] = "notification"
+    elif has_result_or_error:
+        info["rpc_envelope"] = "response"
+
+    error_obj = payload.get("error")
+    if isinstance(error_obj, dict) and isinstance(error_obj.get("code"), int):
+        info["rpc_error_code"] = error_obj["code"]
+
     return info
 
 
@@ -72,6 +99,7 @@ def _log_entry(
             "direction": direction,
             "bytes": len(data),
             "line": text[:500],
+            "tracking_tag": ISSUE_65_TRACKING_TAG,
         }
         entry.update(_extract_jsonrpc_info(text))
         if extra:

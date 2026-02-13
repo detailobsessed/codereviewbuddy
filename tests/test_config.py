@@ -98,7 +98,7 @@ class TestConfig:
     def test_self_improvement_defaults(self):
         config = Config()
         assert config.self_improvement.enabled is False
-        assert config.self_improvement.repo == ""
+        assert not config.self_improvement.repo
 
     def test_self_improvement_configured(self):
         from codereviewbuddy.config import SelfImprovementConfig
@@ -124,25 +124,48 @@ class TestConfig:
         from codereviewbuddy.config import SelfImprovementConfig
 
         config = SelfImprovementConfig(enabled=False)
-        assert config.repo == ""
+        assert not config.repo
 
     def test_diagnostics_defaults(self):
         from codereviewbuddy.config import DiagnosticsConfig
 
         config = DiagnosticsConfig()
         assert config.io_tap is False
+        assert config.tool_call_heartbeat is False
+        assert config.heartbeat_interval_ms == 5000
+        assert config.include_args_fingerprint is True
 
     def test_diagnostics_enabled(self):
         from codereviewbuddy.config import DiagnosticsConfig
 
-        config = DiagnosticsConfig(io_tap=True)
+        config = DiagnosticsConfig(
+            io_tap=True,
+            tool_call_heartbeat=True,
+            heartbeat_interval_ms=750,
+            include_args_fingerprint=False,
+        )
         assert config.io_tap is True
+        assert config.tool_call_heartbeat is True
+        assert config.heartbeat_interval_ms == 750
+        assert config.include_args_fingerprint is False
 
     def test_diagnostics_from_toml(self, tmp_path: Path):
         toml_file = tmp_path / ".codereviewbuddy.toml"
-        toml_file.write_text("[diagnostics]\nio_tap = true\n", encoding="utf-8")
+        toml_file.write_text(
+            """\
+[diagnostics]
+io_tap = true
+tool_call_heartbeat = true
+heartbeat_interval_ms = 1200
+include_args_fingerprint = false
+""",
+            encoding="utf-8",
+        )
         config = load_config(cwd=tmp_path)
         assert config.diagnostics.io_tap is True
+        assert config.diagnostics.tool_call_heartbeat is True
+        assert config.diagnostics.heartbeat_interval_ms == 1200
+        assert config.diagnostics.include_args_fingerprint is False
 
 
 class TestCanResolve:
@@ -150,7 +173,7 @@ class TestCanResolve:
         config = Config()
         allowed, reason = config.can_resolve("unblocked", Severity.INFO)
         assert allowed is True
-        assert reason == ""
+        assert not reason
 
     def test_blocked_severity(self):
         config = Config()
