@@ -14,6 +14,7 @@ if TYPE_CHECKING:
     from pytest_mock import MockerFixture
 
 from codereviewbuddy.io_tap import (
+    _extract_jsonrpc_info,
     _log_entry,
     _should_enable_io_tap,
     _TappedBuffer,
@@ -24,6 +25,26 @@ from codereviewbuddy.io_tap import (
 # ---------------------------------------------------------------------------
 # _log_entry
 # ---------------------------------------------------------------------------
+
+
+class TestExtractJsonrpcInfo:
+    def test_extracts_numeric_id(self):
+        info = _extract_jsonrpc_info('{"jsonrpc":"2.0","id":42,"method":"tools/call"}')
+        assert info["rpc_id"] == "42"
+        assert info["rpc_method"] == "tools/call"
+
+    def test_extracts_string_id(self):
+        info = _extract_jsonrpc_info('{"jsonrpc":"2.0","id":"abc","result":{}}')
+        assert info["rpc_id"] == "abc"
+
+    def test_no_id_or_method(self):
+        info = _extract_jsonrpc_info('{"jsonrpc":"2.0"}')
+        assert info == {}
+
+    def test_response_without_method(self):
+        info = _extract_jsonrpc_info('{"jsonrpc":"2.0","id":7,"result":{}}')
+        assert info["rpc_id"] == "7"
+        assert "rpc_method" not in info
 
 
 class TestLogEntry:
@@ -37,6 +58,22 @@ class TestLogEntry:
         assert entry["bytes"] == len(b'{"jsonrpc":"2.0"}')
         assert entry["line"] == '{"jsonrpc":"2.0"}'
         assert "ts" in entry
+        assert "mono" in entry
+        assert entry["phase"] == "data"
+
+    def test_phase_and_extra(self, tmp_path: Path):
+        log_file = tmp_path / "tap.jsonl"
+        _log_entry(log_file, "stdout", b"payload", phase="write_done", extra={"written": 7})
+        entry = json.loads(log_file.read_text(encoding="utf-8"))
+        assert entry["phase"] == "write_done"
+        assert entry["written"] == 7
+
+    def test_extracts_jsonrpc_fields(self, tmp_path: Path):
+        log_file = tmp_path / "tap.jsonl"
+        _log_entry(log_file, "stdin", b'{"jsonrpc":"2.0","id":5,"method":"tools/call"}')
+        entry = json.loads(log_file.read_text(encoding="utf-8"))
+        assert entry["rpc_id"] == "5"
+        assert entry["rpc_method"] == "tools/call"
 
     def test_skips_empty_data(self, tmp_path: Path):
         log_file = tmp_path / "tap.jsonl"
@@ -132,15 +169,21 @@ class TestTappedBuffer:
         assert result == b""
         assert not log_file.exists()
 
-    def test_write_logs_and_returns(self, tmp_path: Path):
+    def test_write_logs_two_phases(self, tmp_path: Path):
         log_file = tmp_path / "tap.jsonl"
         inner = io.BytesIO()
         buf = _TappedBuffer(inner, "stdout", log_file)
         n = buf.write(b"output")
         assert n == 6
-        assert log_file.exists()
-        entry = json.loads(log_file.read_text(encoding="utf-8"))
-        assert entry["dir"] == "stdout"
+        lines = log_file.read_text(encoding="utf-8").splitlines()
+        assert len(lines) == 2
+        start = json.loads(lines[0])
+        done = json.loads(lines[1])
+        assert start["phase"] == "write_start"
+        assert start["dir"] == "stdout"
+        assert done["phase"] == "write_done"
+        assert done["written"] == 6
+        assert done["mono"] >= start["mono"]
 
     def test_write_empty_no_log(self, tmp_path: Path):
         log_file = tmp_path / "tap.jsonl"
@@ -149,11 +192,16 @@ class TestTappedBuffer:
         buf.write(b"")
         assert not log_file.exists()
 
-    def test_flush_delegates(self):
+    def test_flush_logs_two_phases(self, tmp_path: Path):
+        log_file = tmp_path / "tap.jsonl"
         inner = MagicMock()
-        buf = _TappedBuffer(inner, "stdout", Path("/dev/null"))
+        buf = _TappedBuffer(inner, "stdout", log_file)
         buf.flush()
         inner.flush.assert_called_once()
+        lines = log_file.read_text(encoding="utf-8").splitlines()
+        assert len(lines) == 2
+        assert json.loads(lines[0])["phase"] == "flush_start"
+        assert json.loads(lines[1])["phase"] == "flush_done"
 
     def test_getattr_delegates(self):
         inner = MagicMock()
@@ -233,14 +281,18 @@ class TestTappedStream:
         assert result == ""
         assert not log_file.exists()
 
-    def test_write_logs_text(self, tmp_path: Path):
+    def test_write_logs_two_phases(self, tmp_path: Path):
         log_file = tmp_path / "tap.jsonl"
         inner = io.StringIO()
         inner.buffer = io.BytesIO()  # type: ignore[attr-defined]
         stream = _TappedStream(inner, "stdout", log_file)
         result = stream.write("output")
         assert result == 6
-        assert log_file.exists()
+        lines = log_file.read_text(encoding="utf-8").splitlines()
+        assert len(lines) == 2
+        assert json.loads(lines[0])["phase"] == "write_start"
+        assert json.loads(lines[1])["phase"] == "write_done"
+        assert json.loads(lines[1])["written"] == 6
 
     def test_write_empty_no_log(self, tmp_path: Path):
         log_file = tmp_path / "tap.jsonl"

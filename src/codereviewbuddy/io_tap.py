@@ -14,6 +14,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import time
 from pathlib import Path
 from typing import Any
@@ -25,18 +26,55 @@ LOG_DIR = Path.home() / ".codereviewbuddy"
 LOG_FILE = LOG_DIR / "io_tap.jsonl"
 
 
-def _log_entry(log_path: Path, direction: str, data: bytes) -> None:
-    """Append a single I/O event to the JSONL log file."""
+_JSONRPC_ID_RE = re.compile(r'"id"\s*:\s*(\d+|"[^"]*")')
+_JSONRPC_METHOD_RE = re.compile(r'"method"\s*:\s*"([^"]+)"')
+
+
+def _extract_jsonrpc_info(text: str) -> dict[str, str]:
+    """Extract JSON-RPC id and method from a line for correlation."""
+    info: dict[str, str] = {}
+    m = _JSONRPC_ID_RE.search(text)
+    if m:
+        info["rpc_id"] = m.group(1).strip('"')
+    m = _JSONRPC_METHOD_RE.search(text)
+    if m:
+        info["rpc_method"] = m.group(1)
+    return info
+
+
+def _log_entry(
+    log_path: Path,
+    direction: str,
+    data: bytes,
+    *,
+    phase: str = "data",
+    extra: dict[str, object] | None = None,
+) -> None:
+    """Append a single I/O event to the JSONL log file.
+
+    Parameters
+    ----------
+    phase:
+        One of "data" (legacy one-shot), "write_start", "write_done",
+        "flush_start", "flush_done".
+    extra:
+        Additional fields merged into the log entry.
+    """
     try:
         text = data.decode("utf-8", errors="replace").strip()
         if not text:
             return
-        entry = {
+        entry: dict[str, object] = {
             "ts": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
+            "mono": time.monotonic(),
+            "phase": phase,
             "dir": direction,
             "bytes": len(data),
             "line": text[:500],
         }
+        entry.update(_extract_jsonrpc_info(text))
+        if extra:
+            entry.update(extra)
         with log_path.open("a", encoding="utf-8") as f:
             f.write(json.dumps(entry) + "\n")
     except Exception:
@@ -88,14 +126,19 @@ class _TappedBuffer:
         return result
 
     def write(self, data: Any) -> int:
+        if data:
+            raw = data if isinstance(data, bytes) else bytes(data)
+            _log_entry(self._log_path, self._direction, raw, phase="write_start")
         result = self._wrapped.write(data)
         if data:
             raw = data if isinstance(data, bytes) else bytes(data)
-            _log_entry(self._log_path, self._direction, raw)
+            _log_entry(self._log_path, self._direction, raw, phase="write_done", extra={"written": result})
         return result
 
     def flush(self) -> None:
+        _log_entry(self._log_path, self._direction, b"<flush>", phase="flush_start")
         self._wrapped.flush()
+        _log_entry(self._log_path, self._direction, b"<flush>", phase="flush_done")
 
 
 class _TappedStream:
@@ -147,9 +190,13 @@ class _TappedStream:
         return result
 
     def write(self, data: Any) -> Any:
+        if data:
+            raw = data if isinstance(data, bytes) else data.encode("utf-8", errors="replace")
+            _log_entry(self._log_path, self._direction, raw, phase="write_start")
         result = self._wrapped.write(data)
         if data:
-            _log_entry(self._log_path, self._direction, data if isinstance(data, bytes) else data.encode("utf-8", errors="replace"))
+            raw = data if isinstance(data, bytes) else data.encode("utf-8", errors="replace")
+            _log_entry(self._log_path, self._direction, raw, phase="write_done", extra={"written": result})
         return result
 
 
