@@ -401,7 +401,7 @@ def _comment_out_unknown_keys(target: Path) -> list[str]:
         parts = dotted.split(".")
         container = doc
         for part in parts[:-1]:
-            container = container[part]
+            container = container[part]  # type: ignore[not-subscriptable]
         key = parts[-1]
         value = container[key]  # type: ignore[not-subscriptable]
         del container[key]  # type: ignore[not-subscriptable]
@@ -441,7 +441,7 @@ def _remove_unknown_keys(target: Path) -> list[str]:
         parts = dotted.split(".")
         container = doc
         for part in parts[:-1]:
-            container = container[part]
+            container = container[part]  # type: ignore[not-subscriptable]
         del container[parts[-1]]  # type: ignore[not-subscriptable]
 
     target.write_text(tomlkit.dumps(doc), encoding="utf-8")
