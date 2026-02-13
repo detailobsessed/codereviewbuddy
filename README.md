@@ -5,14 +5,14 @@
 [![release](https://img.shields.io/github/v/release/detailobsessed/codereviewbuddy)](https://github.com/detailobsessed/codereviewbuddy/releases)
 [![documentation](https://img.shields.io/badge/docs-mkdocs-blue.svg)](https://detailobsessed.github.io/codereviewbuddy/)
 [![Python 3.14+](https://img.shields.io/badge/python-3.14+-blue.svg)](https://www.python.org/downloads/)
-[![FastMCP v3 beta](https://img.shields.io/badge/FastMCP-v3.0.0b2-orange.svg)](https://github.com/jlowin/fastmcp)
+[![FastMCP v3 prerelease](https://img.shields.io/badge/FastMCP-v3.0.0rc1-orange.svg)](https://github.com/jlowin/fastmcp)
 
 An MCP server that helps your AI coding agent interact with AI code reviewers — smoothly.
 
 Manages review comments from **Unblocked**, **Devin**, and **CodeRabbit** on GitHub PRs with staleness detection, batch resolution, re-review triggering, and issue tracking.
 
 > [!WARNING]
-> **Bleeding edge.** This server runs on **Python 3.14** and **FastMCP v3 beta** (`>=3.0.0b2`). FastMCP v3 is pre-release software — APIs may change before stable. We track the beta closely and pin to specific beta versions in `uv.lock` for reproducibility, but be aware that upstream breaking changes are possible.
+> **Bleeding edge.** This server runs on **Python 3.14** and **FastMCP v3 prerelease** (`>=3.0.0rc1`). FastMCP v3 is pre-release software — APIs may change before stable. We track it closely and pin versions in `uv.lock` for reproducibility, but be aware that upstream breaking changes are possible.
 
 ## Features
 
@@ -91,7 +91,7 @@ Add to your MCP settings (`~/.codeium/windsurf/mcp_config.json`):
 }
 ```
 
-> **Why `--prerelease=allow`?** codereviewbuddy depends on FastMCP v3 beta (`>=3.0.0b2`). Without this flag, `uvx` refuses to resolve pre-release dependencies.
+> **Why `--prerelease=allow`?** codereviewbuddy depends on FastMCP v3 prerelease (`>=3.0.0rc1`). Without this flag, `uvx` refuses to resolve pre-release dependencies.
 >
 > **Why `@latest`?** Without it, `uvx` caches the first resolved version and never upgrades automatically.
 
@@ -137,6 +137,20 @@ Add to `.cursor/mcp.json` in your project:
   }
 }
 ```
+
+### Troubleshooting
+
+If your MCP client reports:
+
+`No module named 'fastmcp.server.tasks.routing'`
+
+that runtime is using an incompatible FastMCP environment.
+
+Use one of these fixes:
+
+1. Prefer `uvx --prerelease=allow codereviewbuddy@latest` in MCP client config.
+2. For local source checkouts, launch with `uv run --directory /path/to/codereviewbuddy codereviewbuddy`.
+3. Reinstall the tool to refresh cached deps: `uv tool install --reinstall codereviewbuddy`.
 
 ## MCP Tools
 

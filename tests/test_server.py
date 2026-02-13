@@ -13,7 +13,7 @@ if TYPE_CHECKING:
 
 from codereviewbuddy.config import CONFIG_FILENAME, init_config, update_config
 from codereviewbuddy.gh import GhError, GhNotAuthenticatedError, GhNotFoundError
-from codereviewbuddy.server import _config_cmd, _resolve_pr_number, check_prerequisites
+from codereviewbuddy.server import _config_cmd, _resolve_pr_number, check_fastmcp_runtime, check_prerequisites
 
 
 class TestCheckPrerequisites:
@@ -30,6 +30,29 @@ class TestCheckPrerequisites:
         mocker.patch("codereviewbuddy.server.gh.check_auth", side_effect=GhNotAuthenticatedError("not auth"))
         with pytest.raises(GhNotAuthenticatedError):
             check_prerequisites()
+
+
+class TestCheckFastMcpRuntime:
+    def test_success(self, mocker: MockerFixture):
+        mocker.patch("codereviewbuddy.server.importlib.util.find_spec", return_value=object())
+        mocker.patch("codereviewbuddy.server.importlib.import_module", return_value=object())
+        check_fastmcp_runtime()  # should not raise
+
+    def test_find_spec_module_not_found_treated_as_missing(self, mocker: MockerFixture):
+        mocker.patch("codereviewbuddy.server.importlib.util.find_spec", side_effect=ModuleNotFoundError("no module"))
+        with pytest.raises(RuntimeError, match=r"missing fastmcp\.server\.tasks\.routing"):
+            check_fastmcp_runtime()
+
+    def test_missing_task_routing_module(self, mocker: MockerFixture):
+        mocker.patch("codereviewbuddy.server.importlib.util.find_spec", return_value=None)
+        with pytest.raises(RuntimeError, match=r"missing fastmcp\.server\.tasks\.routing"):
+            check_fastmcp_runtime()
+
+    def test_import_module_failure_raises_runtime_error(self, mocker: MockerFixture):
+        mocker.patch("codereviewbuddy.server.importlib.util.find_spec", return_value=object())
+        mocker.patch("codereviewbuddy.server.importlib.import_module", side_effect=ImportError("bad import"))
+        with pytest.raises(RuntimeError, match=r"failed to import"):
+            check_fastmcp_runtime()
 
 
 class TestInitConfig:

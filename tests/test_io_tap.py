@@ -55,6 +55,7 @@ class TestLogEntry:
         assert len(lines) == 1
         entry = json.loads(lines[0])
         assert entry["dir"] == "stdin"
+        assert entry["direction"] == "stdin"
         assert entry["bytes"] == len(b'{"jsonrpc":"2.0"}')
         assert entry["line"] == '{"jsonrpc":"2.0"}'
         assert "ts" in entry
@@ -109,6 +110,7 @@ class TestLogEntry:
         _log_entry(log_file, "stdin", b"\xff\xfe invalid")
         entry = json.loads(log_file.read_text(encoding="utf-8"))
         assert entry["dir"] == "stdin"
+        assert entry["direction"] == "stdin"
 
 
 # ---------------------------------------------------------------------------
@@ -260,7 +262,7 @@ class TestTappedStream:
         inner.buffer = io.BytesIO(b"")  # type: ignore[attr-defined]
         stream = _TappedStream(inner, "stdin", log_file)
         result = stream.readline()
-        assert result == ""
+        assert not result
         assert not log_file.exists()
 
     def test_read_logs_text(self, tmp_path: Path):
@@ -278,7 +280,7 @@ class TestTappedStream:
         inner.buffer = io.BytesIO(b"")  # type: ignore[attr-defined]
         stream = _TappedStream(inner, "stdin", log_file)
         result = stream.read()
-        assert result == ""
+        assert not result
         assert not log_file.exists()
 
     def test_write_logs_two_phases(self, tmp_path: Path):

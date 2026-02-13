@@ -7,7 +7,10 @@ Authentication is handled by the `gh` CLI — no tokens needed.
 from __future__ import annotations
 
 import asyncio
+import importlib
+import importlib.util
 import logging
+import sys
 from typing import TYPE_CHECKING
 
 from fastmcp import FastMCP
@@ -37,6 +40,7 @@ if TYPE_CHECKING:
     from collections.abc import AsyncIterator
 
 logger = logging.getLogger(__name__)
+_FASTMCP_TASK_ROUTING_MODULE = "fastmcp.server.tasks.routing"
 
 
 def _resolve_pr_number(pr_number: int | None) -> int:
@@ -49,6 +53,7 @@ def _resolve_pr_number(pr_number: int | None) -> int:
 @lifespan
 async def check_gh_cli(server: FastMCP) -> AsyncIterator[dict[str, object] | None]:  # noqa: ARG001, RUF029
     """Verify gh CLI is installed and authenticated on server startup."""
+    check_fastmcp_runtime()
     check_prerequisites()
     config = load_config()
     set_config(config)
@@ -472,8 +477,6 @@ async def triage_review_comments(
 
 def main() -> None:
     """Run the codereviewbuddy MCP server, or handle CLI subcommands."""
-    import sys
-
     if len(sys.argv) > 1 and sys.argv[1] == "init":
         print("'codereviewbuddy init' has been renamed to 'codereviewbuddy config --init'")  # noqa: T201
         _config_cmd(["--init"])
@@ -483,7 +486,7 @@ def main() -> None:
         _config_cmd(sys.argv[2:])
         return
 
-    from codereviewbuddy.io_tap import install_io_tap
+    from codereviewbuddy.io_tap import install_io_tap  # noqa: PLC0415
 
     install_io_tap()
     mcp.run()
@@ -491,7 +494,7 @@ def main() -> None:
 
 def _config_cmd(args: list[str]) -> None:
     """Handle ``codereviewbuddy config [--init | --update | --clean]``."""
-    from codereviewbuddy.config import clean_config, init_config, update_config
+    from codereviewbuddy.config import clean_config, init_config, update_config  # noqa: PLC0415
 
     if "--init" in args:
         init_config()
@@ -519,3 +522,33 @@ def check_prerequisites() -> None:
     except gh.GhNotAuthenticatedError:
         logger.exception("gh CLI not authenticated. Run: gh auth login")
         raise
+
+
+def check_fastmcp_runtime() -> None:
+    """Fail fast if runtime FastMCP is missing required task routing internals."""
+    try:
+        spec = importlib.util.find_spec(_FASTMCP_TASK_ROUTING_MODULE)
+    except ModuleNotFoundError:
+        spec = None
+
+    if spec is None:
+        msg = (
+            "Incompatible FastMCP runtime: missing fastmcp.server.tasks.routing. "
+            "Make sure codereviewbuddy is launched with its managed environment "
+            "(for example: `uv run codereviewbuddy`)."
+        )
+        logger.error(msg)
+        raise RuntimeError(msg)
+
+    try:
+        importlib.import_module(_FASTMCP_TASK_ROUTING_MODULE)
+    except Exception as exc:
+        msg = (
+            "Incompatible FastMCP runtime: found fastmcp.server.tasks.routing "
+            "but failed to import it. Make sure codereviewbuddy is launched "
+            "with its managed environment (for example: `uv run codereviewbuddy`)."
+        )
+        logger.exception(msg)
+        raise RuntimeError(msg) from exc
+
+    logger.info("FastMCP runtime OK: %s", _FASTMCP_TASK_ROUTING_MODULE)

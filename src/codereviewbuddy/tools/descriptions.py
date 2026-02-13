@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import re
 from typing import TYPE_CHECKING
 
@@ -31,14 +32,16 @@ _ISSUE_REF_PATTERN = re.compile(
     re.IGNORECASE,
 )
 
+_MIN_NON_BOILERPLATE_CHARS = 20
+_BOILERPLATE_MATCH_THRESHOLD = 3
+_MIN_DESCRIPTION_CHARS = 50
+
 
 def _fetch_pr_info(pr_number: int, repo: str | None = None, cwd: str | None = None) -> dict:
     """Fetch PR title, body, and URL via gh CLI."""
     args = ["pr", "view", str(pr_number), "--json", "number,title,body,url"]
     if repo:
         args.extend(["--repo", repo])
-    import json
-
     raw = gh.run_gh(*args, cwd=cwd)
     return json.loads(raw)
 
@@ -53,11 +56,11 @@ def _is_boilerplate(body: str) -> bool:
     stripped = re.sub(r"^#{1,6}\s+.*", "", stripped, flags=re.MULTILINE)
     stripped = stripped.strip()
     # If very little remains after stripping, it's boilerplate
-    if len(stripped) < 20:
+    if len(stripped) < _MIN_NON_BOILERPLATE_CHARS:
         return True
     # Check for known boilerplate patterns
     matches = sum(1 for p in _BOILERPLATE_PATTERNS if re.search(p, body, re.IGNORECASE))
-    return matches >= 3
+    return matches >= _BOILERPLATE_MATCH_THRESHOLD
 
 
 def _analyze_pr(data: dict) -> PRDescriptionInfo:
@@ -79,7 +82,7 @@ def _analyze_pr(data: dict) -> PRDescriptionInfo:
         missing.append("body is template boilerplate only")
     if not issue_refs:
         missing.append("no linked issues")
-    if len(body.strip()) < 50 and has_body and not boilerplate:
+    if len(body.strip()) < _MIN_DESCRIPTION_CHARS and has_body and not boilerplate:
         missing.append("description is very short")
 
     return PRDescriptionInfo(
@@ -124,6 +127,7 @@ async def review_pr_descriptions(
 
     if ctx and total:
         await ctx.report_progress(total, total)
+    if ctx:
         await ctx.info(f"Reviewed {total} PR description(s)")
 
     return PRDescriptionReviewResult(descriptions=descriptions)

@@ -69,6 +69,7 @@ def _log_entry(
             "mono": time.monotonic(),
             "phase": phase,
             "dir": direction,
+            "direction": direction,
             "bytes": len(data),
             "line": text[:500],
         }
@@ -207,7 +208,7 @@ def _should_enable_io_tap() -> bool:
         return env_val == "1"
 
     try:
-        from codereviewbuddy.config import load_config
+        from codereviewbuddy.config import load_config  # noqa: PLC0415
 
         return load_config().diagnostics.io_tap
     except Exception:
@@ -232,7 +233,7 @@ def install_io_tap() -> bool:
         logger.warning("Failed to create I/O tap log directory: %s", LOG_DIR)
         return False
 
-    import sys
+    import sys  # noqa: PLC0415
 
     original_stdin = sys.stdin
     original_stdout = sys.stdout
