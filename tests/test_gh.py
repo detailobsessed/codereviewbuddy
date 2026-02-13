@@ -246,6 +246,23 @@ class TestRunGhLogging:
         assert entry["error"] == "FileNotFoundError"
         assert entry["cmd"] == "auth status"
 
+    def test_log_rotation_keeps_last_entries(self, mocker: MockerFixture, tmp_path):
+        from codereviewbuddy import gh as gh_module
+
+        log_file = tmp_path / "gh_calls.jsonl"
+        mocker.patch("codereviewbuddy.gh._GH_LOG_DIR", tmp_path)
+        mocker.patch("codereviewbuddy.gh._GH_LOG_FILE", log_file)
+        mocker.patch("codereviewbuddy.gh._MAX_GH_LOG_LINES", 3)
+        mocker.patch("codereviewbuddy.gh._GH_ROTATE_EVERY_WRITES", 1)
+        mocker.patch("codereviewbuddy.gh._gh_log_state", {"write_count": 0})
+
+        for i in range(5):
+            gh_module._log_gh_call({"i": i})
+
+        lines = log_file.read_text(encoding="utf-8").splitlines()
+        assert len(lines) == 3
+        assert [json.loads(line)["i"] for line in lines] == [2, 3, 4]
+
 
 class TestCheckAuth:
     def test_authenticated(self, mocker: MockerFixture):

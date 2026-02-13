@@ -40,6 +40,10 @@ All started/completed/heartbeat entries include:
 
 - `tracking_tag: "CRB-ISSUE-65-TRACKING"`
 
+Rotation behavior:
+
+- `tool_calls.jsonl` truncates to the most recent 1000 lines every 100 writes.
+
 ### 2) Subprocess-level gh CLI timing (`gh_calls.jsonl`)
 
 File: `src/codereviewbuddy/gh.py`
@@ -57,6 +61,10 @@ Every `gh` CLI subprocess invocation is logged with:
 All entries include:
 
 - `tracking_tag: "CRB-ISSUE-65-TRACKING"`
+
+Rotation behavior:
+
+- `gh_calls.jsonl` truncates to the most recent 10,000 lines every 100 writes.
 
 ### Analysis query (jq)
 
@@ -77,6 +85,11 @@ Enhanced JSON-RPC metadata extraction:
 Added:
 
 - `tracking_tag: "CRB-ISSUE-65-TRACKING"` to all io tap rows.
+
+Rotation behavior:
+
+- On startup, `io_tap.jsonl` is truncated to the most recent 10,000 lines.
+- During runtime, it truncates to the most recent 10,000 lines every 100 writes.
 
 ### 4) Runtime diagnostics controls
 

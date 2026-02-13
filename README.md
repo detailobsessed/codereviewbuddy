@@ -125,6 +125,39 @@ Add to `.cursor/mcp.json` in your project:
 }
 ```
 
+### Other major MCP clients (VS Code, Claude Code, Gemini CLI, ChatGPT, etc.)
+
+For clients not listed above, use the MCP install-instructions generator to get the exact config block and file path for your client version:
+
+- Hosted: <https://hyprmcp.com/mcp-install-instructions-generator/>
+- CLI:
+
+```bash
+npx @hyprmcp/mcp-install-instructions-generator@latest codereviewbuddy --output md
+```
+
+You can target a specific client explicitly, for example:
+
+```bash
+npx @hyprmcp/mcp-install-instructions-generator@latest codereviewbuddy --target vscode --output md
+npx @hyprmcp/mcp-install-instructions-generator@latest codereviewbuddy --target claude-code --output md
+npx @hyprmcp/mcp-install-instructions-generator@latest codereviewbuddy --target gemini-cli --output md
+npx @hyprmcp/mcp-install-instructions-generator@latest codereviewbuddy --target chatgpt --output md
+```
+
+Use the same runtime settings in every client:
+
+```json
+{
+  "mcpServers": {
+    "codereviewbuddy": {
+      "command": "uvx",
+      "args": ["--prerelease=allow", "codereviewbuddy@latest"]
+    }
+  }
+}
+```
+
 ### From source (development)
 
 ```json
