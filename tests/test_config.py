@@ -345,6 +345,21 @@ class TestCollectUnknownKeys:
         assert "pr_descriptions.require_review" in unknown
         assert "foo" in unknown
 
+    def test_unknown_key_within_known_reviewer(self):
+        """Typos like [reviewers.devin] bogus_key = true should be flagged."""
+        data = {"reviewers": {"devin": {"enabled": True, "bogus_key": True}}}
+        assert _collect_unknown_keys(data, Config) == ["reviewers.devin.bogus_key"]
+
+    def test_unknown_key_within_unknown_reviewer(self):
+        """Even unknown reviewer names should have their fields validated."""
+        data = {"reviewers": {"future_bot": {"enabled": True, "typo_field": 42}}}
+        assert _collect_unknown_keys(data, Config) == ["reviewers.future_bot.typo_field"]
+
+    def test_valid_keys_within_reviewer_not_flagged(self):
+        """All valid ReviewerConfig fields should pass without warnings."""
+        data = {"reviewers": {"devin": {"enabled": True, "auto_resolve_stale": False, "resolve_levels": ["info"]}}}
+        assert _collect_unknown_keys(data, Config) == []
+
 
 class TestLoadConfigWarnings:
     def test_warns_on_unknown_keys(self, tmp_path: Path, caplog: pytest.LogCaptureFixture):

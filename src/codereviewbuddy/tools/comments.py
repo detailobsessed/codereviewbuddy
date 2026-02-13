@@ -60,6 +60,15 @@ query($owner: String!, $repo: String!, $pr: Int!, $cursor: String) {
 }
 """
 
+
+def _check_graphql_errors(result: dict[str, Any], context: str) -> None:
+    """Raise GhError if a GraphQL response contains errors."""
+    errors = result.get("errors")
+    if errors:
+        msg = f"GraphQL error in {context}: {errors[0].get('message', errors)}"
+        raise gh.GhError(msg)
+
+
 # GraphQL mutation to resolve a review thread
 _RESOLVE_THREAD_MUTATION = """
 mutation($threadId: ID!) {
@@ -411,6 +420,33 @@ async def _collect_all_threads(
     return [t for t in threads if config.get_reviewer(t.reviewer).enabled]
 
 
+async def _collect_inline_threads_only(  # noqa: PLR0913, PLR0917
+    owner: str,
+    repo_name: str,
+    pr_number: int,
+    status: str | None,
+    cwd: str | None,
+    ctx: Context | None,
+) -> list[ReviewThread]:
+    """Lightweight thread fetch — inline threads only, no staleness, no PR reviews, no bot comments.
+
+    Skips commit fetch, compare API (staleness), PR-level reviews, bot comments,
+    and stack discovery.  Suitable for callers that only need thread status,
+    comment bodies, and reviewer identification (e.g. triage).
+    """
+    raw_threads = await _fetch_raw_threads(owner, repo_name, pr_number, cwd, ctx)
+    threads = _parse_threads(raw_threads, pr_number)
+
+    config = get_config()
+    threads = [t for t in threads if config.get_reviewer(t.reviewer).enabled]
+
+    if status:
+        target = CommentStatus(status)
+        threads = [t for t in threads if t.status == target]
+
+    return threads
+
+
 async def list_review_comments(
     pr_number: int,
     repo: str | None = None,
@@ -572,6 +608,7 @@ def resolve_comment(
             raise gh.GhError(reason)
 
     result = gh.graphql(_RESOLVE_THREAD_MUTATION, variables={"threadId": thread_id}, cwd=cwd)
+    _check_graphql_errors(result, f"resolve thread {thread_id}")
 
     thread_data = result.get("data", {}).get("resolveReviewThread", {}).get("thread", {})
     if thread_data.get("isResolved"):
@@ -639,7 +676,8 @@ async def resolve_stale_comments(
         mutations.append(f'  t{i}: resolveReviewThread(input: {{threadId: "{thread.thread_id}"}}) {{ thread {{ id isResolved }} }}')
 
     batch_mutation = "mutation {\n" + "\n".join(mutations) + "\n}"
-    await call_sync_fn_in_threadpool(gh.graphql, batch_mutation, cwd=cwd)
+    result = await call_sync_fn_in_threadpool(gh.graphql, batch_mutation, cwd=cwd)
+    _check_graphql_errors(result, f"batch resolve {len(allowed)} threads on PR #{pr_number}")
 
     resolved_ids = [t.thread_id for t in allowed]
     if ctx:
@@ -720,10 +758,7 @@ def _reply_to_review_thread(
         variables={"threadId": thread_id, "body": body},
         cwd=cwd,
     )
-    errors = result.get("errors")
-    if errors:
-        msg = f"GraphQL error replying to {thread_id}: {errors[0].get('message', errors)}"
-        raise gh.GhError(msg)
+    _check_graphql_errors(result, f"reply to thread {thread_id}")
     return f"Replied to thread {thread_id} on PR #{pr_number}"
 
 
@@ -816,14 +851,19 @@ async def triage_review_comments(
     items: list[TriageItem] = []
     issue_items: list[TriageItem] = []
 
+    if repo:
+        owner, repo_name = repo.split("/", 1)
+    else:
+        owner, repo_name = await call_sync_fn_in_threadpool(gh.get_repo_info, cwd=cwd)
+
     total = len(pr_numbers)
     for i, pr_number in enumerate(pr_numbers):
         if ctx and total:
             await ctx.report_progress(i, total)
 
-        summary = await list_review_comments(pr_number, repo=repo, status="unresolved", cwd=cwd, ctx=ctx)
+        threads = await _collect_inline_threads_only(owner, repo_name, pr_number, status="unresolved", cwd=cwd, ctx=ctx)
 
-        for thread in summary.threads:
+        for thread in threads:
             # Skip PR-level reviews — they're summary wrappers, not actionable
             if thread.is_pr_review:
                 continue

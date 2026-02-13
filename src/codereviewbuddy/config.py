@@ -185,6 +185,20 @@ class Config(BaseModel):
         return True, ""
 
 
+def _get_dict_value_model(annotation: Any) -> type[BaseModel] | None:
+    """Extract the value model from ``dict[str, SomeModel]`` type annotations.
+
+    Returns the model class if annotation is ``dict[str, <BaseModel subclass>]``,
+    otherwise ``None``.
+    """
+    import typing  # noqa: PLC0415
+
+    args = typing.get_args(annotation)
+    if len(args) == 2 and isinstance(args[1], type) and issubclass(args[1], BaseModel):  # noqa: PLR2004
+        return args[1]
+    return None
+
+
 def _collect_unknown_keys(
     data: dict[str, Any],
     model_cls: type[BaseModel],
@@ -206,11 +220,20 @@ def _collect_unknown_keys(
         if key not in known:
             unknown.append(dotted)
             continue
-        # Recurse into sub-models (but not dicts of sub-models like reviewers)
         field_info = model_cls.model_fields[key]
         annotation = field_info.annotation
+        # Recurse into sub-models
         if isinstance(annotation, type) and issubclass(annotation, BaseModel) and isinstance(value, dict):
             unknown.extend(_collect_unknown_keys(value, annotation, prefix=f"{dotted}."))
+            continue
+        # Recurse into dict[str, SubModel] (e.g. reviewers: dict[str, ReviewerConfig]).
+        # Unknown dict *keys* are allowed (forward-compat for new reviewer names),
+        # but unknown fields *within* each value are flagged.
+        value_model = _get_dict_value_model(annotation)
+        if value_model is not None and isinstance(value, dict):
+            for sub_key, sub_value in value.items():
+                if isinstance(sub_value, dict):
+                    unknown.extend(_collect_unknown_keys(sub_value, value_model, prefix=f"{dotted}.{sub_key}."))
 
     return unknown
 
