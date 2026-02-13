@@ -20,7 +20,7 @@
 
 # tools
 .coverage*
-.testmondata
+.testmondata*
 /.pdm-build/
 /htmlcov/
 /site/
