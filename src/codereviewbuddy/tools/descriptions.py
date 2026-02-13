@@ -117,12 +117,12 @@ async def review_pr_descriptions(
     total = len(pr_numbers)
 
     for i, pr_number in enumerate(pr_numbers):
-        if ctx:
+        if ctx and total:
             await ctx.report_progress(i, total)
         data = await call_sync_fn_in_threadpool(_fetch_pr_info, pr_number, repo=repo)
         descriptions.append(_analyze_pr(data))
 
-    if ctx:
+    if ctx and total:
         await ctx.report_progress(total, total)
         await ctx.info(f"Reviewed {total} PR description(s)")
 

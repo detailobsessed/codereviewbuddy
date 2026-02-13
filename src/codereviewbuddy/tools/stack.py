@@ -389,7 +389,7 @@ async def summarize_review_status(
     from codereviewbuddy.tools.comments import _get_pr_commits
 
     for i, pr_num in enumerate(pr_numbers):
-        if ctx:
+        if ctx and total:
             await ctx.report_progress(i, total)
         commits = await call_sync_fn_in_threadpool(
             _get_pr_commits,
@@ -408,7 +408,7 @@ async def summarize_review_status(
         )
         summaries.append(summary)
 
-    if ctx:
+    if ctx and total:
         await ctx.report_progress(total, total)
 
     total_unresolved = sum(s.unresolved for s in summaries)
