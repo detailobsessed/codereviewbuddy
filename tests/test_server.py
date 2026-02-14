@@ -13,7 +13,7 @@ if TYPE_CHECKING:
 
 from codereviewbuddy.config import CONFIG_FILENAME, init_config, update_config
 from codereviewbuddy.gh import GhError, GhNotAuthenticatedError, GhNotFoundError
-from codereviewbuddy.server import _config_cmd, _resolve_pr_number, check_fastmcp_runtime, check_prerequisites
+from codereviewbuddy.server import _config_cmd, _get_workspace_cwd, _resolve_pr_number, check_fastmcp_runtime, check_prerequisites
 
 
 class TestCheckPrerequisites:
@@ -164,3 +164,39 @@ class TestMain:
 
         main()
         mock_run.assert_called_once()
+
+
+class TestGetWorkspaceCwd:
+    """Tests for _get_workspace_cwd — MCP roots → cwd extraction (#142)."""
+
+    async def test_returns_none_without_context(self):
+        assert await _get_workspace_cwd(None) is None
+
+    async def test_extracts_path_from_file_root(self, mocker: MockerFixture):
+        from unittest.mock import AsyncMock
+
+        from pydantic import FileUrl
+
+        root = mocker.MagicMock()
+        root.uri = FileUrl("file:///Users/alice/repos/myproject")
+        ctx = mocker.MagicMock()
+        ctx.list_roots = AsyncMock(return_value=[root])
+
+        result = await _get_workspace_cwd(ctx)
+        assert result == "/Users/alice/repos/myproject"
+
+    async def test_returns_none_when_roots_empty(self, mocker: MockerFixture):
+        from unittest.mock import AsyncMock
+
+        ctx = mocker.MagicMock()
+        ctx.list_roots = AsyncMock(return_value=[])
+
+        assert await _get_workspace_cwd(ctx) is None
+
+    async def test_returns_none_on_exception(self, mocker: MockerFixture):
+        from unittest.mock import AsyncMock
+
+        ctx = mocker.MagicMock()
+        ctx.list_roots = AsyncMock(side_effect=Exception("roots not supported"))
+
+        assert await _get_workspace_cwd(ctx) is None

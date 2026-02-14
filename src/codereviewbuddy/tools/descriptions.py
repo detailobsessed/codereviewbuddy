@@ -100,6 +100,7 @@ def _analyze_pr(data: dict) -> PRDescriptionInfo:
 async def review_pr_descriptions(
     pr_numbers: list[int],
     repo: str | None = None,
+    cwd: str | None = None,
     ctx: Context | None = None,
 ) -> PRDescriptionReviewResult:
     """Fetch and analyze PR descriptions for quality issues.
@@ -122,7 +123,7 @@ async def review_pr_descriptions(
     for i, pr_number in enumerate(pr_numbers):
         if ctx and total:
             await ctx.report_progress(i, total)
-        data = await call_sync_fn_in_threadpool(_fetch_pr_info, pr_number, repo=repo)
+        data = await call_sync_fn_in_threadpool(_fetch_pr_info, pr_number, repo=repo, cwd=cwd)
         descriptions.append(_analyze_pr(data))
 
     if ctx and total:
