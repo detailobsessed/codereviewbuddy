@@ -95,18 +95,27 @@ response lists all PRs in order, bottom-to-top. This is cached per session — t
 call fetches, subsequent calls reuse. Use `list_stack_review_comments` with the
 discovered PR numbers to get full thread details across the stack.
 
-## Typical workflow after pushing a fix
+## Review workflow — step by step
 
-1. Call `summarize_review_status` for a quick stack-wide overview (severity counts,
-   no full bodies — saves tokens). It auto-discovers the stack if you omit `pr_numbers`.
-2. Call `triage_review_comments` with the PR numbers to get only threads needing action.
-   Each item has a pre-classified severity and suggested action (`fix`, `reply`, or
-   `create_issue`). This replaces manual filtering of `list_review_comments` output.
-3. For threads on files you changed, call `resolve_stale_comments` to batch-resolve them.
-4. Reply to non-stale threads with `reply_to_comment` if you addressed them differently.
-5. Call `request_rereview` to trigger a fresh review cycle.
-6. If you need full thread details (all comments, reviewer statuses), fall back to
-   `list_review_comments` for a specific PR.
+Follow this exact sequence when reviewing or responding to AI review comments:
+
+1. **Summarize** — `summarize_review_status()` (omit `pr_numbers` → auto-discover stack).
+   Check which PRs have unresolved threads and their severity breakdown.
+2. **Triage** — `triage_review_comments(pr_numbers)` with the discovered PR numbers.
+   Returns only actionable threads, pre-classified by severity with a suggested action.
+3. **Process by severity** — work through findings **bugs first**, then flagged, then
+   warnings, then info. Never process in file order — severity order matters.
+4. **Fix** — for each `action: "fix"` item (🔴 bug, 🚩 flagged), implement the fix.
+5. **Reply** — call `reply_to_comment` for every bug and flagged thread you fixed,
+   explaining what you changed and the commit hash. **Never silently resolve bug (🔴)
+   or flagged (🚩) threads** — always reply first.
+6. **Resolve stale** — `resolve_stale_comments` to batch-resolve threads on changed files.
+7. **File issues** — for `action: "create_issue"` items, call `create_issue_from_comment`.
+8. **Re-review** — `request_rereview` for manual-trigger reviewers (e.g. Unblocked).
+9. **Verify** — `summarize_review_status()` again to confirm all bugs are addressed.
+
+For full thread details (all comments, reviewer statuses), fall back to
+`list_review_comments` for a specific PR — but prefer the triage workflow above.
 
 ## Responding to review comments
 
@@ -118,9 +127,9 @@ changes based on them.
 
 ## Reviewer behavior differences
 
-Some reviewers auto-trigger a new review on every push (e.g. Devin, CodeRabbit) while
-others require a manual trigger via `request_rereview` (e.g. Unblocked). The trigger
-message is configurable per-reviewer via `rereview_message` in `.codereviewbuddy.toml`.
+Some reviewers auto-trigger a new review on every push (e.g. CodeRabbit) while others
+require a manual trigger via `request_rereview` (e.g. Unblocked). The trigger message
+is configurable per-reviewer via `rereview_message` in `.codereviewbuddy.toml`.
 
 ## Staleness
 
@@ -131,15 +140,15 @@ they reviewed has changed.
 ## Auto-resolving reviewers
 
 `resolve_stale_comments` automatically skips threads from reviewers that auto-resolve
-their own comments when they detect a fix (Devin, CodeRabbit). Only threads from
-reviewers that do NOT auto-resolve (e.g. Unblocked) are batch-resolved. The result
-includes a `skipped_count` field showing how many threads were left for the reviewer
-to handle.
+their own comments when they detect a fix (CodeRabbit). Only threads from reviewers
+that do NOT auto-resolve (e.g. Unblocked) are batch-resolved. The result includes a
+`skipped_count` field showing how many threads were left for the reviewer to handle.
 
 ## Per-reviewer configuration
 
-The server loads `.codereviewbuddy.toml` from the project root at startup. This config
-controls per-reviewer resolve policy:
+The server loads `.codereviewbuddy.toml` from the project root at startup and
+hot-reloads on file changes. Call `show_config` to inspect the active configuration.
+The config controls per-reviewer resolve policy:
 
 - **`resolve_levels`**: Which severity levels you're allowed to resolve. If you try to
   resolve a thread whose severity (🔴 bug, 🚩 flagged, 🟡 warning, 📝 info) exceeds
@@ -148,8 +157,6 @@ controls per-reviewer resolve policy:
   threads at all.
 - **`enabled`**: Whether this reviewer's threads appear in results.
 
-With default config, only 📝 info threads from Devin can be resolved. All severity
-levels from Unblocked can be resolved. No CodeRabbit threads can be resolved.
 If `resolve_comment` or `resolve_stale_comments` returns a "blocked by config" error,
 do NOT retry — the config is intentional. Inform the user about the blocked thread
 and its severity level instead.
