@@ -618,7 +618,7 @@ def resolve_comment(
     raise gh.GhError(msg)
 
 
-async def resolve_stale_comments(
+async def resolve_stale_comments(  # noqa: PLR0914
     pr_number: int,
     repo: str | None = None,
     cwd: str | None = None,
@@ -670,13 +670,18 @@ async def resolve_stale_comments(
             blocked_count=blocked_count,
         )
 
-    # Batch resolve using GraphQL aliases
-    mutations = []
+    # Batch resolve using GraphQL aliases with parameterized variables
+    params = []
+    aliases = []
+    variables: dict[str, str] = {}
     for i, thread in enumerate(allowed):
-        mutations.append(f'  t{i}: resolveReviewThread(input: {{threadId: "{thread.thread_id}"}}) {{ thread {{ id isResolved }} }}')
+        var = f"t{i}"
+        params.append(f"${var}: ID!")
+        aliases.append(f"  {var}: resolveReviewThread(input: {{threadId: ${var}}}) {{ thread {{ id isResolved }} }}")
+        variables[var] = thread.thread_id
 
-    batch_mutation = "mutation {\n" + "\n".join(mutations) + "\n}"
-    result = await call_sync_fn_in_threadpool(gh.graphql, batch_mutation, cwd=cwd)
+    batch_mutation = f"mutation({', '.join(params)}) {{\n" + "\n".join(aliases) + "\n}"
+    result = await call_sync_fn_in_threadpool(gh.graphql, batch_mutation, variables=variables, cwd=cwd)
     _check_graphql_errors(result, f"batch resolve {len(allowed)} threads on PR #{pr_number}")
 
     resolved_ids = [t.thread_id for t in allowed]
