@@ -536,7 +536,7 @@ _THREAD_DETAIL_QUERY = """
 query($threadId: ID!) {
   node(id: $threadId) {
     ... on PullRequestReviewThread {
-      comments(first: 1) {
+      comments(first: 50) {
         nodes {
           author { login }
           body
@@ -548,22 +548,33 @@ query($threadId: ID!) {
 """
 
 
-def _fetch_thread_detail(thread_id: str, cwd: str | None = None) -> tuple[str, str]:
-    """Fetch reviewer name and first comment body for a thread.
+def _fetch_thread_detail(thread_id: str, cwd: str | None = None) -> tuple[str, str, list[str]]:
+    """Fetch reviewer name, first comment body, and all comment author logins for a thread.
 
     Returns:
-        (reviewer_name, comment_body) — empty strings if lookup fails.
+        (reviewer_name, comment_body, all_logins) — empty strings/list if lookup fails.
     """
     result = gh.graphql(_THREAD_DETAIL_QUERY, variables={"threadId": thread_id}, cwd=cwd)
     node = result.get("data", {}).get("node") or {}
     comments = node.get("comments", {}).get("nodes", [])
     if not comments:
-        return "", ""
+        return "", "", []
     first = comments[0]
     login = (first.get("author") or {}).get("login", "")
     reviewer = identify_reviewer(login)
     body = first.get("body", "")
-    return reviewer, body
+    all_logins = [(c.get("author") or {}).get("login", "") for c in comments]
+    return reviewer, body, all_logins
+
+
+def _has_any_reply(all_logins: list[str]) -> bool:
+    """Check if a thread has at least one reply (from anyone).
+
+    The first comment is the reviewer's original.  Any subsequent comment
+    — human or bot — counts as a reply, ensuring there is a decision-log
+    entry before the thread can be resolved.
+    """
+    return len(all_logins) > 1
 
 
 def resolve_comment(
@@ -591,8 +602,8 @@ def resolve_comment(
         msg = f"Cannot resolve PR-level reviews or bot comments — only inline review threads (PRRT_) are resolvable. Got: {thread_id}"
         raise gh.GhError(msg)
 
-    # Config enforcement: fetch thread details and check resolve_levels
-    reviewer_name, comment_body = _fetch_thread_detail(thread_id, cwd=cwd)
+    # Config enforcement: fetch thread details and check resolve_levels + reply requirement
+    reviewer_name, comment_body, all_logins = _fetch_thread_detail(thread_id, cwd=cwd)
     if reviewer_name:
         from codereviewbuddy.tools.stack import _classify_severity  # noqa: PLC0415
 
@@ -601,6 +612,11 @@ def resolve_comment(
         allowed, reason = config.can_resolve(reviewer_name, severity)
         if not allowed:
             raise gh.GhError(reason)
+
+        rc = config.get_reviewer(reviewer_name)
+        if rc.require_reply_before_resolve and not _has_any_reply(all_logins):
+            msg = "Cannot resolve thread without a reply. Add a reply explaining how the feedback was addressed, then resolve."
+            raise gh.GhError(msg)
 
     result = gh.graphql(_RESOLVE_THREAD_MUTATION, variables={"threadId": thread_id}, cwd=cwd)
     _check_graphql_errors(result, f"resolve thread {thread_id}")
