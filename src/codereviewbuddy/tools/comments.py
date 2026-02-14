@@ -9,7 +9,7 @@ from typing import TYPE_CHECKING
 from fastmcp.utilities.async_utils import call_sync_fn_in_threadpool
 
 from codereviewbuddy import gh
-from codereviewbuddy.config import Severity, get_config
+from codereviewbuddy.config import get_config
 from codereviewbuddy.models import (
     CommentStatus,
     ResolveStaleResult,
@@ -563,9 +563,10 @@ def resolve_comment(
     # Config enforcement: fetch thread details and check resolve_levels
     reviewer_name, comment_body = _fetch_thread_detail(thread_id, cwd=cwd)
     if reviewer_name:
+        from codereviewbuddy.tools.stack import _classify_severity  # noqa: PLC0415
+
         config = get_config()
-        adapter = get_reviewer(reviewer_name)
-        severity = adapter.classify_severity(comment_body) if adapter else Severity.INFO
+        severity = _classify_severity(reviewer_name, comment_body)
         allowed, reason = config.can_resolve(reviewer_name, severity)
         if not allowed:
             raise gh.GhError(reason)
@@ -598,6 +599,8 @@ async def resolve_stale_comments(
         Dict with "resolved_count" and "resolved_thread_ids".
     """
     config = get_config()
+    from codereviewbuddy.tools.stack import _classify_severity  # noqa: PLC0415
+
     summary = await list_review_comments(pr_number, repo=repo, status="unresolved", cwd=cwd, ctx=ctx)
     stale = [t for t in summary.threads if t.is_stale and not t.is_pr_review]
     # Skip threads from reviewers that auto-resolve (e.g. Devin bugs, CodeRabbit)
@@ -615,8 +618,7 @@ async def resolve_stale_comments(
     blocked_count = 0
     for t in stale:
         body = t.comments[0].body if t.comments else ""
-        adapter = get_reviewer(t.reviewer)
-        severity = adapter.classify_severity(body) if adapter else Severity.INFO
+        severity = _classify_severity(t.reviewer, body)
         can, _reason = config.can_resolve(t.reviewer, severity)
         if can:
             allowed.append(t)

@@ -19,8 +19,24 @@ logger = logging.getLogger(__name__)
 
 _GH_LOG_DIR = Path.home() / ".codereviewbuddy"
 _GH_LOG_FILE = _GH_LOG_DIR / "gh_calls.jsonl"
+_MAX_GH_LOG_LINES = 10_000
+_GH_ROTATE_EVERY_WRITES = 100
+_gh_log_state: dict[str, int] = {"write_count": 0}
 # Unique sentinel to grep/remove all temporary diagnostics once issue #65 is resolved.
 _ISSUE_65_TRACKING_TAG = "CRB-ISSUE-65-TRACKING"
+
+
+def _truncate_gh_log_if_needed() -> None:
+    """Keep only the last N gh call log entries."""
+    try:
+        if not _GH_LOG_FILE.exists():
+            return
+        lines = _GH_LOG_FILE.read_text(encoding="utf-8").splitlines()
+        if len(lines) <= _MAX_GH_LOG_LINES:
+            return
+        _GH_LOG_FILE.write_text("\n".join(lines[-_MAX_GH_LOG_LINES:]) + "\n", encoding="utf-8")
+    except OSError:
+        pass
 
 
 def _log_gh_call(entry: dict[str, Any]) -> None:
@@ -29,6 +45,9 @@ def _log_gh_call(entry: dict[str, Any]) -> None:
         _GH_LOG_DIR.mkdir(parents=True, exist_ok=True)
         with _GH_LOG_FILE.open("a", encoding="utf-8") as f:
             f.write(json.dumps(entry, default=str) + "\n")
+        _gh_log_state["write_count"] += 1
+        if _gh_log_state["write_count"] % _GH_ROTATE_EVERY_WRITES == 0:
+            _truncate_gh_log_if_needed()
     except OSError:
         pass
 

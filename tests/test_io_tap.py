@@ -143,6 +143,19 @@ class TestLogEntry:
         assert entry["dir"] == "stdin"
         assert entry["direction"] == "stdin"
 
+    def test_rotation_keeps_last_entries(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+        log_file = tmp_path / "tap.jsonl"
+        monkeypatch.setattr("codereviewbuddy.io_tap.MAX_IO_TAP_LOG_LINES", 3)
+        monkeypatch.setattr("codereviewbuddy.io_tap._ROTATE_EVERY_WRITES", 1)
+        monkeypatch.setattr("codereviewbuddy.io_tap._io_tap_log_state", {"write_count": 0})
+
+        for i in range(5):
+            _log_entry(log_file, "stdin", f"line-{i}".encode(), extra={"i": i})
+
+        lines = log_file.read_text(encoding="utf-8").splitlines()
+        assert len(lines) == 3
+        assert [json.loads(line)["i"] for line in lines] == [2, 3, 4]
+
 
 # ---------------------------------------------------------------------------
 # _TappedBuffer
@@ -457,3 +470,26 @@ class TestInstallIoTap:
         assert result is False
         assert sys.stdin is original_stdin
         assert sys.stdout is original_stdout
+
+    def test_install_truncates_existing_log(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
+        monkeypatch.setenv("CODEREVIEWBUDDY_IO_TAP", "1")
+        log_file = tmp_path / "io_tap.jsonl"
+        monkeypatch.setattr("codereviewbuddy.io_tap.LOG_DIR", tmp_path)
+        monkeypatch.setattr("codereviewbuddy.io_tap.LOG_FILE", log_file)
+        monkeypatch.setattr("codereviewbuddy.io_tap.MAX_IO_TAP_LOG_LINES", 3)
+
+        with log_file.open("w", encoding="utf-8") as f:
+            for i in range(5):
+                f.write(json.dumps({"i": i}) + "\n")
+
+        original_stdin = sys.stdin
+        original_stdout = sys.stdout
+        try:
+            result = install_io_tap()
+            assert result is True
+            lines = log_file.read_text(encoding="utf-8").splitlines()
+            assert len(lines) == 3
+            assert [json.loads(line)["i"] for line in lines] == [2, 3, 4]
+        finally:
+            sys.stdin = original_stdin
+            sys.stdout = original_stdout
