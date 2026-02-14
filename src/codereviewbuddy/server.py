@@ -513,6 +513,113 @@ async def triage_review_comments(
         return TriageResult(error="Cancelled")
 
 
+# ---------------------------------------------------------------------------
+# Prompts — user-invoked workflows (#114)
+# ---------------------------------------------------------------------------
+
+
+@mcp.prompt
+def review_stack() -> str:
+    """Full review pass workflow for a PR stack.
+
+    Returns a structured workflow the agent should follow to review
+    all PRs in the current stack end-to-end.
+    """
+    return """\
+You are doing a full review pass on the current PR stack. Follow these steps in order:
+
+1. **Summarize status** — call `summarize_review_status()` (no args = auto-discover stack).
+   Note which PRs have unresolved threads and whether any reviews are still in progress.
+
+2. **Triage** — call `triage_review_comments(pr_numbers)` with the discovered PR numbers.
+   This gives you only actionable threads, pre-classified by severity.
+
+3. **Fix bugs first** — for each `action: "fix"` item (🔴 bug, 🚩 flagged):
+   - Read the thread snippet and file/line.
+   - Implement the fix.
+   - Reply with `reply_to_comment` explaining what you fixed and the commit hash.
+
+4. **Reply to warnings/info** — for `action: "reply"` items:
+   - If you made changes based on the comment, reply explaining what changed.
+   - If the comment is not actionable, reply explaining why (don't ignore it).
+
+5. **Create issues for followups** — for `action: "create_issue"` items:
+   - Call `create_issue_from_comment` with an appropriate title and labels.
+
+6. **Resolve stale threads** — call `resolve_stale_comments` for each PR that had stale threads.
+
+7. **Request re-review** — call `request_rereview` for each PR you pushed fixes to.
+
+8. **Verify descriptions** — call `review_pr_descriptions(pr_numbers)` and fix any missing elements.
+
+9. **Final check** — call `summarize_review_status()` again to confirm all bugs are addressed.
+"""
+
+
+@mcp.prompt
+def pr_review_checklist() -> str:
+    """Pre-merge checklist to verify PR quality before shipping.
+
+    Use this after completing a review pass to make sure nothing was missed.
+    """
+    return """\
+Run through this checklist before considering the stack ready to merge:
+
+## Code quality
+- [ ] All 🔴 bug and 🚩 flagged threads are resolved (fixed + replied)
+- [ ] All 🟡 warning threads have been replied to (even if no code change)
+- [ ] No `action: "create_issue"` items left without a GitHub issue filed
+
+## PR hygiene
+- [ ] Every PR body has `Fixes #N` or `Closes #N` linking the issue it solves
+- [ ] PR descriptions are non-empty and not boilerplate (run `review_pr_descriptions`)
+- [ ] Commit messages follow conventional commits format
+
+## Review cycle
+- [ ] `resolve_stale_comments` was called for PRs with stale threads
+- [ ] `request_rereview` was called after pushing fixes
+- [ ] No reviews are still in progress (`summarize_review_status` shows no pending)
+
+## Testing
+- [ ] New/changed code has test coverage
+- [ ] CI is green on all PRs in the stack
+
+If any item fails, fix it before shipping. Use the tools to verify programmatically
+where possible (e.g. `summarize_review_status` for review state, `review_pr_descriptions`
+for PR bodies).
+"""
+
+
+@mcp.prompt
+def ship_stack() -> str:
+    """Pre-merge sanity check workflow before merging a PR stack.
+
+    Runs through final verification to catch anything missed.
+    """
+    return """\
+You are preparing to merge the current PR stack. Run these final checks:
+
+1. **Review status** — call `summarize_review_status()`.
+   - Any unresolved bugs (🔴) or flagged (🚩) threads? → STOP, fix them first.
+   - Any reviews still in progress? → Wait or call `request_rereview`.
+
+2. **Activity check** — call `stack_activity()`.
+   - Is the stack `settled` (no activity for 10+ min after push+review)? Good.
+   - If not settled, reviewers may still be working. Consider waiting.
+
+3. **PR descriptions** — call `review_pr_descriptions(pr_numbers)`.
+   - Every PR must have `Fixes #N` or `Closes #N` in the body.
+   - No empty or boilerplate descriptions.
+
+4. **Report** — summarize the stack state:
+   - Total PRs, total unresolved threads, severity breakdown.
+   - Whether it's safe to merge or what still needs attention.
+
+If everything is green, tell the user the stack is ready to merge.
+If anything blocks, list the specific items that need attention.
+"""
+
+
 def main() -> None:
     """Run the codereviewbuddy MCP server, or handle CLI subcommands."""
     if len(sys.argv) > 1 and sys.argv[1] == "init":

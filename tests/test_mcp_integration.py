@@ -131,6 +131,43 @@ class TestToolRegistration:
         tools = await client.list_tools()
         assert len(tools) == 11
 
+
+class TestPromptRegistration:
+    EXPECTED_PROMPTS = frozenset({
+        "review_stack",
+        "pr_review_checklist",
+        "ship_stack",
+    })
+
+    async def test_all_prompts_registered(self, client: Client):
+        prompts = await client.list_prompts()
+        names = {p.name for p in prompts}
+        assert names == self.EXPECTED_PROMPTS
+
+    async def test_prompt_count(self, client: Client):
+        prompts = await client.list_prompts()
+        assert len(prompts) == 3
+
+    async def test_review_stack_returns_content(self, client: Client):
+        from mcp.types import TextContent
+
+        result = await client.get_prompt("review_stack")
+        assert len(result.messages) >= 1
+        content = result.messages[0].content
+        assert isinstance(content, TextContent)
+        assert "summarize_review_status" in content.text
+        assert "triage_review_comments" in content.text
+
+    async def test_ship_stack_mentions_activity(self, client: Client):
+        from mcp.types import TextContent
+
+        result = await client.get_prompt("ship_stack")
+        content = result.messages[0].content
+        assert isinstance(content, TextContent)
+        assert "stack_activity" in content.text
+
+
+class TestToolSchemas:
     async def test_list_review_comments_schema(self, client: Client):
         tools = await client.list_tools()
         tool = next(t for t in tools if t.name == "list_review_comments")
