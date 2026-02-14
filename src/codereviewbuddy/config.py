@@ -389,6 +389,11 @@ def set_config(config: Config, *, config_path: Path | None = None) -> None:
         _state.mtime = None
 
 
+def get_config_path() -> Path | None:
+    """Return the path to the active config file, or None if using defaults."""
+    return _state.path
+
+
 def register_reload_callback(callback: Any) -> None:
     """Register a callable to invoke after config hot-reload.
 
