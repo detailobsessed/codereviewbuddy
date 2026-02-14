@@ -254,11 +254,16 @@ def _find_config_file(start: Path) -> Path | None:
         current = current.parent
 
 
-def load_config(cwd: str | Path | None = None) -> Config:
+def load_config(cwd: str | Path | None = None) -> tuple[Config, Path | None]:
     """Load configuration from ``.codereviewbuddy.toml``.
 
     Walks up from *cwd* (defaulting to the current directory) looking for the
     config file.  If not found, returns a ``Config`` with all defaults.
+
+    Returns:
+        (config, config_path) — the parsed config and the file path (or None
+        if no config file was found).  The path is needed by ``set_config``
+        to enable mtime-based hot-reload.
 
     Raises ``ValueError`` on invalid TOML or validation errors so the server
     can refuse to start with a broken config.
@@ -268,7 +273,7 @@ def load_config(cwd: str | Path | None = None) -> Config:
 
     if config_path is None:
         logger.info("No %s found, using defaults", CONFIG_FILENAME)
-        return Config()
+        return Config(), None
 
     logger.info("Loading config from %s", config_path)
     try:
@@ -292,23 +297,105 @@ def load_config(cwd: str | Path | None = None) -> Config:
             config_path,
         )
 
-    return config
+    return config, config_path
 
 
-# -- Global config instance (set during server lifespan) -----------------------
+# -- Hot-reloading config with mtime cache ------------------------------------
 
-_config: Config = Config()
+
+class _ConfigState:
+    """Tracks the active config, its file path, and mtime for hot-reload."""
+
+    __slots__ = ("_on_reload", "config", "mtime", "path")
+
+    def __init__(self) -> None:
+        self.config: Config = Config()
+        self.path: Path | None = None
+        self.mtime: float | None = None
+        self._on_reload: list[_ReloadCallback] = []
+
+    def register_reload_callback(self, callback: _ReloadCallback) -> None:
+        """Register a callback to invoke after config hot-reload."""
+        self._on_reload.append(callback)
+
+    def _fire_reload_callbacks(self, config: Config) -> None:
+        for cb in self._on_reload:
+            try:
+                cb(config)
+            except Exception:
+                logger.exception("Config reload callback failed")
+
+
+_ReloadCallback = Any  # Callable[[Config], None] — avoid typing complexity
+
+_state = _ConfigState()
 
 
 def get_config() -> Config:
-    """Return the active configuration."""
-    return _config
+    """Return the active configuration, hot-reloading if the file changed.
+
+    Checks the config file's mtime on each call (~microseconds).  If the file
+    was modified, re-reads and re-validates it.  If deleted, falls back to
+    defaults.  If invalid, logs a warning and keeps the last good config.
+    """
+    path = _state.path
+    if path is None:
+        # No config file was found at startup — nothing to hot-reload
+        return _state.config
+
+    try:
+        current_mtime = path.stat().st_mtime
+    except OSError:
+        # File was deleted — fall back to defaults
+        if _state.mtime is not None:
+            logger.warning("%s deleted — falling back to defaults", path.name)
+            _state.config = Config()
+            _state.mtime = None
+            _state._fire_reload_callbacks(_state.config)
+        return _state.config
+
+    if current_mtime == _state.mtime:
+        return _state.config
+
+    # File changed — reload
+    logger.info("Config file changed (mtime %.0f → %.0f), reloading", _state.mtime or 0, current_mtime)
+    try:
+        raw = path.read_text(encoding="utf-8")
+        data = tomllib.loads(raw)
+        new_config = Config.model_validate(data)
+    except (tomllib.TOMLDecodeError, Exception) as exc:
+        logger.warning("Invalid config after edit — keeping last good config: %s", exc)
+        _state.mtime = current_mtime  # Don't re-check until next change
+        return _state.config
+
+    _state.config = new_config
+    _state.mtime = current_mtime
+    _state._fire_reload_callbacks(new_config)
+    logger.info("Config hot-reloaded successfully")
+    return new_config
 
 
-def set_config(config: Config) -> None:
-    """Set the active configuration (called during server startup)."""
-    global _config  # noqa: PLW0603
-    _config = config
+def set_config(config: Config, *, config_path: Path | None = None) -> None:
+    """Set the active configuration (called during server startup).
+
+    If *config_path* is provided, enables hot-reload on subsequent
+    ``get_config()`` calls by tracking the file's mtime.
+    """
+    _state.config = config
+    _state.path = config_path
+    try:
+        _state.mtime = config_path.stat().st_mtime if config_path else None
+    except OSError:
+        _state.mtime = None
+
+
+def register_reload_callback(callback: Any) -> None:
+    """Register a callable to invoke after config hot-reload.
+
+    The callback receives the new ``Config`` instance.  Used by ``server.py``
+    to re-apply adapter config and middleware diagnostics when the file changes.
+    """
+    _state.register_reload_callback(callback)
 
 
 # -- Template sections for ``codereviewbuddy config`` --------------------------

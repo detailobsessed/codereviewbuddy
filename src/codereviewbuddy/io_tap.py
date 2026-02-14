@@ -257,9 +257,11 @@ def _should_enable_io_tap() -> bool:
     try:
         from codereviewbuddy.config import load_config  # noqa: PLC0415
 
-        return load_config().diagnostics.io_tap
+        config, _path = load_config()
     except Exception:
         return False
+    else:
+        return config.diagnostics.io_tap
 
 
 def install_io_tap() -> bool:

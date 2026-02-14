@@ -22,7 +22,7 @@ from fastmcp.server.middleware.ping import PingMiddleware
 from fastmcp.server.middleware.timing import TimingMiddleware
 
 from codereviewbuddy import gh
-from codereviewbuddy.config import load_config, set_config
+from codereviewbuddy.config import Config, load_config, register_reload_callback, set_config
 from codereviewbuddy.middleware import WriteOperationMiddleware
 from codereviewbuddy.models import (
     CreateIssueResult,
@@ -52,19 +52,30 @@ def _resolve_pr_number(pr_number: int | None) -> int:
     return gh.get_current_pr_number()
 
 
-@lifespan
-async def check_gh_cli(server: FastMCP) -> AsyncIterator[dict[str, object] | None]:  # noqa: ARG001, RUF029
-    """Verify gh CLI is installed and authenticated on server startup."""
-    check_fastmcp_runtime()
-    check_prerequisites()
-    config = load_config()
-    set_config(config)
+def _on_config_reload(config: Config) -> None:
+    """Re-apply adapter config and middleware diagnostics after hot-reload."""
     apply_config(config)
     write_operation_middleware.configure_diagnostics(
         heartbeat_enabled=config.diagnostics.tool_call_heartbeat,
         heartbeat_interval_ms=config.diagnostics.heartbeat_interval_ms,
         include_args_fingerprint=config.diagnostics.include_args_fingerprint,
     )
+
+
+@lifespan
+async def check_gh_cli(server: FastMCP) -> AsyncIterator[dict[str, object] | None]:  # noqa: ARG001, RUF029
+    """Verify gh CLI is installed and authenticated on server startup."""
+    check_fastmcp_runtime()
+    check_prerequisites()
+    config, config_path = load_config()
+    set_config(config, config_path=config_path)
+    apply_config(config)
+    write_operation_middleware.configure_diagnostics(
+        heartbeat_enabled=config.diagnostics.tool_call_heartbeat,
+        heartbeat_interval_ms=config.diagnostics.heartbeat_interval_ms,
+        include_args_fingerprint=config.diagnostics.include_args_fingerprint,
+    )
+    register_reload_callback(_on_config_reload)
     yield {}
 
 
