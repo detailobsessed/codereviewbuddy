@@ -9,7 +9,7 @@ from unittest.mock import AsyncMock
 if TYPE_CHECKING:
     from pytest_mock import MockerFixture
 
-from codereviewbuddy.models import CommentStatus, ReviewComment, ReviewSummary, ReviewThread
+from codereviewbuddy.models import CommentStatus, ReviewComment, ReviewThread
 from codereviewbuddy.tools.comments import (
     _classify_action,
     _extract_title,
@@ -174,9 +174,9 @@ class TestTriageReviewComments:
 
     def _mock_list(self, mocker: MockerFixture, threads: list[ReviewThread]) -> AsyncMock:
         return mocker.patch(
-            "codereviewbuddy.tools.comments.list_review_comments",
+            "codereviewbuddy.tools.comments._collect_inline_threads_only",
             new_callable=AsyncMock,
-            return_value=ReviewSummary(threads=threads),
+            return_value=threads,
         )
 
     async def test_unreplied_bug_needs_fix(self, mocker: MockerFixture):
@@ -266,11 +266,11 @@ class TestTriageReviewComments:
         info_43 = _thread(thread_id="PRRT_43", pr_number=43, body="📝 **Info: Issue B**")
 
         mock = mocker.patch(
-            "codereviewbuddy.tools.comments.list_review_comments",
+            "codereviewbuddy.tools.comments._collect_inline_threads_only",
             new_callable=AsyncMock,
             side_effect=[
-                ReviewSummary(threads=[bug_42]),
-                ReviewSummary(threads=[info_43]),
+                [bug_42],
+                [info_43],
             ],
         )
 
