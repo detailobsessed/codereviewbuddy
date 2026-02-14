@@ -61,9 +61,6 @@ class ReviewSummary(BaseModel):
 
     threads: list[ReviewThread] = Field(default_factory=list, description="All review threads on the PR")
     reviewer_statuses: list[ReviewerStatus] = Field(default_factory=list, description="Per-reviewer status based on timestamp heuristic")
-    reviews_in_progress: bool = Field(
-        default=False, description="True if at least one reviewer has a pending review (pushed after last review)"
-    )
     stack: list[StackPR] = Field(default_factory=list, description="Other PRs in the same stack, discovered via branch chain")
     error: str | None = Field(default=None, description="Error message if the request failed")
 
@@ -81,7 +78,6 @@ class PRReviewStatusSummary(BaseModel):
     warnings: int = Field(default=0, description="Number of 🟡 warning threads")
     info_count: int = Field(default=0, description="Number of 📝 info threads")
     stale: int = Field(default=0, description="Number of unresolved stale threads (file changed after comment)")
-    reviews_in_progress: bool = Field(default=False, description="Whether any reviewer hasn't reviewed the latest push")
 
 
 class StackReviewStatusResult(BaseModel):
@@ -89,7 +85,6 @@ class StackReviewStatusResult(BaseModel):
 
     prs: list[PRReviewStatusSummary] = Field(default_factory=list, description="Per-PR review status, bottom to top")
     total_unresolved: int = Field(default=0, description="Total unresolved threads across the stack")
-    any_reviews_in_progress: bool = Field(default=False, description="Whether any PR has pending reviews")
     error: str | None = Field(default=None, description="Error message if the request failed")
 
 

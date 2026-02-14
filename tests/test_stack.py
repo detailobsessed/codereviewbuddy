@@ -206,23 +206,13 @@ class TestFetchPrSummary:
     def test_counts_severity(self, mocker: MockerFixture):
         mocker.patch("codereviewbuddy.tools.stack.gh.graphql", return_value=SAMPLE_SUMMARY_GRAPHQL_RESPONSE)
 
-        summary = _fetch_pr_summary("o", "r", 42, commits=[])
+        summary = _fetch_pr_summary("o", "r", 42)
         assert summary.pr_number == 42
         assert summary.title == "feat: test"
         assert summary.unresolved == 2
         assert summary.resolved == 1
         assert summary.bugs == 1
         assert summary.warnings == 1
-
-    def test_reviews_in_progress_when_push_after_review(self, mocker: MockerFixture):
-        """Regression: createdAt must be in the GraphQL query for status detection."""
-
-        mocker.patch("codereviewbuddy.tools.stack.gh.graphql", return_value=SAMPLE_SUMMARY_GRAPHQL_RESPONSE)
-        # Push happened AFTER the review comments (10:00) → reviews_in_progress=True
-        commits = [{"sha": "abc", "commit": {"committer": {"date": "2026-02-10T12:00:00Z"}}}]
-
-        summary = _fetch_pr_summary("o", "r", 42, commits=commits)
-        assert summary.reviews_in_progress is True
 
     def test_skips_disabled_reviewers(self, mocker: MockerFixture):
         from codereviewbuddy.config import Config, ReviewerConfig, set_config
@@ -231,7 +221,7 @@ class TestFetchPrSummary:
         try:
             mocker.patch("codereviewbuddy.tools.stack.gh.graphql", return_value=SAMPLE_SUMMARY_GRAPHQL_RESPONSE)
 
-            summary = _fetch_pr_summary("o", "r", 42, commits=[])
+            summary = _fetch_pr_summary("o", "r", 42)
             assert summary.unresolved == 0
             assert summary.resolved == 0
         finally:
@@ -241,7 +231,7 @@ class TestFetchPrSummary:
         """Regression (#94): stale count must only include unresolved threads."""
         mocker.patch("codereviewbuddy.tools.stack.gh.graphql", return_value=SAMPLE_SUMMARY_GRAPHQL_RESPONSE)
 
-        summary = _fetch_pr_summary("o", "r", 42, commits=[])
+        summary = _fetch_pr_summary("o", "r", 42)
         # Sample data: all 3 threads have isOutdated=True, but only 2 are unresolved.
         assert summary.stale == 2
 
@@ -250,7 +240,6 @@ class TestSummarizeReviewStatus:
     async def test_with_explicit_pr_numbers(self, mocker: MockerFixture):
         mocker.patch("codereviewbuddy.tools.stack.gh.graphql", return_value=SAMPLE_SUMMARY_GRAPHQL_RESPONSE)
         mocker.patch("codereviewbuddy.tools.stack.gh.get_repo_info", return_value=("o", "r"))
-        mocker.patch("codereviewbuddy.tools.comments._get_pr_commits", return_value=[])
 
         result = await summarize_review_status(pr_numbers=[42])
         assert result.error is None
@@ -263,7 +252,6 @@ class TestSummarizeReviewStatus:
         mocker.patch("codereviewbuddy.tools.stack.gh.get_repo_info", return_value=("o", "r"))
         mocker.patch("codereviewbuddy.tools.stack.gh.get_current_pr_number", return_value=74)
         mocker.patch("codereviewbuddy.tools.stack._fetch_open_prs", return_value=SAMPLE_PRS)
-        mocker.patch("codereviewbuddy.tools.comments._get_pr_commits", return_value=[])
 
         result = await summarize_review_status(repo="o/r")
         assert result.error is None

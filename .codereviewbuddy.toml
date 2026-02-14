@@ -9,9 +9,9 @@
 #   info     — 📝 informational, no action required
 
 [reviewers.devin]
-enabled = true                  # Re-enabled to handle existing threads; disable after backlog cleared
-auto_resolve_stale = false      # Devin auto-resolves its own bug threads; we skip them
-resolve_levels = ["info", "warning", "flagged"]  # Resolve threads we've addressed; bugs stay for Devin to auto-resolve
+enabled = false                 # Devin removed from this repository
+auto_resolve_stale = false
+resolve_levels = ["info", "warning", "flagged"]
 
 [reviewers.unblocked]
 # enabled = true

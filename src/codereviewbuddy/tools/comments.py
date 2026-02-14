@@ -464,7 +464,7 @@ async def list_review_comments(
         ctx: FastMCP context for progress reporting. Injected by server tools.
 
     Returns:
-        ReviewSummary with threads, per-reviewer statuses, and reviews_in_progress flag.
+        ReviewSummary with threads and per-reviewer statuses.
     """
     if repo:
         owner, repo_name = repo.split("/", 1)
@@ -477,7 +477,6 @@ async def list_review_comments(
     commits = await call_sync_fn_in_threadpool(_get_pr_commits, owner, repo_name, pr_number, cwd=cwd)
     last_push_at = _latest_push_time_from_commits(commits)
     reviewer_statuses = _build_reviewer_statuses(threads, last_push_at)
-    reviews_in_progress = any(s.status == "pending" for s in reviewer_statuses)
 
     # Filter threads by status if requested (after building reviewer statuses from all threads)
     if status:
@@ -486,9 +485,6 @@ async def list_review_comments(
 
     if ctx:
         await ctx.info(f"Found {len(threads)} review threads for PR #{pr_number}")
-        if reviews_in_progress:
-            pending = [s.reviewer for s in reviewer_statuses if s.status == "pending"]
-            await ctx.warning(f"⚠️ Reviews still pending from: {', '.join(pending)}")
 
     # Discover PR stack (cached per session) — best-effort, don't fail the request
     try:
@@ -500,7 +496,6 @@ async def list_review_comments(
     return ReviewSummary(
         threads=threads,
         reviewer_statuses=reviewer_statuses,
-        reviews_in_progress=reviews_in_progress,
         stack=stack_prs,
     )
 

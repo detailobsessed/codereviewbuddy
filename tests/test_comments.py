@@ -234,13 +234,6 @@ class TestListReviewComments:
         assert "unblocked" in reviewer_names
         assert "devin" in reviewer_names
 
-    async def test_reviews_in_progress_when_pushed_after_review(self):
-        """Commit at 12:00, reviews at 10:00/11:00 → both pending."""
-        summary = await list_review_comments(42)
-        assert summary.reviews_in_progress is True
-        for s in summary.reviewer_statuses:
-            assert s.status == "pending"
-
     async def test_disabled_reviewer_threads_filtered(self, mocker: MockerFixture):
         """Threads from disabled reviewers should not appear in results."""
         from codereviewbuddy.config import Config, ReviewerConfig
