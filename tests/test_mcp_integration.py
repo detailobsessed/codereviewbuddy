@@ -170,6 +170,7 @@ class TestToolRegistration:
         """Verify resolve_stale_comments output schema contains expected fields."""
         tools = await client.list_tools()
         tool = next(t for t in tools if t.name == "resolve_stale_comments")
+        assert tool.outputSchema is not None
         props = tool.outputSchema.get("properties", {})
         assert "resolved_count" in props
         assert "resolved_thread_ids" in props
@@ -178,6 +179,7 @@ class TestToolRegistration:
         """Verify request_rereview output schema contains expected fields."""
         tools = await client.list_tools()
         tool = next(t for t in tools if t.name == "request_rereview")
+        assert tool.outputSchema is not None
         props = tool.outputSchema.get("properties", {})
         assert "triggered" in props
         assert "auto_triggers" in props
@@ -240,7 +242,7 @@ class TestResolveCommentMCP:
 
         result = await client.call_tool("resolve_comment", {"pr_number": 42, "thread_id": "PRRT_test"})
         assert not result.is_error
-        assert "Error resolving PRRT_test" in result.content[0].text
+        assert "Error resolving PRRT_test" in result.content[0].text  # type: ignore[unresolved-attribute]
 
     async def test_blocked_by_config(self, client: Client, mocker: MockerFixture):
         mocker.patch(
@@ -251,7 +253,7 @@ class TestResolveCommentMCP:
         result = await client.call_tool("resolve_comment", {"pr_number": 42, "thread_id": "PRRT_test"})
         # Config enforcement error is caught by server tool and returned as error string
         assert not result.is_error
-        assert "Config blocks resolving" in result.content[0].text
+        assert "Config blocks resolving" in result.content[0].text  # type: ignore[unresolved-attribute]
 
 
 class TestResolveStaleCommentsMCP:
@@ -334,7 +336,7 @@ class TestRequestRereviewMCP:
 
         result = await client.call_tool("request_rereview", {"pr_number": 42, "reviewer": "nonexistent"})
         assert not result.is_error
-        assert "Error" in result.content[0].text
+        assert "Error" in result.content[0].text  # type: ignore[unresolved-attribute]
 
 
 class TestReviewPRDescriptionsMCP:
