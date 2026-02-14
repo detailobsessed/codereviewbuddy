@@ -161,7 +161,7 @@ include_args_fingerprint = false
 """,
             encoding="utf-8",
         )
-        config = load_config(cwd=tmp_path)
+        config, _path = load_config(cwd=tmp_path)
         assert config.diagnostics.io_tap is True
         assert config.diagnostics.tool_call_heartbeat is True
         assert config.diagnostics.heartbeat_interval_ms == 1200
@@ -214,7 +214,7 @@ class TestCanResolve:
 
 class TestLoadConfig:
     def test_missing_file_returns_defaults(self, tmp_path: Path):
-        config = load_config(cwd=tmp_path)
+        config, _path = load_config(cwd=tmp_path)
         assert "devin" in config.reviewers
         assert config.reviewers["devin"].resolve_levels == [Severity.INFO]
 
@@ -232,7 +232,7 @@ auto_resolve_stale = false
 """,
             encoding="utf-8",
         )
-        config = load_config(cwd=tmp_path)
+        config, _path = load_config(cwd=tmp_path)
         assert config.reviewers["devin"].resolve_levels == [Severity.INFO, Severity.WARNING]
         assert config.reviewers["unblocked"].auto_resolve_stale is False
         # coderabbit still gets defaults
@@ -248,7 +248,7 @@ repo = "detailobsessed/codereviewbuddy"
 """,
             encoding="utf-8",
         )
-        config = load_config(cwd=tmp_path)
+        config, _path = load_config(cwd=tmp_path)
         assert config.self_improvement.enabled is True
         assert config.self_improvement.repo == "detailobsessed/codereviewbuddy"
 
@@ -260,7 +260,7 @@ repo = "detailobsessed/codereviewbuddy"
         )
         subdir = tmp_path / "src" / "deep"
         subdir.mkdir(parents=True)
-        config = load_config(cwd=subdir)
+        config, _path = load_config(cwd=subdir)
         assert config.reviewers["devin"].enabled is False
 
     def test_stops_at_git_root(self, tmp_path: Path):
@@ -272,7 +272,7 @@ repo = "detailobsessed/codereviewbuddy"
         project = tmp_path / "project"
         project.mkdir()
         (project / ".git").mkdir()
-        config = load_config(cwd=project)
+        config, _path = load_config(cwd=project)
         # Should NOT find the config above .git — devin stays enabled (default)
         assert config.reviewers["devin"].enabled is True
 
@@ -294,7 +294,7 @@ repo = "detailobsessed/codereviewbuddy"
     def test_empty_config_file_returns_defaults(self, tmp_path: Path):
         (tmp_path / ".git").mkdir()
         (tmp_path / ".codereviewbuddy.toml").write_text("", encoding="utf-8")
-        config = load_config(cwd=tmp_path)
+        config, _path = load_config(cwd=tmp_path)
         assert "devin" in config.reviewers
 
     def test_init_template_empty_sections_match_zero_config(self, tmp_path: Path):
@@ -313,7 +313,7 @@ repo = "detailobsessed/codereviewbuddy"
 """,
             encoding="utf-8",
         )
-        config = load_config(cwd=tmp_path)
+        config, _path = load_config(cwd=tmp_path)
         zero = Config()
         for name in ("devin", "unblocked", "coderabbit"):
             assert config.reviewers[name].enabled == zero.reviewers[name].enabled, name
@@ -441,3 +441,148 @@ class TestCleanConfig:
     def test_fails_if_no_config(self, tmp_path: Path):
         with pytest.raises(SystemExit):
             clean_config(cwd=tmp_path)
+
+
+class TestHotReload:
+    """Tests for mtime-based config hot-reload (issue #70)."""
+
+    @pytest.fixture(autouse=True)
+    def _reset_config_state(self):
+        """Reset module-level _state between tests."""
+        from codereviewbuddy.config import _state
+
+        original_config = _state.config
+        original_path = _state.path
+        original_mtime = _state.mtime
+        original_callbacks = _state._on_reload[:]
+        yield
+        _state.config = original_config
+        _state.path = original_path
+        _state.mtime = original_mtime
+        _state._on_reload = original_callbacks
+
+    def _setup_config(self, tmp_path: Path, toml_content: str) -> Path:
+        """Create a git root + config file and wire up set_config."""
+        from codereviewbuddy.config import set_config
+
+        (tmp_path / ".git").mkdir(exist_ok=True)
+        config_path = tmp_path / ".codereviewbuddy.toml"
+        config_path.write_text(toml_content, encoding="utf-8")
+        config, path = load_config(cwd=tmp_path)
+        assert path is not None
+        set_config(config, config_path=path)
+        return config_path
+
+    def test_returns_cached_when_unchanged(self, tmp_path: Path):
+        """get_config() returns the same object when file hasn't changed."""
+        from codereviewbuddy.config import get_config
+
+        self._setup_config(tmp_path, "[reviewers.devin]\nenabled = true\n")
+        c1 = get_config()
+        c2 = get_config()
+        assert c1 is c2
+
+    def test_detects_file_change(self, tmp_path: Path):
+        """get_config() re-reads when mtime changes."""
+        import os
+        import time
+
+        from codereviewbuddy.config import get_config
+
+        config_path = self._setup_config(tmp_path, "[reviewers.devin]\nenabled = true\n")
+        c1 = get_config()
+        assert c1.reviewers["devin"].enabled is True
+
+        # Ensure mtime actually changes (some filesystems have 1s granularity)
+        time.sleep(0.05)
+        config_path.write_text("[reviewers.devin]\nenabled = false\n", encoding="utf-8")
+        # Force mtime to be different
+        os.utime(config_path, (time.time() + 1, time.time() + 1))
+
+        c2 = get_config()
+        assert c2.reviewers["devin"].enabled is False
+        assert c2 is not c1
+
+    def test_deleted_file_falls_back_to_defaults(self, tmp_path: Path):
+        """get_config() returns defaults when config file is deleted."""
+        from codereviewbuddy.config import get_config
+
+        config_path = self._setup_config(tmp_path, "[reviewers.devin]\nenabled = false\n")
+        assert get_config().reviewers["devin"].enabled is False
+
+        config_path.unlink()
+        c = get_config()
+        # Default for devin is enabled=True
+        assert c.reviewers["devin"].enabled is True
+
+    def test_invalid_edit_keeps_last_good_config(self, tmp_path: Path, caplog: pytest.LogCaptureFixture):
+        """Invalid TOML after edit keeps the last good config."""
+        import logging
+        import os
+        import time
+
+        from codereviewbuddy.config import get_config
+
+        config_path = self._setup_config(tmp_path, "[reviewers.devin]\nenabled = false\n")
+        assert get_config().reviewers["devin"].enabled is False
+
+        # Write invalid TOML with a different mtime
+        time.sleep(0.05)
+        config_path.write_text("{{invalid", encoding="utf-8")
+        os.utime(config_path, (time.time() + 1, time.time() + 1))
+
+        with caplog.at_level(logging.WARNING, logger="codereviewbuddy.config"):
+            c = get_config()
+        assert c.reviewers["devin"].enabled is False  # Last good config
+        assert any("keeping last good config" in r.message for r in caplog.records)
+
+    def test_reload_callback_fires_on_change(self, tmp_path: Path):
+        """Registered callbacks are invoked with the new config on reload."""
+        import os
+        import time
+
+        from codereviewbuddy.config import get_config, register_reload_callback
+
+        config_path = self._setup_config(tmp_path, "[reviewers.devin]\nenabled = true\n")
+
+        callback_configs: list[Config] = []
+        register_reload_callback(callback_configs.append)
+
+        # Trigger reload
+        time.sleep(0.05)
+        config_path.write_text("[reviewers.devin]\nenabled = false\n", encoding="utf-8")
+        os.utime(config_path, (time.time() + 1, time.time() + 1))
+        get_config()
+
+        assert len(callback_configs) == 1
+        assert callback_configs[0].reviewers["devin"].enabled is False
+
+    def test_callback_error_does_not_break_reload(self, tmp_path: Path):
+        """A failing callback doesn't prevent the config from updating."""
+        import os
+        import time
+
+        from codereviewbuddy.config import get_config, register_reload_callback
+
+        config_path = self._setup_config(tmp_path, "[reviewers.devin]\nenabled = true\n")
+
+        def bad_callback(_config: Config) -> None:
+            msg = "callback exploded"
+            raise RuntimeError(msg)
+
+        register_reload_callback(bad_callback)
+
+        time.sleep(0.05)
+        config_path.write_text("[reviewers.devin]\nenabled = false\n", encoding="utf-8")
+        os.utime(config_path, (time.time() + 1, time.time() + 1))
+
+        c = get_config()
+        assert c.reviewers["devin"].enabled is False  # Config still updated
+
+    def test_no_config_path_skips_hot_reload(self, tmp_path: Path):
+        """When no config file was found at startup, get_config returns defaults."""
+        from codereviewbuddy.config import get_config, set_config
+
+        set_config(Config(), config_path=None)
+        c = get_config()
+        assert c.reviewers["devin"].enabled is True  # defaults
