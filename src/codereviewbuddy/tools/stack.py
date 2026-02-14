@@ -18,7 +18,6 @@ if TYPE_CHECKING:
 
     from fastmcp.server.context import Context
 
-    from codereviewbuddy.models import ReviewThread
 
 logger = logging.getLogger(__name__)
 
@@ -301,64 +300,22 @@ def _count_stale_threads(raw_threads: list[dict[str, Any]]) -> int:
     return stale
 
 
-def _build_mini_threads(
-    raw_threads: list[dict[str, Any]],
-    pr_number: int,
-) -> list[ReviewThread]:
-    """Build lightweight ReviewThread objects for reviewer status detection."""
-    from codereviewbuddy.models import CommentStatus as CS  # noqa: PLC0415
-    from codereviewbuddy.models import ReviewComment, ReviewThread  # noqa: PLC0415
-
-    mini: list[ReviewThread] = []
-    for node in raw_threads:
-        parsed = _first_comment_reviewer(node)
-        if parsed is None:
-            continue
-        first, reviewer = parsed
-        author = (first.get("author") or {}).get("login", "unknown")
-        mini.append(
-            ReviewThread(
-                thread_id="",
-                pr_number=pr_number,
-                status=CS.RESOLVED if node.get("isResolved") else CS.UNRESOLVED,
-                file=first.get("path"),
-                reviewer=reviewer,
-                comments=[
-                    ReviewComment(
-                        author=author,
-                        body="",
-                        created_at=first.get("createdAt"),
-                    )
-                ],
-            )
-        )
-    return mini
-
-
 def _fetch_pr_summary(
     owner: str,
     repo: str,
     pr_number: int,
-    commits: list[dict[str, Any]] | None = None,
     cwd: str | None = None,
 ) -> PRReviewStatusSummary:
     """Fetch lightweight review status for a single PR."""
-    from codereviewbuddy.tools.comments import _build_reviewer_statuses, _latest_push_time_from_commits  # noqa: PLC0415
-
     raw_threads, title, url = _paginate_summary_threads(owner, repo, pr_number, cwd=cwd)
     counts = _count_thread_statuses(raw_threads)
     stale = _count_stale_threads(raw_threads)
-
-    last_push = _latest_push_time_from_commits(commits or [])
-    mini_threads = _build_mini_threads(raw_threads, pr_number)
-    reviewer_statuses = _build_reviewer_statuses(mini_threads, last_push)
 
     return PRReviewStatusSummary(
         pr_number=pr_number,
         title=title,
         url=url,
         stale=stale,
-        reviews_in_progress=any(s.status == "pending" for s in reviewer_statuses),
         **counts,
     )
 
@@ -415,24 +372,14 @@ async def summarize_review_status(
     summaries: list[PRReviewStatusSummary] = []
     total = len(pr_numbers)
 
-    from codereviewbuddy.tools.comments import _get_pr_commits  # noqa: PLC0415
-
     for i, pr_num in enumerate(pr_numbers):
         if ctx and total:
             await ctx.report_progress(i, total)
-        commits = await call_sync_fn_in_threadpool(
-            _get_pr_commits,
-            owner,
-            repo_name,
-            pr_num,
-            cwd=cwd,
-        )
         summary = await call_sync_fn_in_threadpool(
             _fetch_pr_summary,
             owner,
             repo_name,
             pr_num,
-            commits=commits,
             cwd=cwd,
         )
         summaries.append(summary)
@@ -441,12 +388,10 @@ async def summarize_review_status(
         await ctx.report_progress(total, total)
 
     total_unresolved = sum(s.unresolved for s in summaries)
-    any_in_progress = any(s.reviews_in_progress for s in summaries)
 
     return StackReviewStatusResult(
         prs=summaries,
         total_unresolved=total_unresolved,
-        any_reviews_in_progress=any_in_progress,
     )
 
 

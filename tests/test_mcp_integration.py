@@ -283,6 +283,9 @@ class TestResolveCommentMCP:
         assert "Error resolving PRRT_test" in result.content[0].text  # type: ignore[unresolved-attribute]
 
     async def test_blocked_by_config(self, client: Client, mocker: MockerFixture):
+        from codereviewbuddy.config import Config, set_config
+
+        set_config(Config())  # defaults: devin enabled, bugs not in resolve_levels
         mocker.patch(
             "codereviewbuddy.tools.comments._fetch_thread_detail",
             return_value=("devin", "🔴 **Bug: something is broken**"),
