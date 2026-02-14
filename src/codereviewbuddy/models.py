@@ -159,6 +159,26 @@ class TriageItem(BaseModel):
     snippet: str = Field(default="", description="First 200 chars of the comment body for context")
 
 
+class ActivityEvent(BaseModel):
+    """A single event in a stack activity timeline."""
+
+    time: datetime = Field(description="When the event occurred")
+    pr_number: int = Field(description="PR number this event belongs to")
+    event_type: str = Field(description="Event type: push, review, comment, labeled, unlabeled, merged, closed")
+    actor: str = Field(default="", description="GitHub username of the actor")
+    detail: str = Field(default="", description="Human-readable detail (e.g. 'found 4 issues', 'approved')")
+
+
+class StackActivityResult(BaseModel):
+    """Chronological activity feed across all PRs in a stack."""
+
+    events: list[ActivityEvent] = Field(default_factory=list, description="Events ordered chronologically (newest last)")
+    last_activity: datetime | None = Field(default=None, description="Timestamp of the most recent event")
+    minutes_since_last_activity: int | None = Field(default=None, description="Minutes since the last event")
+    settled: bool = Field(default=False, description="True if no activity for 10+ minutes after a push+review cycle")
+    error: str | None = Field(default=None, description="Error message if the request failed")
+
+
 class TriageResult(BaseModel):
     """Triage result for one or more PRs — only threads needing agent action."""
 
