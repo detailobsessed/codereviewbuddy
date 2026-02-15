@@ -102,6 +102,52 @@ def _reviewer_auto_resolves(reviewer_name: str, comment_body: str = "") -> bool:
     return adapter.auto_resolves_thread(comment_body)
 
 
+# -- Body stripping (issue #99) ------------------------------------------------
+
+# HTML comment blocks injected by reviewer bots (badges, metadata, etc.)
+_HTML_COMMENT_BLOCK_RE = re.compile(r"<!--.*?-->", re.DOTALL)
+
+# <details>...</details> → keep only the <summary> text
+_DETAILS_BLOCK_RE = re.compile(
+    r"<details[^>]*>\s*<summary[^>]*>(.*?)</summary>.*?</details>",
+    re.DOTALL,
+)
+
+# Any remaining HTML tags
+_HTML_TAG_RE = re.compile(r"<[^>]+>")
+
+# Collapse 3+ consecutive blank lines into 2
+_BLANK_LINES_RE = re.compile(r"\n{3,}")
+
+_MAX_BODY_LENGTH = 2000
+
+
+def _strip_comment_body(body: str) -> str:
+    """Strip reviewer badge HTML, collapse <details> blocks, remove tags.
+
+    This keeps comment bodies small enough for LLM context windows while
+    preserving the actual review content.
+    """
+    # 1. Remove HTML comment blocks (badge metadata, tracking pixels, etc.)
+    body = _HTML_COMMENT_BLOCK_RE.sub("", body)
+
+    # 2. Collapse <details> blocks to just their <summary> text
+    body = _DETAILS_BLOCK_RE.sub(r"[details: \1]", body)
+
+    # 3. Strip remaining HTML tags
+    body = _HTML_TAG_RE.sub("", body)
+
+    # 4. Clean up whitespace
+    body = _BLANK_LINES_RE.sub("\n\n", body)
+    body = body.strip()
+
+    # 5. Truncate extremely long bodies
+    if len(body) > _MAX_BODY_LENGTH:
+        body = body[:_MAX_BODY_LENGTH] + "… [truncated]"
+
+    return body
+
+
 def _parse_threads(raw_threads: list[dict[str, Any]], pr_number: int) -> list[ReviewThread]:
     """Parse raw GraphQL thread nodes into ReviewThread models."""
     threads = []
@@ -117,7 +163,7 @@ def _parse_threads(raw_threads: list[dict[str, Any]], pr_number: int) -> list[Re
         comments = [
             ReviewComment(
                 author=(c.get("author") or {}).get("login", "unknown"),
-                body=c.get("body", ""),
+                body=_strip_comment_body(c.get("body", "")),
                 created_at=c.get("createdAt"),
             )
             for c in comments_raw
@@ -171,8 +217,8 @@ def _get_pr_reviews(
         if reviewer == "unknown":
             continue
 
-        body = (review.get("body") or "").strip()
-        if not body:
+        raw_body = (review.get("body") or "").strip()
+        if not raw_body:
             continue
 
         state = review.get("state", "COMMENTED")
@@ -189,7 +235,7 @@ def _get_pr_reviews(
                 comments=[
                     ReviewComment(
                         author=login,
-                        body=body,
+                        body=_strip_comment_body(raw_body),
                         created_at=review.get("submitted_at"),
                     ),
                 ],
@@ -225,8 +271,8 @@ def _get_pr_issue_comments(
         if not is_bot:
             continue
 
-        body = (comment.get("body") or "").strip()
-        if not body:
+        raw_body = (comment.get("body") or "").strip()
+        if not raw_body:
             continue
 
         reviewer_name = identify_reviewer(login)
@@ -241,7 +287,7 @@ def _get_pr_issue_comments(
                 comments=[
                     ReviewComment(
                         author=login,
-                        body=body,
+                        body=_strip_comment_body(raw_body),
                         created_at=comment.get("created_at"),
                     ),
                 ],
