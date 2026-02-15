@@ -183,3 +183,11 @@ class TriageResult(BaseModel):
     needs_issue: int = Field(default=0, description="Count of 'noted for followup' replies missing a GH issue reference")
     total: int = Field(default=0, description="Total actionable threads")
     error: str | None = Field(default=None, description="Error message if the request failed")
+
+
+class ConfigInfo(BaseModel):
+    """Active codereviewbuddy configuration with metadata."""
+
+    config: dict = Field(description="Full configuration as a dictionary")
+    config_path: str | None = Field(default=None, description="Path to the .codereviewbuddy.toml file, or null if using defaults")
+    hot_reload: bool = Field(default=False, description="Whether config changes are automatically picked up")

@@ -22,9 +22,10 @@ from fastmcp.server.middleware.ping import PingMiddleware
 from fastmcp.server.middleware.timing import TimingMiddleware
 
 from codereviewbuddy import gh
-from codereviewbuddy.config import Config, load_config, register_reload_callback, set_config
+from codereviewbuddy.config import Config, get_config, get_config_path, load_config, register_reload_callback, set_config
 from codereviewbuddy.middleware import WriteOperationMiddleware
 from codereviewbuddy.models import (
+    ConfigInfo,
     CreateIssueResult,
     PRDescriptionReviewResult,
     RereviewResult,
@@ -107,14 +108,6 @@ discovered PR numbers to get full thread details across the stack.
 6. If you need full thread details (all comments, reviewer statuses), fall back to
    `list_review_comments` for a specific PR.
 
-## Review status detection
-
-`list_review_comments` and `summarize_review_status` automatically detect whether AI
-reviewers have finished reviewing the latest push. They compare each reviewer's most
-recent comment timestamp against the PR's latest commit timestamp. If a reviewer posted
-before the latest push, their status is "pending". Only reviewers that have actually
-commented on the PR are tracked — we don't assume which reviewers are installed.
-
 ## Responding to review comments
 
 Always reply to bug (🔴) and flagged (🚩) level comments with `reply_to_comment`
@@ -181,7 +174,7 @@ Use `gh issue create` to file the issue against the repo specified in the
 type/priority labels.
 
 This only applies when `[self_improvement]` is enabled in `.codereviewbuddy.toml`
-and a target `repo` is configured. Check the config file before filing.
+and a target `repo` is configured. Call `show_config` to check settings before filing.
 
 """,
 )
@@ -524,6 +517,23 @@ async def triage_review_comments(
         return TriageResult(error="Cancelled")
 
 
+@mcp.tool
+def show_config() -> ConfigInfo:
+    """Show the active codereviewbuddy configuration.
+
+    Returns the full loaded config including per-reviewer settings, resolve policies,
+    self-improvement config, and diagnostics. Also reports the config file path and
+    whether hot-reload is active (changes to the file are picked up automatically).
+    """
+    config = get_config()
+    config_path = get_config_path()
+    return ConfigInfo(
+        config=config.model_dump(mode="json"),
+        config_path=str(config_path) if config_path else None,
+        hot_reload=config_path is not None,
+    )
+
+
 # ---------------------------------------------------------------------------
 # Prompts — user-invoked workflows (#114)
 # ---------------------------------------------------------------------------
@@ -540,7 +550,7 @@ def review_stack() -> str:
 You are doing a full review pass on the current PR stack. Follow these steps in order:
 
 1. **Summarize status** — call `summarize_review_status()` (no args = auto-discover stack).
-   Note which PRs have unresolved threads and whether any reviews are still in progress.
+   Note which PRs have unresolved threads.
 
 2. **Triage** — call `triage_review_comments(pr_numbers)` with the discovered PR numbers.
    This gives you only actionable threads, pre-classified by severity.
@@ -588,8 +598,7 @@ Run through this checklist before considering the stack ready to merge:
 
 ## Review cycle
 - [ ] `resolve_stale_comments` was called for PRs with stale threads
-- [ ] `request_rereview` was called after pushing fixes
-- [ ] No reviews are still in progress (`summarize_review_status` shows no pending)
+- [ ] Re-review requested after pushing fixes (`request_rereview`)
 
 ## Testing
 - [ ] New/changed code has test coverage
@@ -612,7 +621,7 @@ You are preparing to merge the current PR stack. Run these final checks:
 
 1. **Review status** — call `summarize_review_status()`.
    - Any unresolved bugs (🔴) or flagged (🚩) threads? → STOP, fix them first.
-   - Any reviews still in progress? → Wait or call `request_rereview`.
+   - Did you push fixes? → Call `request_rereview` to trigger fresh reviews.
 
 2. **Activity check** — call `stack_activity()`.
    - Is the stack `settled` (no activity for 10+ min after push+review)? Good.

@@ -97,7 +97,10 @@ REPLY_REST_RESPONSE = {"id": 99999, "body": "Fixed!"}
 
 @pytest.fixture
 async def client(mocker: MockerFixture):
+    from codereviewbuddy.config import Config
+
     mocker.patch("codereviewbuddy.server.check_prerequisites")
+    mocker.patch("codereviewbuddy.server.load_config", return_value=(Config(), None))
     async with Client(mcp) as c:
         yield c
 
@@ -118,6 +121,7 @@ class TestToolRegistration:
         "request_rereview",
         "create_issue_from_comment",
         "review_pr_descriptions",
+        "show_config",
         "summarize_review_status",
         "triage_review_comments",
     })
@@ -129,7 +133,7 @@ class TestToolRegistration:
 
     async def test_tool_count(self, client: Client):
         tools = await client.list_tools()
-        assert len(tools) == 11
+        assert len(tools) == 12
 
 
 class TestPromptRegistration:
@@ -283,9 +287,6 @@ class TestResolveCommentMCP:
         assert "Error resolving PRRT_test" in result.content[0].text  # type: ignore[unresolved-attribute]
 
     async def test_blocked_by_config(self, client: Client, mocker: MockerFixture):
-        from codereviewbuddy.config import Config, set_config
-
-        set_config(Config())  # defaults: devin enabled, bugs not in resolve_levels
         mocker.patch(
             "codereviewbuddy.tools.comments._fetch_thread_detail",
             return_value=("devin", "🔴 **Bug: something is broken**"),
@@ -378,6 +379,37 @@ class TestRequestRereviewMCP:
         result = await client.call_tool("request_rereview", {"pr_number": 42, "reviewer": "nonexistent"})
         assert not result.is_error
         assert "Error" in result.content[0].text  # type: ignore[unresolved-attribute]
+
+
+class TestShowConfigMCP:
+    async def test_returns_config(self, client: Client):
+        result = await client.call_tool("show_config", {})
+        assert not result.is_error
+        import json
+
+        data = json.loads(result.content[0].text)  # type: ignore[unresolved-attribute]
+        assert "config" in data
+        assert "config_path" in data
+        assert "hot_reload" in data
+        # Config should have the expected top-level keys
+        assert "reviewers" in data["config"]
+        assert "self_improvement" in data["config"]
+        assert "diagnostics" in data["config"]
+
+    async def test_reflects_live_config(self, client: Client):
+        """show_config returns the currently active config, not a stale snapshot."""
+        from codereviewbuddy.config import Config, ReviewerConfig, set_config
+
+        custom = Config(reviewers={"devin": ReviewerConfig(enabled=False)})
+        set_config(custom)
+        try:
+            result = await client.call_tool("show_config", {})
+            import json
+
+            data = json.loads(result.content[0].text)  # type: ignore[unresolved-attribute]
+            assert data["config"]["reviewers"]["devin"]["enabled"] is False
+        finally:
+            set_config(Config())
 
 
 class TestReviewPRDescriptionsMCP:
