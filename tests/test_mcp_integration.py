@@ -271,7 +271,10 @@ class TestListReviewCommentsMCP:
 
 class TestResolveCommentMCP:
     async def test_success(self, client: Client, mocker: MockerFixture):
-        mocker.patch("codereviewbuddy.tools.comments._fetch_thread_detail", return_value=("unblocked", "some comment"))
+        mocker.patch(
+            "codereviewbuddy.tools.comments._fetch_thread_detail",
+            return_value=("unblocked", "some comment", ["unblocked-ai[bot]", "ichoosetoaccept"]),
+        )
         mocker.patch("codereviewbuddy.tools.comments.gh.graphql", return_value=RESOLVE_SUCCESS)
 
         result = await client.call_tool("resolve_comment", {"pr_number": 42, "thread_id": "PRRT_kwDOtest123"})
@@ -279,7 +282,10 @@ class TestResolveCommentMCP:
 
     async def test_failure_returns_error_string(self, client: Client, mocker: MockerFixture):
         fail_response = {"data": {"resolveReviewThread": {"thread": {"id": "PRRT_test", "isResolved": False}}}}
-        mocker.patch("codereviewbuddy.tools.comments._fetch_thread_detail", return_value=("unblocked", "some comment"))
+        mocker.patch(
+            "codereviewbuddy.tools.comments._fetch_thread_detail",
+            return_value=("unblocked", "some comment", ["unblocked-ai[bot]", "ichoosetoaccept"]),
+        )
         mocker.patch("codereviewbuddy.tools.comments.gh.graphql", return_value=fail_response)
 
         result = await client.call_tool("resolve_comment", {"pr_number": 42, "thread_id": "PRRT_test"})
@@ -289,7 +295,7 @@ class TestResolveCommentMCP:
     async def test_blocked_by_config(self, client: Client, mocker: MockerFixture):
         mocker.patch(
             "codereviewbuddy.tools.comments._fetch_thread_detail",
-            return_value=("devin", "🔴 **Bug: something is broken**"),
+            return_value=("devin", "🔴 **Bug: something is broken**", ["devin-ai-integration[bot]", "ichoosetoaccept"]),
         )
 
         result = await client.call_tool("resolve_comment", {"pr_number": 42, "thread_id": "PRRT_test"})

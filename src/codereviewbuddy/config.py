@@ -64,6 +64,10 @@ class ReviewerConfig(BaseModel):
         default_factory=lambda: list(Severity),
         description="Severity levels that are allowed to be resolved",
     )
+    require_reply_before_resolve: bool = Field(
+        default=True,
+        description="Block resolve_comment unless the thread has a non-reviewer reply explaining how the feedback was addressed",
+    )
     rereview_message: str | None = Field(
         default=None,
         min_length=1,

@@ -271,14 +271,20 @@ class TestNonExistentPR:
 class TestResolveComment:
     async def test_success(self, mocker: MockerFixture):
         response = {"data": {"resolveReviewThread": {"thread": {"id": "PRRT_test", "isResolved": True}}}}
-        mocker.patch("codereviewbuddy.tools.comments._fetch_thread_detail", return_value=("unblocked", "some comment"))
+        mocker.patch(
+            "codereviewbuddy.tools.comments._fetch_thread_detail",
+            return_value=("unblocked", "some comment", ["unblocked-ai[bot]", "ichoosetoaccept"]),
+        )
         mocker.patch("codereviewbuddy.tools.comments.gh.graphql", return_value=response)
         result = resolve_comment(42, "PRRT_test")
         assert "Resolved" in result
 
     async def test_failure(self, mocker: MockerFixture):
         response = {"data": {"resolveReviewThread": {"thread": {"id": "PRRT_test", "isResolved": False}}}}
-        mocker.patch("codereviewbuddy.tools.comments._fetch_thread_detail", return_value=("unblocked", "some comment"))
+        mocker.patch(
+            "codereviewbuddy.tools.comments._fetch_thread_detail",
+            return_value=("unblocked", "some comment", ["unblocked-ai[bot]", "ichoosetoaccept"]),
+        )
         mocker.patch("codereviewbuddy.tools.comments.gh.graphql", return_value=response)
         with pytest.raises(GhError, match="Failed to resolve"):
             resolve_comment(42, "PRRT_test")
@@ -287,7 +293,7 @@ class TestResolveComment:
         """Resolving a Devin bug thread should be blocked by default config."""
         mocker.patch(
             "codereviewbuddy.tools.comments._fetch_thread_detail",
-            return_value=("devin", "🔴 **Bug: something is broken**"),
+            return_value=("devin", "🔴 **Bug: something is broken**", ["devin-ai-integration[bot]", "ichoosetoaccept"]),
         )
         with pytest.raises(GhError, match="Config blocks resolving"):
             resolve_comment(42, "PRRT_test")
@@ -297,7 +303,7 @@ class TestResolveComment:
         response = {"data": {"resolveReviewThread": {"thread": {"id": "PRRT_test", "isResolved": True}}}}
         mocker.patch(
             "codereviewbuddy.tools.comments._fetch_thread_detail",
-            return_value=("devin", "📝 **Info: something informational**"),
+            return_value=("devin", "📝 **Info: something informational**", ["devin-ai-integration[bot]", "ichoosetoaccept"]),
         )
         mocker.patch("codereviewbuddy.tools.comments.gh.graphql", return_value=response)
         result = resolve_comment(42, "PRRT_test")
@@ -306,7 +312,42 @@ class TestResolveComment:
     async def test_unknown_reviewer_allowed(self, mocker: MockerFixture):
         """Unknown reviewer (empty string from lookup failure) should not block."""
         response = {"data": {"resolveReviewThread": {"thread": {"id": "PRRT_test", "isResolved": True}}}}
-        mocker.patch("codereviewbuddy.tools.comments._fetch_thread_detail", return_value=("", ""))
+        mocker.patch("codereviewbuddy.tools.comments._fetch_thread_detail", return_value=("", "", []))
+        mocker.patch("codereviewbuddy.tools.comments.gh.graphql", return_value=response)
+        result = resolve_comment(42, "PRRT_test")
+        assert "Resolved" in result
+
+    async def test_blocked_without_reply(self, mocker: MockerFixture):
+        """Resolving should be blocked when no non-reviewer reply exists (#110)."""
+        mocker.patch(
+            "codereviewbuddy.tools.comments._fetch_thread_detail",
+            return_value=("unblocked", "some comment", ["unblocked-ai[bot]"]),
+        )
+        with pytest.raises(GhError, match="Cannot resolve thread without a reply"):
+            resolve_comment(42, "PRRT_test")
+
+    async def test_allowed_with_reply(self, mocker: MockerFixture):
+        """Resolving should succeed when a non-reviewer reply exists (#110)."""
+        response = {"data": {"resolveReviewThread": {"thread": {"id": "PRRT_test", "isResolved": True}}}}
+        mocker.patch(
+            "codereviewbuddy.tools.comments._fetch_thread_detail",
+            return_value=("unblocked", "some comment", ["unblocked-ai[bot]", "ichoosetoaccept"]),
+        )
+        mocker.patch("codereviewbuddy.tools.comments.gh.graphql", return_value=response)
+        result = resolve_comment(42, "PRRT_test")
+        assert "Resolved" in result
+
+    async def test_reply_check_disabled_by_config(self, mocker: MockerFixture):
+        """Resolving without reply should succeed when require_reply_before_resolve=False."""
+        from codereviewbuddy.config import Config, ReviewerConfig
+
+        custom_config = Config(reviewers={"unblocked": ReviewerConfig(require_reply_before_resolve=False)})
+        mocker.patch("codereviewbuddy.tools.comments.get_config", return_value=custom_config)
+        response = {"data": {"resolveReviewThread": {"thread": {"id": "PRRT_test", "isResolved": True}}}}
+        mocker.patch(
+            "codereviewbuddy.tools.comments._fetch_thread_detail",
+            return_value=("unblocked", "some comment", ["unblocked-ai[bot]"]),
+        )
         mocker.patch("codereviewbuddy.tools.comments.gh.graphql", return_value=response)
         result = resolve_comment(42, "PRRT_test")
         assert "Resolved" in result
