@@ -41,16 +41,44 @@ from codereviewbuddy.tools import comments, descriptions, issues, rereview, stac
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
 
+    from fastmcp.server.context import Context
+
 logger = logging.getLogger(__name__)
 _FASTMCP_TASK_ROUTING_MODULE = "fastmcp.server.tasks.routing"
 write_operation_middleware = WriteOperationMiddleware()
 
 
-def _resolve_pr_number(pr_number: int | None) -> int:
+async def _get_workspace_cwd(ctx: Context | None = None) -> str | None:
+    """Extract the client's workspace directory from MCP roots.
+
+    MCP clients (e.g. Windsurf, Cursor) advertise their workspace as a
+    ``file://`` root.  Using this as ``cwd`` for ``gh`` commands ensures
+    auto-detection targets the *user's* project, not the server's install
+    directory.  See #142.
+
+    Returns:
+        Filesystem path string, or ``None`` to fall back to the server's cwd.
+    """
+    if ctx is None:
+        return None
+    try:
+        roots = await ctx.list_roots()
+        if roots:
+            from urllib.parse import unquote, urlparse  # noqa: PLC0415
+
+            parsed = urlparse(str(roots[0].uri))
+            if parsed.scheme == "file" and parsed.path:
+                return unquote(parsed.path)
+    except Exception:
+        logger.debug("Could not resolve workspace roots", exc_info=True)
+    return None
+
+
+def _resolve_pr_number(pr_number: int | None, cwd: str | None = None) -> int:
     """Resolve pr_number, auto-detecting from the current branch if not provided."""
     if pr_number is not None:
         return pr_number
-    return gh.get_current_pr_number()
+    return gh.get_current_pr_number(cwd=cwd)
 
 
 def _on_config_reload(config: Config) -> None:
@@ -210,9 +238,10 @@ async def list_review_comments(
         List of review threads with thread_id, file, line, reviewer, status, is_stale, and comments.
     """
     try:
-        pr_number = _resolve_pr_number(pr_number)
         ctx = get_context()
-        return await comments.list_review_comments(pr_number, repo=repo, status=status, ctx=ctx)
+        cwd = await _get_workspace_cwd(ctx)
+        pr_number = _resolve_pr_number(pr_number, cwd=cwd)
+        return await comments.list_review_comments(pr_number, repo=repo, status=status, cwd=cwd, ctx=ctx)
     except Exception as exc:
         logger.exception("list_review_comments failed for PR #%s", pr_number)
         return ReviewSummary(threads=[], error=f"Error: {exc}")
@@ -242,7 +271,8 @@ async def list_stack_review_comments(
     """
     try:
         ctx = get_context()
-        return await comments.list_stack_review_comments(pr_numbers, repo=repo, status=status, ctx=ctx)
+        cwd = await _get_workspace_cwd(ctx)
+        return await comments.list_stack_review_comments(pr_numbers, repo=repo, status=status, cwd=cwd, ctx=ctx)
     except Exception as exc:
         logger.exception("list_stack_review_comments failed")
         return {pr: ReviewSummary(threads=[], error=f"Error: {exc}") for pr in pr_numbers}
@@ -252,7 +282,7 @@ async def list_stack_review_comments(
 
 
 @mcp.tool
-def resolve_comment(
+async def resolve_comment(
     thread_id: str,
     pr_number: int | None = None,
 ) -> str:
@@ -266,8 +296,10 @@ def resolve_comment(
         thread_id: The GraphQL node ID (PRRT_...) of the thread to resolve.
     """
     try:
-        pr_number = _resolve_pr_number(pr_number)
-        return comments.resolve_comment(pr_number, thread_id)
+        ctx = get_context()
+        cwd = await _get_workspace_cwd(ctx)
+        pr_number = _resolve_pr_number(pr_number, cwd=cwd)
+        return comments.resolve_comment(pr_number, thread_id, cwd=cwd)
     except Exception as exc:
         logger.exception("resolve_comment failed for %s on PR #%s", thread_id, pr_number)
         return f"Error resolving {thread_id} on PR #{pr_number}: {exc}"
@@ -291,9 +323,10 @@ async def resolve_stale_comments(
         Dict with resolved_count and resolved_thread_ids.
     """
     try:
-        pr_number = _resolve_pr_number(pr_number)
         ctx = get_context()
-        return await comments.resolve_stale_comments(pr_number, repo=repo, ctx=ctx)
+        cwd = await _get_workspace_cwd(ctx)
+        pr_number = _resolve_pr_number(pr_number, cwd=cwd)
+        return await comments.resolve_stale_comments(pr_number, repo=repo, cwd=cwd, ctx=ctx)
     except Exception as exc:
         logger.exception("resolve_stale_comments failed for PR #%s", pr_number)
         return ResolveStaleResult(resolved_count=0, resolved_thread_ids=[], error=f"Error: {exc}")
@@ -303,7 +336,7 @@ async def resolve_stale_comments(
 
 
 @mcp.tool
-def reply_to_comment(
+async def reply_to_comment(
     thread_id: str,
     body: str,
     pr_number: int | None = None,
@@ -321,8 +354,10 @@ def reply_to_comment(
         repo: Repository in "owner/repo" format. Auto-detected if not provided.
     """
     try:
-        pr_number = _resolve_pr_number(pr_number)
-        return comments.reply_to_comment(pr_number, thread_id, body, repo=repo)
+        ctx = get_context()
+        cwd = await _get_workspace_cwd(ctx)
+        pr_number = _resolve_pr_number(pr_number, cwd=cwd)
+        return comments.reply_to_comment(pr_number, thread_id, body, repo=repo, cwd=cwd)
     except Exception as exc:
         logger.exception("reply_to_comment failed for %s on PR #%s", thread_id, pr_number)
         return f"Error replying to {thread_id} on PR #{pr_number}: {exc}"
@@ -350,9 +385,10 @@ async def request_rereview(
         Dict with "triggered" (manually triggered reviewers) and "auto_triggers" (no action needed).
     """
     try:
-        pr_number = _resolve_pr_number(pr_number)
         ctx = get_context()
-        return await rereview.request_rereview(pr_number, reviewer=reviewer, repo=repo, ctx=ctx)
+        cwd = await _get_workspace_cwd(ctx)
+        pr_number = _resolve_pr_number(pr_number, cwd=cwd)
+        return await rereview.request_rereview(pr_number, reviewer=reviewer, repo=repo, cwd=cwd, ctx=ctx)
     except Exception as exc:
         logger.exception("request_rereview failed for PR #%s", pr_number)
         return RereviewResult(triggered=[], auto_triggers=[], error=f"Error: {exc}")
@@ -362,7 +398,7 @@ async def request_rereview(
 
 
 @mcp.tool
-def create_issue_from_comment(
+async def create_issue_from_comment(
     thread_id: str,
     title: str,
     pr_number: int | None = None,
@@ -385,13 +421,16 @@ def create_issue_from_comment(
         Created issue number, URL, and title.
     """
     try:
-        pr_number = _resolve_pr_number(pr_number)
+        ctx = get_context()
+        cwd = await _get_workspace_cwd(ctx)
+        pr_number = _resolve_pr_number(pr_number, cwd=cwd)
         return issues.create_issue_from_comment(
             pr_number,
             thread_id,
             title,
             labels=labels,
             repo=repo,
+            cwd=cwd,
         )
     except Exception as exc:
         logger.exception("create_issue_from_comment failed for %s on PR #%s", thread_id, pr_number)
@@ -417,7 +456,8 @@ async def review_pr_descriptions(
     """
     try:
         ctx = get_context()
-        return await descriptions.review_pr_descriptions(pr_numbers, repo=repo, ctx=ctx)
+        cwd = await _get_workspace_cwd(ctx)
+        return await descriptions.review_pr_descriptions(pr_numbers, repo=repo, cwd=cwd, ctx=ctx)
     except Exception as exc:
         logger.exception("review_pr_descriptions failed")
         return PRDescriptionReviewResult(error=f"Error: {exc}")
@@ -449,7 +489,8 @@ async def summarize_review_status(
     """
     try:
         ctx = get_context()
-        return await stack.summarize_review_status(pr_numbers=pr_numbers, repo=repo, ctx=ctx)
+        cwd = await _get_workspace_cwd(ctx)
+        return await stack.summarize_review_status(pr_numbers=pr_numbers, repo=repo, cwd=cwd, ctx=ctx)
     except Exception as exc:
         logger.exception("summarize_review_status failed")
         return StackReviewStatusResult(error=f"Error: {exc}")
@@ -480,7 +521,8 @@ async def stack_activity(
     """
     try:
         ctx = get_context()
-        return await stack.stack_activity(pr_numbers=pr_numbers, repo=repo, ctx=ctx)
+        cwd = await _get_workspace_cwd(ctx)
+        return await stack.stack_activity(pr_numbers=pr_numbers, repo=repo, cwd=cwd, ctx=ctx)
     except Exception as exc:
         logger.exception("stack_activity failed")
         return StackActivityResult(error=f"Error: {exc}")
@@ -515,7 +557,8 @@ async def triage_review_comments(
     """
     try:
         ctx = get_context()
-        return await comments.triage_review_comments(pr_numbers, repo=repo, owner_logins=owner_logins, ctx=ctx)
+        cwd = await _get_workspace_cwd(ctx)
+        return await comments.triage_review_comments(pr_numbers, repo=repo, owner_logins=owner_logins, cwd=cwd, ctx=ctx)
     except Exception as exc:
         logger.exception("triage_review_comments failed")
         return TriageResult(error=f"Error: {exc}")
