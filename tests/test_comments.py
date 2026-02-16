@@ -17,6 +17,7 @@ from codereviewbuddy.tools.comments import (
     _get_pr_reviews,
     _latest_push_time_from_commits,
     _parse_threads,
+    _strip_comment_body,
     list_review_comments,
     list_stack_review_comments,
     reply_to_comment,
@@ -81,6 +82,45 @@ SAMPLE_GRAPHQL_RESPONSE = {
 # ---------------------------------------------------------------------------
 # Tests
 # ---------------------------------------------------------------------------
+
+
+class TestStripCommentBody:
+    def test_removes_html_comments(self):
+        body = "Before <!-- devin-review-badge-begin --><img src='badge.svg'><!-- devin-review-badge-end --> After"
+        result = _strip_comment_body(body)
+        assert "badge" not in result
+        assert "Before" in result
+        assert "After" in result
+
+    def test_collapses_details_blocks(self):
+        body = "Issue found\n<details><summary>Root cause analysis</summary>\nLong explanation here...</details>"
+        result = _strip_comment_body(body)
+        assert "[details: Root cause analysis]" in result
+        assert "Long explanation" not in result
+
+    def test_strips_html_tags(self):
+        body = "<p>Some <strong>bold</strong> text</p>"
+        result = _strip_comment_body(body)
+        assert result == "Some bold text"
+
+    def test_truncates_long_bodies(self):
+        body = "x" * 3000
+        result = _strip_comment_body(body)
+        assert len(result) < 2100
+        assert result.endswith("… [truncated]")
+
+    def test_collapses_blank_lines(self):
+        body = "Line 1\n\n\n\n\nLine 2"
+        result = _strip_comment_body(body)
+        assert result == "Line 1\n\nLine 2"
+
+    def test_preserves_plain_markdown(self):
+        body = "🔴 **Bug: missing null check**\n\n`foo.bar` can be None here."
+        result = _strip_comment_body(body)
+        assert result == body
+
+    def test_empty_body(self):
+        assert not _strip_comment_body("")
 
 
 class TestParseThreads:
