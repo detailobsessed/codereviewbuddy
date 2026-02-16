@@ -17,7 +17,7 @@ class ReviewerAdapter(ABC):
     comments, and how to identify its comments by author username.
 
     Call :meth:`configure` to apply per-reviewer config overrides from
-    ``.codereviewbuddy.toml``.  Without configuration, adapters use their
+    ``CRB_*`` env vars.  Without configuration, adapters use their
     hardcoded defaults.
     """
 

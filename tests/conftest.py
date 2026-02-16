@@ -11,9 +11,8 @@ from codereviewbuddy.config import Config, set_config
 def _default_config():
     """Reset config to defaults before every test.
 
-    The committed .codereviewbuddy.toml may disable reviewers (e.g. Devin),
-    which breaks tests that expect all reviewers enabled. This fixture
-    ensures every test starts with a clean default config.
+    Ensures every test starts with a clean default config, unaffected
+    by CRB_* env vars that may be set in the developer's shell.
     """
     set_config(Config())
     yield

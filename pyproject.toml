@@ -26,7 +26,7 @@ classifiers = [
 ]
 dependencies = [
     "fastmcp>=3.0.0rc1",
-    "tomlkit>=0.13",
+    "pydantic-settings>=2.0",
 ]
 
 [project.scripts]
