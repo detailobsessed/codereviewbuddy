@@ -2,21 +2,13 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
-
 import pytest
-
-if TYPE_CHECKING:
-    from pathlib import Path
 
 from codereviewbuddy.config import (
     Config,
     ReviewerConfig,
     Severity,
-    _collect_unknown_keys,
-    clean_config,
     load_config,
-    update_config,
 )
 
 
@@ -83,7 +75,7 @@ class TestConfig:
         assert config.reviewers["devin"].resolve_levels == [Severity.INFO]  # Devin-specific, not all severities
 
     def test_empty_section_preserves_reviewer_defaults(self):
-        """Empty TOML section (no fields set) should behave like zero-config for that reviewer."""
+        """Empty reviewer config (no fields set) should behave like zero-config for that reviewer."""
         config = Config(reviewers={"devin": ReviewerConfig()})
         assert config.reviewers["devin"].auto_resolve_stale is False  # Devin-specific default
         assert config.reviewers["devin"].resolve_levels == [Severity.INFO]  # Devin-specific default
@@ -149,19 +141,12 @@ class TestConfig:
         assert config.heartbeat_interval_ms == 750
         assert config.include_args_fingerprint is False
 
-    def test_diagnostics_from_toml(self, tmp_path: Path):
-        toml_file = tmp_path / ".codereviewbuddy.toml"
-        toml_file.write_text(
-            """\
-[diagnostics]
-io_tap = true
-tool_call_heartbeat = true
-heartbeat_interval_ms = 1200
-include_args_fingerprint = false
-""",
-            encoding="utf-8",
-        )
-        config, _path = load_config(cwd=tmp_path)
+    def test_diagnostics_from_env(self, monkeypatch: pytest.MonkeyPatch):
+        monkeypatch.setenv("CRB_DIAGNOSTICS__IO_TAP", "true")
+        monkeypatch.setenv("CRB_DIAGNOSTICS__TOOL_CALL_HEARTBEAT", "true")
+        monkeypatch.setenv("CRB_DIAGNOSTICS__HEARTBEAT_INTERVAL_MS", "1200")
+        monkeypatch.setenv("CRB_DIAGNOSTICS__INCLUDE_ARGS_FINGERPRINT", "false")
+        config = load_config()
         assert config.diagnostics.io_tap is True
         assert config.diagnostics.tool_call_heartbeat is True
         assert config.diagnostics.heartbeat_interval_ms == 1200
@@ -212,377 +197,62 @@ class TestCanResolve:
             assert allowed is True, f"Expected True for severity={severity!r}"
 
 
-class TestLoadConfig:
-    def test_missing_file_returns_defaults(self, tmp_path: Path):
-        config, _path = load_config(cwd=tmp_path)
+class TestLoadConfigFromEnv:
+    """Tests for load_config() reading CRB_* environment variables."""
+
+    def test_no_env_vars_returns_defaults(self):
+        config = load_config()
         assert "devin" in config.reviewers
         assert config.reviewers["devin"].resolve_levels == [Severity.INFO]
 
-    def test_load_valid_toml(self, tmp_path: Path):
-        # Create a git root so the walk-up stops
-        (tmp_path / ".git").mkdir()
-        config_file = tmp_path / ".codereviewbuddy.toml"
-        config_file.write_text(
-            """\
-[reviewers.devin]
-resolve_levels = ["info", "warning"]
-
-[reviewers.unblocked]
-auto_resolve_stale = false
-""",
-            encoding="utf-8",
-        )
-        config, _path = load_config(cwd=tmp_path)
-        assert config.reviewers["devin"].resolve_levels == [Severity.INFO, Severity.WARNING]
-        assert config.reviewers["unblocked"].auto_resolve_stale is False
-        # coderabbit still gets defaults
-        assert config.reviewers["coderabbit"].auto_resolve_stale is False
-
-    def test_load_self_improvement_from_toml(self, tmp_path: Path):
-        (tmp_path / ".git").mkdir()
-        (tmp_path / ".codereviewbuddy.toml").write_text(
-            """\
-[self_improvement]
-enabled = true
-repo = "detailobsessed/codereviewbuddy"
-""",
-            encoding="utf-8",
-        )
-        config, _path = load_config(cwd=tmp_path)
+    def test_self_improvement_from_env(self, monkeypatch: pytest.MonkeyPatch):
+        monkeypatch.setenv("CRB_SELF_IMPROVEMENT__ENABLED", "true")
+        monkeypatch.setenv("CRB_SELF_IMPROVEMENT__REPO", "owner/myrepo")
+        config = load_config()
         assert config.self_improvement.enabled is True
-        assert config.self_improvement.repo == "detailobsessed/codereviewbuddy"
+        assert config.self_improvement.repo == "owner/myrepo"
 
-    def test_load_walks_up_to_git_root(self, tmp_path: Path):
-        (tmp_path / ".git").mkdir()
-        (tmp_path / ".codereviewbuddy.toml").write_text(
-            "[reviewers.devin]\nenabled = false\n",
-            encoding="utf-8",
-        )
-        subdir = tmp_path / "src" / "deep"
-        subdir.mkdir(parents=True)
-        config, _path = load_config(cwd=subdir)
-        assert config.reviewers["devin"].enabled is False
+    def test_diagnostics_from_env(self, monkeypatch: pytest.MonkeyPatch):
+        monkeypatch.setenv("CRB_DIAGNOSTICS__IO_TAP", "true")
+        monkeypatch.setenv("CRB_DIAGNOSTICS__HEARTBEAT_INTERVAL_MS", "750")
+        config = load_config()
+        assert config.diagnostics.io_tap is True
+        assert config.diagnostics.heartbeat_interval_ms == 750
 
-    def test_stops_at_git_root(self, tmp_path: Path):
-        # Config above git root should not be found
-        (tmp_path / ".codereviewbuddy.toml").write_text(
-            "[reviewers.devin]\nenabled = false\n",
-            encoding="utf-8",
-        )
-        project = tmp_path / "project"
-        project.mkdir()
-        (project / ".git").mkdir()
-        config, _path = load_config(cwd=project)
-        # Should NOT find the config above .git — devin stays enabled (default)
-        assert config.reviewers["devin"].enabled is True
+    def test_pr_descriptions_disabled(self, monkeypatch: pytest.MonkeyPatch):
+        monkeypatch.setenv("CRB_PR_DESCRIPTIONS__ENABLED", "false")
+        config = load_config()
+        assert config.pr_descriptions.enabled is False
 
-    def test_invalid_toml_raises(self, tmp_path: Path):
-        (tmp_path / ".git").mkdir()
-        (tmp_path / ".codereviewbuddy.toml").write_text("{{invalid toml", encoding="utf-8")
-        with pytest.raises(ValueError, match="Invalid TOML"):
-            load_config(cwd=tmp_path)
+    def test_reviewer_defaults_still_applied(self, monkeypatch: pytest.MonkeyPatch):
+        """Even with env vars set, reviewer defaults should be applied."""
+        monkeypatch.setenv("CRB_DIAGNOSTICS__IO_TAP", "true")
+        config = load_config()
+        assert "devin" in config.reviewers
+        assert config.reviewers["devin"].auto_resolve_stale is False
+        assert config.reviewers["coderabbit"].resolve_levels == []
 
-    def test_invalid_config_values_raises(self, tmp_path: Path):
-        (tmp_path / ".git").mkdir()
-        (tmp_path / ".codereviewbuddy.toml").write_text(
-            '[reviewers.devin]\nresolve_levels = ["not_a_severity"]\n',
-            encoding="utf-8",
-        )
-        with pytest.raises(ValueError, match="Invalid config"):
-            load_config(cwd=tmp_path)
-
-    def test_empty_config_file_returns_defaults(self, tmp_path: Path):
-        (tmp_path / ".git").mkdir()
-        (tmp_path / ".codereviewbuddy.toml").write_text("", encoding="utf-8")
-        config, _path = load_config(cwd=tmp_path)
+    def test_unknown_env_vars_ignored(self, monkeypatch: pytest.MonkeyPatch):
+        """CRB_ env vars for unknown fields should be silently ignored."""
+        monkeypatch.setenv("CRB_BOGUS_SETTING", "whatever")
+        config = load_config()  # Should not raise
         assert "devin" in config.reviewers
 
-    def test_init_template_empty_sections_match_zero_config(self, tmp_path: Path):
-        """Init template has [reviewers.devin] etc. with all values commented out.
 
-        TOML parses these as empty dicts. Verify the result matches zero-config defaults.
-        """
-        (tmp_path / ".git").mkdir()
-        (tmp_path / ".codereviewbuddy.toml").write_text(
-            """\
-[reviewers.devin]
+class TestGetSetConfig:
+    """Tests for the global config state (get_config / set_config)."""
 
-[reviewers.unblocked]
-
-[reviewers.coderabbit]
-""",
-            encoding="utf-8",
-        )
-        config, _path = load_config(cwd=tmp_path)
-        zero = Config()
-        for name in ("devin", "unblocked", "coderabbit"):
-            assert config.reviewers[name].enabled == zero.reviewers[name].enabled, name
-            assert config.reviewers[name].auto_resolve_stale == zero.reviewers[name].auto_resolve_stale, name
-            assert config.reviewers[name].resolve_levels == zero.reviewers[name].resolve_levels, name
-
-
-class TestCollectUnknownKeys:
-    def test_top_level_unknown(self):
-        data = {"reviewers": {}, "bogus_key": True}
-        assert _collect_unknown_keys(data, Config) == ["bogus_key"]
-
-    def test_nested_unknown_in_pr_descriptions(self):
-        data = {"pr_descriptions": {"enabled": True, "require_review": False}}
-        assert _collect_unknown_keys(data, Config) == ["pr_descriptions.require_review"]
-
-    def test_no_unknowns(self):
-        data = {"pr_descriptions": {"enabled": True}}
-        assert _collect_unknown_keys(data, Config) == []
-
-    def test_unknown_reviewer_names_are_allowed(self):
-        """Unknown reviewer names under [reviewers.*] should NOT be flagged."""
-        data = {"reviewers": {"future_bot": {"enabled": True}}}
-        assert _collect_unknown_keys(data, Config) == []
-
-    def test_multiple_unknowns(self):
-        data = {"pr_descriptions": {"require_review": False}, "foo": 1}
-        unknown = _collect_unknown_keys(data, Config)
-        assert "pr_descriptions.require_review" in unknown
-        assert "foo" in unknown
-
-    def test_unknown_key_within_known_reviewer(self):
-        """Typos like [reviewers.devin] bogus_key = true should be flagged."""
-        data = {"reviewers": {"devin": {"enabled": True, "bogus_key": True}}}
-        assert _collect_unknown_keys(data, Config) == ["reviewers.devin.bogus_key"]
-
-    def test_unknown_key_within_unknown_reviewer(self):
-        """Even unknown reviewer names should have their fields validated."""
-        data = {"reviewers": {"future_bot": {"enabled": True, "typo_field": 42}}}
-        assert _collect_unknown_keys(data, Config) == ["reviewers.future_bot.typo_field"]
-
-    def test_valid_keys_within_reviewer_not_flagged(self):
-        """All valid ReviewerConfig fields should pass without warnings."""
-        data = {"reviewers": {"devin": {"enabled": True, "auto_resolve_stale": False, "resolve_levels": ["info"]}}}
-        assert _collect_unknown_keys(data, Config) == []
-
-
-class TestLoadConfigWarnings:
-    def test_warns_on_unknown_keys(self, tmp_path: Path, caplog: pytest.LogCaptureFixture):
-        (tmp_path / ".git").mkdir()
-        (tmp_path / ".codereviewbuddy.toml").write_text(
-            "[pr_descriptions]\nrequire_review = false\n",
-            encoding="utf-8",
-        )
-        import logging
-
-        with caplog.at_level(logging.WARNING, logger="codereviewbuddy.config"):
-            load_config(cwd=tmp_path)
-        assert any("require_review" in r.message for r in caplog.records)
-        assert any("--update" in r.message for r in caplog.records)
-
-
-class TestUpdateConfigDeprecation:
-    def test_comments_out_deprecated_keys(self, tmp_path: Path):
-        config_file = tmp_path / ".codereviewbuddy.toml"
-        config_file.write_text(
-            "[pr_descriptions]\nenabled = true\nrequire_review = false\n",
-            encoding="utf-8",
-        )
-        _, _added, deprecated = update_config(cwd=tmp_path)
-        assert "pr_descriptions.require_review" in deprecated
-        content = config_file.read_text(encoding="utf-8")
-        assert "DEPRECATED" in content
-        assert "require_review" in content  # still present as comment
-
-    def test_no_deprecations(self, tmp_path: Path):
-        config_file = tmp_path / ".codereviewbuddy.toml"
-        config_file.write_text("[pr_descriptions]\nenabled = true\n", encoding="utf-8")
-        _, _added, deprecated = update_config(cwd=tmp_path)
-        assert deprecated == []
-
-    def test_comments_out_unknown_table_section(self, tmp_path: Path):
-        config_file = tmp_path / ".codereviewbuddy.toml"
-        config_file.write_text(
-            '[pr_descriptions]\nenabled = true\n\n[old_section]\nkey = "val"\n',
-            encoding="utf-8",
-        )
-        _, _added, deprecated = update_config(cwd=tmp_path)
-        assert "old_section" in deprecated
-        content = config_file.read_text(encoding="utf-8")
-        assert "DEPRECATED" in content
-
-    def test_comments_out_empty_unknown_table(self, tmp_path: Path):
-        """Regression: empty unknown table used to crash with IndexError."""
-        config_file = tmp_path / ".codereviewbuddy.toml"
-        config_file.write_text(
-            "[pr_descriptions]\nenabled = true\n\n[deprecated_section]\n",
-            encoding="utf-8",
-        )
-        _, _added, deprecated = update_config(cwd=tmp_path)
-        assert "deprecated_section" in deprecated
-        content = config_file.read_text(encoding="utf-8")
-        assert "DEPRECATED" in content
-
-
-class TestCleanConfig:
-    def test_removes_deprecated_keys(self, tmp_path: Path):
-        config_file = tmp_path / ".codereviewbuddy.toml"
-        config_file.write_text(
-            "[pr_descriptions]\nenabled = true\nrequire_review = false\n",
-            encoding="utf-8",
-        )
-        _, removed = clean_config(cwd=tmp_path)
-        assert "pr_descriptions.require_review" in removed
-        content = config_file.read_text(encoding="utf-8")
-        assert "require_review" not in content
-        assert "enabled" in content  # known key preserved
-
-    def test_no_deprecated_keys(self, tmp_path: Path):
-        config_file = tmp_path / ".codereviewbuddy.toml"
-        config_file.write_text("[pr_descriptions]\nenabled = true\n", encoding="utf-8")
-        _, removed = clean_config(cwd=tmp_path)
-        assert removed == []
-
-    def test_fails_if_no_config(self, tmp_path: Path):
-        with pytest.raises(SystemExit):
-            clean_config(cwd=tmp_path)
-
-
-class TestHotReload:
-    """Tests for mtime-based config hot-reload (issue #70)."""
-
-    @pytest.fixture(autouse=True)
-    def _reset_config_state(self):
-        """Reset module-level _state between tests."""
-        from codereviewbuddy.config import _state
-
-        original_config = _state.config
-        original_path = _state.path
-        original_mtime = _state.mtime
-        original_callbacks = _state._on_reload[:]
-        yield
-        _state.config = original_config
-        _state.path = original_path
-        _state.mtime = original_mtime
-        _state._on_reload = original_callbacks
-
-    def _setup_config(self, tmp_path: Path, toml_content: str) -> Path:
-        """Create a git root + config file and wire up set_config."""
-        from codereviewbuddy.config import set_config
-
-        (tmp_path / ".git").mkdir(exist_ok=True)
-        config_path = tmp_path / ".codereviewbuddy.toml"
-        config_path.write_text(toml_content, encoding="utf-8")
-        config, path = load_config(cwd=tmp_path)
-        assert path is not None
-        set_config(config, config_path=path)
-        return config_path
-
-    def test_returns_cached_when_unchanged(self, tmp_path: Path):
-        """get_config() returns the same object when file hasn't changed."""
-        from codereviewbuddy.config import get_config
-
-        self._setup_config(tmp_path, "[reviewers.devin]\nenabled = true\n")
-        c1 = get_config()
-        c2 = get_config()
-        assert c1 is c2
-
-    def test_detects_file_change(self, tmp_path: Path):
-        """get_config() re-reads when mtime changes."""
-        import os
-        import time
-
-        from codereviewbuddy.config import get_config
-
-        config_path = self._setup_config(tmp_path, "[reviewers.devin]\nenabled = true\n")
-        c1 = get_config()
-        assert c1.reviewers["devin"].enabled is True
-
-        # Ensure mtime actually changes (some filesystems have 1s granularity)
-        time.sleep(0.05)
-        config_path.write_text("[reviewers.devin]\nenabled = false\n", encoding="utf-8")
-        # Force mtime to be different
-        os.utime(config_path, (time.time() + 1, time.time() + 1))
-
-        c2 = get_config()
-        assert c2.reviewers["devin"].enabled is False
-        assert c2 is not c1
-
-    def test_deleted_file_falls_back_to_defaults(self, tmp_path: Path):
-        """get_config() returns defaults when config file is deleted."""
-        from codereviewbuddy.config import get_config
-
-        config_path = self._setup_config(tmp_path, "[reviewers.devin]\nenabled = false\n")
-        assert get_config().reviewers["devin"].enabled is False
-
-        config_path.unlink()
-        c = get_config()
-        # Default for devin is enabled=True
-        assert c.reviewers["devin"].enabled is True
-
-    def test_invalid_edit_keeps_last_good_config(self, tmp_path: Path, caplog: pytest.LogCaptureFixture):
-        """Invalid TOML after edit keeps the last good config."""
-        import logging
-        import os
-        import time
-
-        from codereviewbuddy.config import get_config
-
-        config_path = self._setup_config(tmp_path, "[reviewers.devin]\nenabled = false\n")
-        assert get_config().reviewers["devin"].enabled is False
-
-        # Write invalid TOML with a different mtime
-        time.sleep(0.05)
-        config_path.write_text("{{invalid", encoding="utf-8")
-        os.utime(config_path, (time.time() + 1, time.time() + 1))
-
-        with caplog.at_level(logging.WARNING, logger="codereviewbuddy.config"):
-            c = get_config()
-        assert c.reviewers["devin"].enabled is False  # Last good config
-        assert any("keeping last good config" in r.message for r in caplog.records)
-
-    def test_reload_callback_fires_on_change(self, tmp_path: Path):
-        """Registered callbacks are invoked with the new config on reload."""
-        import os
-        import time
-
-        from codereviewbuddy.config import get_config, register_reload_callback
-
-        config_path = self._setup_config(tmp_path, "[reviewers.devin]\nenabled = true\n")
-
-        callback_configs: list[Config] = []
-        register_reload_callback(callback_configs.append)
-
-        # Trigger reload
-        time.sleep(0.05)
-        config_path.write_text("[reviewers.devin]\nenabled = false\n", encoding="utf-8")
-        os.utime(config_path, (time.time() + 1, time.time() + 1))
-        get_config()
-
-        assert len(callback_configs) == 1
-        assert callback_configs[0].reviewers["devin"].enabled is False
-
-    def test_callback_error_does_not_break_reload(self, tmp_path: Path):
-        """A failing callback doesn't prevent the config from updating."""
-        import os
-        import time
-
-        from codereviewbuddy.config import get_config, register_reload_callback
-
-        config_path = self._setup_config(tmp_path, "[reviewers.devin]\nenabled = true\n")
-
-        def bad_callback(_config: Config) -> None:
-            msg = "callback exploded"
-            raise RuntimeError(msg)
-
-        register_reload_callback(bad_callback)
-
-        time.sleep(0.05)
-        config_path.write_text("[reviewers.devin]\nenabled = false\n", encoding="utf-8")
-        os.utime(config_path, (time.time() + 1, time.time() + 1))
-
-        c = get_config()
-        assert c.reviewers["devin"].enabled is False  # Config still updated
-
-    def test_no_config_path_skips_hot_reload(self, tmp_path: Path):
-        """When no config file was found at startup, get_config returns defaults."""
+    def test_get_config_returns_set_config(self):
         from codereviewbuddy.config import get_config, set_config
 
-        set_config(Config(), config_path=None)
-        c = get_config()
-        assert c.reviewers["devin"].enabled is True  # defaults
+        custom = Config(pr_descriptions=Config.model_fields["pr_descriptions"].default_factory())
+        custom.pr_descriptions.enabled = False
+        set_config(custom)
+        assert get_config().pr_descriptions.enabled is False
+
+    def test_default_config_has_reviewer_defaults(self):
+        from codereviewbuddy.config import get_config
+
+        config = get_config()
+        assert "devin" in config.reviewers
+        assert "unblocked" in config.reviewers

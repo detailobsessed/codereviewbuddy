@@ -5,8 +5,8 @@ level, before the MCP library touches them. This provides a ground-truth
 audit trail for diagnosing transport hangs (issue #65).
 
 Logs are written to ~/.codereviewbuddy/io_tap.jsonl.
-Enable via ``[diagnostics] io_tap = true`` in .codereviewbuddy.toml,
-or the CODEREVIEWBUDDY_IO_TAP=1 environment variable (overrides config).
+Enable via ``CRB_DIAGNOSTICS__IO_TAP=true`` environment variable,
+or the CODEREVIEWBUDDY_IO_TAP=1 environment variable (legacy override).
 """
 
 from __future__ import annotations
@@ -257,7 +257,7 @@ def _should_enable_io_tap() -> bool:
     try:
         from codereviewbuddy.config import load_config  # noqa: PLC0415
 
-        config, _path = load_config()
+        config = load_config()
     except Exception:
         return False
     else:
@@ -267,8 +267,8 @@ def _should_enable_io_tap() -> bool:
 def install_io_tap() -> bool:
     """Install I/O tap on stdin/stdout if enabled via config or env var.
 
-    Checks ``CODEREVIEWBUDDY_IO_TAP`` env var first (overrides config),
-    then falls back to ``[diagnostics] io_tap`` in .codereviewbuddy.toml.
+    Checks ``CODEREVIEWBUDDY_IO_TAP`` env var first (legacy override),
+    then falls back to ``CRB_DIAGNOSTICS__IO_TAP`` env var.
 
     Must be called BEFORE FastMCP starts the stdio transport.
     Returns True if the tap was installed, False otherwise.

@@ -85,12 +85,17 @@ Add to your MCP settings (`~/.codeium/windsurf/mcp_config.json`):
   "mcpServers": {
     "codereviewbuddy": {
       "command": "uvx",
-      "args": ["--prerelease=allow", "codereviewbuddy@latest"]
+      "args": ["--prerelease=allow", "codereviewbuddy@latest"],
+      "env": {
+        "CRB_WORKSPACE": "/path/to/your/project"
+      }
     }
   }
 }
 ```
 
+> **Why `CRB_WORKSPACE`?** The server needs to know which project you're working in so `gh` CLI commands target the right repo. Without this, auto-detection may pick the wrong repository.
+>
 > **Why `--prerelease=allow`?** codereviewbuddy depends on FastMCP v3 prerelease (`>=3.0.0rc1`). Without this flag, `uvx` refuses to resolve pre-release dependencies.
 >
 > **Why `@latest`?** Without it, `uvx` caches the first resolved version and never upgrades automatically.
@@ -104,7 +109,10 @@ Add to `~/Library/Application Support/Claude/claude_desktop_config.json`:
   "mcpServers": {
     "codereviewbuddy": {
       "command": "uvx",
-      "args": ["--prerelease=allow", "codereviewbuddy@latest"]
+      "args": ["--prerelease=allow", "codereviewbuddy@latest"],
+      "env": {
+        "CRB_WORKSPACE": "/path/to/your/project"
+      }
     }
   }
 }
@@ -119,7 +127,10 @@ Add to `.cursor/mcp.json` in your project:
   "mcpServers": {
     "codereviewbuddy": {
       "command": "uvx",
-      "args": ["--prerelease=allow", "codereviewbuddy@latest"]
+      "args": ["--prerelease=allow", "codereviewbuddy@latest"],
+      "env": {
+        "CRB_WORKSPACE": "/path/to/your/project"
+      }
     }
   }
 }
@@ -152,7 +163,10 @@ Use the same runtime settings in every client:
   "mcpServers": {
     "codereviewbuddy": {
       "command": "uvx",
-      "args": ["--prerelease=allow", "codereviewbuddy@latest"]
+      "args": ["--prerelease=allow", "codereviewbuddy@latest"],
+      "env": {
+        "CRB_WORKSPACE": "/path/to/your/project"
+      }
     }
   }
 }
@@ -165,7 +179,10 @@ Use the same runtime settings in every client:
   "mcpServers": {
     "codereviewbuddy": {
       "command": "uv",
-      "args": ["run", "--directory", "/path/to/codereviewbuddy", "codereviewbuddy"]
+      "args": ["run", "--directory", "/path/to/codereviewbuddy", "codereviewbuddy"],
+      "env": {
+        "CRB_WORKSPACE": "/path/to/your/project"
+      }
     }
   }
 }
@@ -201,51 +218,43 @@ Use one of these fixes:
 
 ## Configuration
 
-codereviewbuddy works **zero-config** with sensible defaults. To customize per-reviewer behavior, create a `.codereviewbuddy.toml` in your project root:
+codereviewbuddy works **zero-config** with sensible defaults. All configuration is via `CRB_*` environment variables set in your MCP client config JSON — no config files needed.
 
-```bash
-uvx codereviewbuddy config --init     # generates a self-documenting config file
-uvx codereviewbuddy config --update   # appends new sections without overwriting existing values
+### Environment variables
+
+Add env vars to the `"env"` block of your MCP client config:
+
+```json
+{
+  "mcpServers": {
+    "codereviewbuddy": {
+      "command": "uvx",
+      "args": ["--prerelease=allow", "codereviewbuddy@latest"],
+      "env": {
+        "CRB_WORKSPACE": "/path/to/your/project",
+        "CRB_SELF_IMPROVEMENT__ENABLED": "true",
+        "CRB_SELF_IMPROVEMENT__REPO": "owner/codereviewbuddy",
+        "CRB_DIAGNOSTICS__IO_TAP": "true"
+      }
+    }
+  }
+}
 ```
 
-Or create it manually:
+Nested settings use `__` (double underscore) as a delimiter, following the same pattern as FastMCP's own `FASTMCP_*` env vars.
 
-```toml
-# .codereviewbuddy.toml
+### All settings
 
-[reviewers.devin]
-enabled = true                    # Set to false to ignore Devin comments entirely
-auto_resolve_stale = false        # Devin auto-resolves its own threads; we skip them
-resolve_levels = ["info"]         # Only allow resolving info-level threads
-
-[reviewers.unblocked]
-enabled = true
-auto_resolve_stale = true         # We batch-resolve Unblocked's stale threads
-resolve_levels = ["info", "warning", "flagged", "bug"]
-
-[reviewers.coderabbit]
-enabled = true
-auto_resolve_stale = false        # CodeRabbit handles its own resolution
-resolve_levels = []               # Don't resolve any CodeRabbit threads
-
-[pr_descriptions]
-enabled = true                    # Set to false to disable PR description review tool
-```
-
-### Config options
-
-| Option | Type | Default | Description |
-| ------ | ---- | ------- | ----------- |
-| `enabled` | bool | `true` | Whether to include this reviewer's threads in results |
-| `auto_resolve_stale` | bool | varies | Whether `resolve_stale_comments` touches this reviewer's threads |
-| `resolve_levels` | list | varies | Severity levels that are allowed to be resolved |
-| `rereview_message` | string | `null` | Custom message for `request_rereview` (only for manual-trigger reviewers) |
-
-### PR description options (`[pr_descriptions]`)
-
-| Option | Type | Default | Description |
-| ------ | ---- | ------- | ----------- |
-| `enabled` | bool | `true` | Whether `review_pr_descriptions` tool is available |
+| Env var | Type | Default | Description |
+| ------- | ---- | ------- | ----------- |
+| `CRB_WORKSPACE` | string | *(auto-detect)* | Project directory for `gh` CLI — set this to avoid wrong-repo detection |
+| `CRB_PR_DESCRIPTIONS__ENABLED` | bool | `true` | Whether `review_pr_descriptions` tool is available |
+| `CRB_SELF_IMPROVEMENT__ENABLED` | bool | `false` | Agents file issues when they encounter server gaps |
+| `CRB_SELF_IMPROVEMENT__REPO` | string | `""` | Repository to file issues against (e.g. `owner/repo`) |
+| `CRB_DIAGNOSTICS__IO_TAP` | bool | `false` | Log stdin/stdout for transport debugging |
+| `CRB_DIAGNOSTICS__TOOL_CALL_HEARTBEAT` | bool | `false` | Emit heartbeat entries for long-running tool calls |
+| `CRB_DIAGNOSTICS__HEARTBEAT_INTERVAL_MS` | int | `5000` | Heartbeat cadence in milliseconds |
+| `CRB_DIAGNOSTICS__INCLUDE_ARGS_FINGERPRINT` | bool | `true` | Log args hash/size in tool call logs |
 
 ### Severity levels
 
@@ -268,10 +277,6 @@ Reviewers without a known format classify all comments as `info`. This means `re
 The `resolve_levels` config is **enforced server-side**. If an agent tries to resolve a thread whose severity exceeds the allowed levels, the server returns an error. This prevents agents from resolving critical review comments regardless of their instructions.
 
 For example, with the default config, resolving a 🔴 bug from Devin is blocked — only 📝 info threads can be resolved.
-
-### Config discovery
-
-The server walks up from the current working directory looking for `.codereviewbuddy.toml`, stopping at the `.git` root. If no config file is found, all defaults apply. The loaded config path is logged at startup.
 
 ## Reviewer behavior
 
@@ -323,7 +328,7 @@ poe prek          # run all pre-commit hooks
 The server is built on [FastMCP v3](https://github.com/jlowin/fastmcp) with a clean separation:
 
 - **`server.py`** — FastMCP server with tool registration, middleware, and instructions
-- **`config.py`** — Per-reviewer configuration (`.codereviewbuddy.toml` loader, severity classifier, resolve policy)
+- **`config.py`** — Per-reviewer configuration (`CRB_*` env vars via pydantic-settings, severity classifier, resolve policy)
 - **`tools/`** — Tool implementations (`comments.py`, `stack.py`, `descriptions.py`, `issues.py`, `rereview.py`)
 - **`reviewers/`** — Pluggable reviewer adapters with behavior flags (auto-resolve, re-review triggers)
 - **`gh.py`** — Thin wrapper around the `gh` CLI for GraphQL and REST calls

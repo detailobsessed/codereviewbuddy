@@ -10,7 +10,7 @@ import asyncio
 import importlib
 import importlib.util
 import logging
-import sys
+import os
 from typing import TYPE_CHECKING
 
 from fastmcp import FastMCP
@@ -22,7 +22,7 @@ from fastmcp.server.middleware.ping import PingMiddleware
 from fastmcp.server.middleware.timing import TimingMiddleware
 
 from codereviewbuddy import gh
-from codereviewbuddy.config import Config, get_config, get_config_path, load_config, register_reload_callback, set_config
+from codereviewbuddy.config import get_config, load_config, set_config
 from codereviewbuddy.middleware import WriteOperationMiddleware
 from codereviewbuddy.models import (
     ConfigInfo,
@@ -49,28 +49,39 @@ write_operation_middleware = WriteOperationMiddleware()
 
 
 async def _get_workspace_cwd(ctx: Context | None = None) -> str | None:
-    """Extract the client's workspace directory from MCP roots.
+    """Resolve the user's workspace directory for ``gh`` CLI commands.
 
-    MCP clients (e.g. Windsurf, Cursor) advertise their workspace as a
-    ``file://`` root.  Using this as ``cwd`` for ``gh`` commands ensures
-    auto-detection targets the *user's* project, not the server's install
-    directory.  See #142.
+    Priority:
+    1. ``CRB_WORKSPACE`` env var — explicit override, set in MCP client config.
+    2. MCP roots — protocol-correct, client-provided workspace.
+    3. ``None`` — falls back to the server's process cwd.
 
-    Returns:
-        Filesystem path string, or ``None`` to fall back to the server's cwd.
+    See #142.
     """
-    if ctx is None:
-        return None
-    try:
-        roots = await ctx.list_roots()
-        if roots:
-            from urllib.parse import unquote, urlparse  # noqa: PLC0415
+    # 1. Env var override (highest priority)
+    env_ws = os.environ.get("CRB_WORKSPACE")
+    if env_ws:
+        logger.debug("Workspace from CRB_WORKSPACE: %s", env_ws)
+        return env_ws
 
-            parsed = urlparse(str(roots[0].uri))
-            if parsed.scheme == "file" and parsed.path:
-                return unquote(parsed.path)
-    except Exception:
-        logger.debug("Could not resolve workspace roots", exc_info=True)
+    # 2. MCP roots
+    if ctx is not None:
+        try:
+            roots = await ctx.list_roots()
+            if roots:
+                from urllib.parse import unquote, urlparse  # noqa: PLC0415
+
+                parsed = urlparse(str(roots[0].uri))
+                if parsed.scheme == "file" and parsed.path:
+                    path = unquote(parsed.path)
+                    logger.debug("Workspace from MCP roots: %s", path)
+                    return path
+        except Exception:
+            logger.warning(
+                "MCP roots unavailable — auto-detection will use process cwd. Set CRB_WORKSPACE env var or pass repo= explicitly to tools.",
+            )
+
+    # 3. Process cwd (weakest — may be wrong if server launched from a different dir)
     return None
 
 
@@ -81,30 +92,19 @@ def _resolve_pr_number(pr_number: int | None, cwd: str | None = None) -> int:
     return gh.get_current_pr_number(cwd=cwd)
 
 
-def _on_config_reload(config: Config) -> None:
-    """Re-apply adapter config and middleware diagnostics after hot-reload."""
-    apply_config(config)
-    write_operation_middleware.configure_diagnostics(
-        heartbeat_enabled=config.diagnostics.tool_call_heartbeat,
-        heartbeat_interval_ms=config.diagnostics.heartbeat_interval_ms,
-        include_args_fingerprint=config.diagnostics.include_args_fingerprint,
-    )
-
-
 @lifespan
 async def check_gh_cli(server: FastMCP) -> AsyncIterator[dict[str, object] | None]:  # noqa: ARG001, RUF029
     """Verify gh CLI is installed and authenticated on server startup."""
     check_fastmcp_runtime()
     check_prerequisites()
-    config, config_path = load_config()
-    set_config(config, config_path=config_path)
+    config = load_config()
+    set_config(config)
     apply_config(config)
     write_operation_middleware.configure_diagnostics(
         heartbeat_enabled=config.diagnostics.tool_call_heartbeat,
         heartbeat_interval_ms=config.diagnostics.heartbeat_interval_ms,
         include_args_fingerprint=config.diagnostics.include_args_fingerprint,
     )
-    register_reload_callback(_on_config_reload)
     yield {}
 
 
@@ -157,7 +157,7 @@ changes based on them.
 
 Some reviewers auto-trigger a new review on every push (e.g. CodeRabbit) while others
 require a manual trigger via `request_rereview` (e.g. Unblocked). The trigger message
-is configurable per-reviewer via `rereview_message` in `.codereviewbuddy.toml`.
+is configurable per-reviewer via the `CRB_{NAME}_REREVIEW_MESSAGE` env var.
 
 ## Staleness
 
@@ -174,9 +174,9 @@ that do NOT auto-resolve (e.g. Unblocked) are batch-resolved. The result include
 
 ## Per-reviewer configuration
 
-The server loads `.codereviewbuddy.toml` from the project root at startup and
-hot-reloads on file changes. Call `show_config` to inspect the active configuration.
-The config controls per-reviewer resolve policy:
+Configuration is via `CRB_*` environment variables set in your MCP client config.
+Call `show_config` to inspect the active configuration. The config controls
+per-reviewer resolve policy:
 
 - **`resolve_levels`**: Which severity levels you're allowed to resolve. If you try to
   resolve a thread whose severity (🔴 bug, 🚩 flagged, 🟡 warning, 📝 info) exceeds
@@ -189,6 +189,14 @@ If `resolve_comment` or `resolve_stale_comments` returns a "blocked by config" e
 do NOT retry — the config is intentional. Inform the user about the blocked thread
 and its severity level instead.
 
+## Important: repo parameter
+
+All review tools auto-detect the repository from the current workspace (via
+`CRB_WORKSPACE` env var or MCP roots). The `repo` parameter on each tool is only
+needed when auto-detection fails. **Never use the self-improvement repo
+(`CRB_SELF_IMPROVEMENT__REPO`) for review operations** — that repo is exclusively
+for filing issues about this MCP server itself, not for reviewing PRs.
+
 ## Tracking useful suggestions
 
 When review comments contain genuinely useful improvement suggestions (not bugs being
@@ -196,7 +204,7 @@ fixed in the PR), use `create_issue_from_comment` to create a GitHub issue. Use 
 to classify: type labels (bug, enhancement, documentation) and priority labels (P0-P3).
 Don't file issues for nitpicks or things already being addressed.
 
-## Self-improvement
+## Self-improvement (server bug reports only)
 
 If you encounter errors, missing capabilities, or find yourself repeatedly working
 around a limitation of this MCP server, create a GitHub issue describing:
@@ -204,12 +212,12 @@ around a limitation of this MCP server, create a GitHub issue describing:
 - What went wrong or what's missing
 - A proposed solution if you have one
 
-Use `gh issue create` to file the issue against the repo specified in the
-`[self_improvement]` config section. Label it `agent-reported` plus any relevant
-type/priority labels.
+Use `gh issue create` to file the issue against the repo in `CRB_SELF_IMPROVEMENT__REPO`.
+Label it `agent-reported` plus any relevant type/priority labels. **This is only for
+issues with the MCP server itself — never use this repo for PR review operations.**
 
-This only applies when `[self_improvement]` is enabled in `.codereviewbuddy.toml`
-and a target `repo` is configured. Call `show_config` to check settings before filing.
+This only applies when `CRB_SELF_IMPROVEMENT__ENABLED=true` and `CRB_SELF_IMPROVEMENT__REPO`
+is set. Call `show_config` to check settings before filing.
 
 """,
 )
@@ -372,8 +380,8 @@ async def request_rereview(
     """Trigger a re-review for AI reviewers on a PR.
 
     Handles per-reviewer differences automatically. Reviewers that need manual
-    triggers get a configurable comment posted (see ``rereview_message`` in
-    ``.codereviewbuddy.toml``). Reviewers that auto-trigger on push are reported
+    triggers get a configurable comment posted (see ``CRB_{NAME}_REREVIEW_MESSAGE``
+    env var). Reviewers that auto-trigger on push are reported
     as needing no action.
 
     Args:
@@ -572,15 +580,13 @@ def show_config() -> ConfigInfo:
     """Show the active codereviewbuddy configuration.
 
     Returns the full loaded config including per-reviewer settings, resolve policies,
-    self-improvement config, and diagnostics. Also reports the config file path and
-    whether hot-reload is active (changes to the file are picked up automatically).
+    self-improvement config, and diagnostics. Configuration is loaded from CRB_*
+    environment variables at server startup.
     """
     config = get_config()
-    config_path = get_config_path()
     return ConfigInfo(
         config=config.model_dump(mode="json"),
-        config_path=str(config_path) if config_path else None,
-        hot_reload=config_path is not None,
+        source="env",
     )
 
 
@@ -691,39 +697,11 @@ If anything blocks, list the specific items that need attention.
 
 
 def main() -> None:
-    """Run the codereviewbuddy MCP server, or handle CLI subcommands."""
-    if len(sys.argv) > 1 and sys.argv[1] == "init":
-        print("'codereviewbuddy init' has been renamed to 'codereviewbuddy config --init'")  # noqa: T201
-        _config_cmd(["--init"])
-        return
-
-    if len(sys.argv) > 1 and sys.argv[1] == "config":
-        _config_cmd(sys.argv[2:])
-        return
-
+    """Run the codereviewbuddy MCP server."""
     from codereviewbuddy.io_tap import install_io_tap  # noqa: PLC0415
 
     install_io_tap()
     mcp.run()
-
-
-def _config_cmd(args: list[str]) -> None:
-    """Handle ``codereviewbuddy config [--init | --update | --clean]``."""
-    from codereviewbuddy.config import clean_config, init_config, update_config  # noqa: PLC0415
-
-    if "--init" in args:
-        init_config()
-    elif "--update" in args:
-        update_config()
-    elif "--clean" in args:
-        clean_config()
-    else:
-        print("Usage: codereviewbuddy config [--init | --update | --clean]")  # noqa: T201
-        print()  # noqa: T201
-        print("  --init    Create a new .codereviewbuddy.toml with all defaults")  # noqa: T201
-        print("  --update  Add new sections and comment out deprecated keys")  # noqa: T201
-        print("  --clean   Remove deprecated keys entirely")  # noqa: T201
-        raise SystemExit(1)
 
 
 def check_prerequisites() -> None:

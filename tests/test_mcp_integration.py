@@ -100,7 +100,7 @@ async def client(mocker: MockerFixture):
     from codereviewbuddy.config import Config
 
     mocker.patch("codereviewbuddy.server.check_prerequisites")
-    mocker.patch("codereviewbuddy.server.load_config", return_value=(Config(), None))
+    mocker.patch("codereviewbuddy.server.load_config", return_value=Config())
     async with Client(mcp) as c:
         yield c
 
@@ -395,8 +395,7 @@ class TestShowConfigMCP:
 
         data = json.loads(result.content[0].text)  # type: ignore[unresolved-attribute]
         assert "config" in data
-        assert "config_path" in data
-        assert "hot_reload" in data
+        assert "source" in data
         # Config should have the expected top-level keys
         assert "reviewers" in data["config"]
         assert "self_improvement" in data["config"]

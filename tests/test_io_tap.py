@@ -395,7 +395,7 @@ class TestShouldEnableIoTap:
         from codereviewbuddy.config import Config, DiagnosticsConfig
 
         mock_config = Config(diagnostics=DiagnosticsConfig(io_tap=True))
-        mocker.patch("codereviewbuddy.config.load_config", return_value=(mock_config, None))
+        mocker.patch("codereviewbuddy.config.load_config", return_value=mock_config)
         assert _should_enable_io_tap() is False
 
     def test_config_enables_when_no_env_var(self, monkeypatch: pytest.MonkeyPatch, mocker: MockerFixture):
@@ -403,7 +403,7 @@ class TestShouldEnableIoTap:
         from codereviewbuddy.config import Config, DiagnosticsConfig
 
         mock_config = Config(diagnostics=DiagnosticsConfig(io_tap=True))
-        mocker.patch("codereviewbuddy.config.load_config", return_value=(mock_config, None))
+        mocker.patch("codereviewbuddy.config.load_config", return_value=mock_config)
         assert _should_enable_io_tap() is True
 
     def test_defaults_false_when_no_env_and_no_config(self, monkeypatch: pytest.MonkeyPatch, mocker: MockerFixture):

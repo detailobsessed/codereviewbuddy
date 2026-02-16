@@ -189,5 +189,4 @@ class ConfigInfo(BaseModel):
     """Active codereviewbuddy configuration with metadata."""
 
     config: dict = Field(description="Full configuration as a dictionary")
-    config_path: str | None = Field(default=None, description="Path to the .codereviewbuddy.toml file, or null if using defaults")
-    hot_reload: bool = Field(default=False, description="Whether config changes are automatically picked up")
+    source: str = Field(default="env", description="Configuration source: 'env' (CRB_* environment variables)")
