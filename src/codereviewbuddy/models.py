@@ -98,14 +98,6 @@ class ResolveStaleResult(BaseModel):
     error: str | None = Field(default=None, description="Error message if the request failed")
 
 
-class RereviewResult(BaseModel):
-    """Result of triggering re-reviews on a PR."""
-
-    triggered: list[str] = Field(default_factory=list, description="Reviewers that were manually triggered")
-    auto_triggers: list[str] = Field(default_factory=list, description="Reviewers that auto-trigger on push (no action needed)")
-    error: str | None = Field(default=None, description="Error message if the request failed")
-
-
 class PRDescriptionInfo(BaseModel):
     """A single PR's description with quality analysis."""
 

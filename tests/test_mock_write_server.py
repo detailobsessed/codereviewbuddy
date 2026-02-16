@@ -45,16 +45,6 @@ class TestMockWriteServerTools:
         result = mock_write_server.reply_to_comment(42, "PRRT_test1", "Fixed", repo="owner/repo")  # type: ignore[operator]
         assert "PRRT_test1" in result
 
-    async def test_request_rereview(self):
-        result = await mock_write_server.request_rereview(42)  # type: ignore[operator]
-        data = json.loads(result)
-        assert "triggered" in data
-
-    async def test_request_rereview_with_params(self):
-        result = await mock_write_server.request_rereview(42, reviewer="unblocked", repo="owner/repo")  # type: ignore[operator]
-        data = json.loads(result)
-        assert "auto_triggers" in data
-
     async def test_check_for_updates(self):
         result = await mock_write_server.check_for_updates()  # type: ignore[operator]
         data = json.loads(result)

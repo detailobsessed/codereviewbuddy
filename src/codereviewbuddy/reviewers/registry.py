@@ -5,7 +5,6 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from codereviewbuddy.config import Config
     from codereviewbuddy.reviewers.base import ReviewerAdapter
 
 
@@ -13,23 +12,18 @@ def _build_registry() -> list[ReviewerAdapter]:
     """Instantiate all known reviewer adapters."""
     from codereviewbuddy.reviewers.coderabbit import CodeRabbitAdapter  # noqa: PLC0415
     from codereviewbuddy.reviewers.devin import DevinAdapter  # noqa: PLC0415
+    from codereviewbuddy.reviewers.greptile import GreptileAdapter  # noqa: PLC0415
     from codereviewbuddy.reviewers.unblocked import UnblockedAdapter  # noqa: PLC0415
 
     return [
         UnblockedAdapter(),
         DevinAdapter(),
         CodeRabbitAdapter(),
+        GreptileAdapter(),
     ]
 
 
 REVIEWERS: list[ReviewerAdapter] = _build_registry()
-
-
-def apply_config(config: Config) -> None:
-    """Apply per-reviewer configuration to all registered adapters."""
-    for adapter in REVIEWERS:
-        rc = config.get_reviewer(adapter.name)
-        adapter.configure(rc)
 
 
 def identify_reviewer(author: str) -> str:

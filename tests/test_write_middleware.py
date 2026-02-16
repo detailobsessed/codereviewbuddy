@@ -37,7 +37,6 @@ class TestWriteToolClassification:
             "resolve_comment",
             "resolve_stale_comments",
             "reply_to_comment",
-            "request_rereview",
             "create_issue_from_comment",
         }
         assert expected == WRITE_TOOLS

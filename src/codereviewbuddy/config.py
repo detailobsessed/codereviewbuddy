@@ -11,7 +11,6 @@ from __future__ import annotations
 
 import logging
 from enum import StrEnum
-from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -26,28 +25,6 @@ class Severity(StrEnum):
     WARNING = "warning"
     FLAGGED = "flagged"
     BUG = "bug"
-
-
-# -- Per-reviewer defaults (match current hardcoded adapter behavior) ----------
-
-_REVIEWER_DEFAULTS: dict[str, dict[str, Any]] = {
-    "devin": {
-        "enabled": True,
-        "auto_resolve_stale": False,  # Devin auto-resolves its own bug threads
-        "resolve_levels": [Severity.INFO],  # Only allow resolving info-level
-    },
-    "unblocked": {
-        "enabled": True,
-        "auto_resolve_stale": True,  # We batch-resolve Unblocked's stale threads
-        "resolve_levels": [Severity.INFO, Severity.WARNING, Severity.FLAGGED, Severity.BUG],
-        # rereview_message intentionally omitted — None means "use adapter default"
-    },
-    "coderabbit": {
-        "enabled": True,
-        "auto_resolve_stale": False,  # CodeRabbit handles its own resolution
-        "resolve_levels": [],  # Don't resolve any CodeRabbit threads
-    },
-}
 
 
 class ReviewerConfig(BaseModel):
@@ -67,11 +44,6 @@ class ReviewerConfig(BaseModel):
     require_reply_before_resolve: bool = Field(
         default=True,
         description="Block resolve_comment unless the thread has a non-reviewer reply explaining how the feedback was addressed",
-    )
-    rereview_message: str | None = Field(
-        default=None,
-        min_length=1,
-        description="Custom message to post when triggering a re-review (only for manual-trigger reviewers)",
     )
 
 
@@ -144,21 +116,29 @@ class Config(BaseModel):
 
     @model_validator(mode="after")
     def _apply_reviewer_defaults(self) -> Config:
-        """Fill in missing reviewers with their hardcoded defaults.
+        """Fill in missing reviewers with adapter-defined defaults.
 
-        For partially-specified reviewers, merge unset fields from
-        ``_REVIEWER_DEFAULTS`` so that e.g. ``[reviewers.devin]\\nenabled = false``
-        still gets ``auto_resolve_stale=False`` (Devin's safe default) rather
-        than the generic ``ReviewerConfig`` field default (``True``).
+        Each adapter declares ``default_auto_resolve_stale`` and
+        ``default_resolve_levels`` properties.  For partially-specified
+        reviewers, unset fields are filled from the adapter so that e.g.
+        ``{"devin": {"enabled": false}}`` still gets
+        ``auto_resolve_stale=False`` (Devin's safe default) rather than
+        the generic ``ReviewerConfig`` field default (``True``).
         """
-        for name, defaults in _REVIEWER_DEFAULTS.items():
-            if name not in self.reviewers:
-                self.reviewers[name] = ReviewerConfig(**defaults)
+        from codereviewbuddy.reviewers.registry import REVIEWERS  # noqa: PLC0415
+
+        for adapter in REVIEWERS:
+            if adapter.name not in self.reviewers:
+                self.reviewers[adapter.name] = ReviewerConfig(
+                    auto_resolve_stale=adapter.default_auto_resolve_stale,
+                    resolve_levels=adapter.default_resolve_levels,
+                )
             else:
-                rc = self.reviewers[name]
-                for field_name, default_value in defaults.items():
-                    if field_name not in rc.model_fields_set:
-                        setattr(rc, field_name, default_value)
+                rc = self.reviewers[adapter.name]
+                if "auto_resolve_stale" not in rc.model_fields_set:
+                    rc.auto_resolve_stale = adapter.default_auto_resolve_stale
+                if "resolve_levels" not in rc.model_fields_set:
+                    rc.resolve_levels = adapter.default_resolve_levels
         return self
 
     def get_reviewer(self, name: str) -> ReviewerConfig:
@@ -195,9 +175,16 @@ def load_config() -> Config:
     Uses ``pydantic-settings`` so all fields are populated from env vars
     automatically.  Zero-config still works — all fields have defaults.
 
-    Reviewer-specific env vars use ``__`` nesting, e.g.::
+    Reviewer overrides can be a JSON string (recommended for MCP client config)::
+
+        CRB_REVIEWERS = '{"devin": {"enabled": false}}'
+
+    Or use ``__`` nesting for individual fields::
 
         CRB_REVIEWERS__DEVIN__ENABLED = false
+
+    Other examples::
+
         CRB_SELF_IMPROVEMENT__ENABLED = true
         CRB_SELF_IMPROVEMENT__REPO = owner / repo
         CRB_DIAGNOSTICS__IO_TAP = true

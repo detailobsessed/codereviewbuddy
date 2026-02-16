@@ -118,7 +118,6 @@ class TestToolRegistration:
         "resolve_comment",
         "resolve_stale_comments",
         "reply_to_comment",
-        "request_rereview",
         "create_issue_from_comment",
         "review_pr_descriptions",
         "show_config",
@@ -133,7 +132,7 @@ class TestToolRegistration:
 
     async def test_tool_count(self, client: Client):
         tools = await client.list_tools()
-        assert len(tools) == 12
+        assert len(tools) == 11
 
 
 class TestPromptRegistration:
@@ -187,23 +186,13 @@ class TestToolSchemas:
         assert "thread_id" in schema["properties"]
         assert "pr_number" in schema["properties"]
 
-    async def test_request_rereview_schema(self, client: Client):
-        tools = await client.list_tools()
-        tool = next(t for t in tools if t.name == "request_rereview")
-        schema = tool.inputSchema
-        # all params are optional
-        required = schema.get("required", [])
-        assert "pr_number" not in required
-        assert "reviewer" not in required
-        assert "repo" not in required
-
     async def test_output_schemas_present(self, client: Client):
         """Verify that tools with typed return annotations expose output schemas."""
         tools = await client.list_tools()
         tools_by_name = {t.name: t for t in tools}
 
         # Tools returning Pydantic models should have outputSchema
-        for name in ("list_review_comments", "resolve_stale_comments", "request_rereview"):
+        for name in ("list_review_comments", "resolve_stale_comments"):
             tool = tools_by_name[name]
             assert tool.outputSchema is not None, f"{name} should have an outputSchema"
             assert tool.outputSchema.get("type") == "object", f"{name} outputSchema should be object type"
@@ -216,15 +205,6 @@ class TestToolSchemas:
         props = tool.outputSchema.get("properties", {})
         assert "resolved_count" in props
         assert "resolved_thread_ids" in props
-
-    async def test_request_rereview_output_schema_fields(self, client: Client):
-        """Verify request_rereview output schema contains expected fields."""
-        tools = await client.list_tools()
-        tool = next(t for t in tools if t.name == "request_rereview")
-        assert tool.outputSchema is not None
-        props = tool.outputSchema.get("properties", {})
-        assert "triggered" in props
-        assert "auto_triggers" in props
 
 
 # ---------------------------------------------------------------------------
@@ -362,29 +342,6 @@ class TestListStackReviewCommentsMCP:
         result = await client.call_tool("list_stack_review_comments", {"pr_numbers": [42, 43]})
         assert not result.is_error
         assert len(result.content) > 0
-
-
-class TestRequestRereviewMCP:
-    async def test_trigger_unblocked(self, client: Client, mocker: MockerFixture):
-        mocker.patch("codereviewbuddy.tools.rereview.gh.get_repo_info", return_value=("owner", "repo"))
-        mocker.patch("codereviewbuddy.tools.rereview.gh.run_gh")
-
-        result = await client.call_tool("request_rereview", {"pr_number": 42, "reviewer": "unblocked"})
-        assert not result.is_error
-
-    async def test_trigger_all(self, client: Client, mocker: MockerFixture):
-        mocker.patch("codereviewbuddy.tools.rereview.gh.get_repo_info", return_value=("owner", "repo"))
-        mocker.patch("codereviewbuddy.tools.rereview.gh.run_gh")
-
-        result = await client.call_tool("request_rereview", {"pr_number": 42})
-        assert not result.is_error
-
-    async def test_unknown_reviewer_returns_error(self, client: Client, mocker: MockerFixture):
-        mocker.patch("codereviewbuddy.tools.rereview.gh.get_repo_info", return_value=("owner", "repo"))
-
-        result = await client.call_tool("request_rereview", {"pr_number": 42, "reviewer": "nonexistent"})
-        assert not result.is_error
-        assert "Error" in result.content[0].text  # type: ignore[unresolved-attribute]
 
 
 class TestShowConfigMCP:
