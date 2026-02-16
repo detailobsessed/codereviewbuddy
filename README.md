@@ -76,7 +76,7 @@ uv tool install codereviewbuddy
 
 ## MCP Client Configuration
 
-Add the following to your MCP client's config JSON (Windsurf, Claude Desktop, Cursor, VS Code, Claude Code, Gemini CLI, etc. — the JSON shape is the (roughly) same everywhere and I assume you know what your client needs:
+Add the following to your MCP client's config JSON (Windsurf, Claude Desktop, Cursor, VS Code, Claude Code, Gemini CLI, etc. — the JSON shape is the (roughly) same everywhere and I assume you know what your client needs):
 
 ```json
 {
