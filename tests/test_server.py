@@ -81,9 +81,9 @@ class TestMain:
 
 
 class TestGetWorkspaceCwd:
-    """Tests for _get_workspace_cwd — env var → MCP roots → None cascade (#142)."""
+    """Tests for _get_workspace_cwd — MCP roots → CRB_WORKSPACE → None cascade (#142)."""
 
-    async def test_env_var_takes_priority(self, monkeypatch: pytest.MonkeyPatch, mocker: MockerFixture):
+    async def test_roots_take_priority_over_env_var(self, monkeypatch: pytest.MonkeyPatch, mocker: MockerFixture):
         from unittest.mock import AsyncMock
 
         from pydantic import FileUrl
@@ -95,9 +95,9 @@ class TestGetWorkspaceCwd:
         ctx.list_roots = AsyncMock(return_value=[root])
 
         result = await _get_workspace_cwd(ctx)
-        assert result == "/from/env"
+        assert result == "/from/roots"
 
-    async def test_env_var_without_context(self, monkeypatch: pytest.MonkeyPatch):
+    async def test_env_var_fallback_without_context(self, monkeypatch: pytest.MonkeyPatch):
         monkeypatch.setenv("CRB_WORKSPACE", "/from/env")
         assert await _get_workspace_cwd(None) == "/from/env"
 
@@ -115,11 +115,20 @@ class TestGetWorkspaceCwd:
         result = await _get_workspace_cwd(ctx)
         assert result == "/Users/alice/repos/myproject"
 
-    async def test_returns_none_without_context(self, monkeypatch: pytest.MonkeyPatch):
+    async def test_env_var_fallback_when_roots_empty(self, monkeypatch: pytest.MonkeyPatch, mocker: MockerFixture):
+        from unittest.mock import AsyncMock
+
+        monkeypatch.setenv("CRB_WORKSPACE", "/from/env")
+        ctx = mocker.MagicMock()
+        ctx.list_roots = AsyncMock(return_value=[])
+
+        assert await _get_workspace_cwd(ctx) == "/from/env"
+
+    async def test_returns_none_without_context_or_env(self, monkeypatch: pytest.MonkeyPatch):
         monkeypatch.delenv("CRB_WORKSPACE", raising=False)
         assert await _get_workspace_cwd(None) is None
 
-    async def test_returns_none_when_roots_empty(self, monkeypatch: pytest.MonkeyPatch, mocker: MockerFixture):
+    async def test_returns_none_when_roots_empty_no_env(self, monkeypatch: pytest.MonkeyPatch, mocker: MockerFixture):
         from unittest.mock import AsyncMock
 
         monkeypatch.delenv("CRB_WORKSPACE", raising=False)
@@ -128,7 +137,16 @@ class TestGetWorkspaceCwd:
 
         assert await _get_workspace_cwd(ctx) is None
 
-    async def test_returns_none_on_roots_exception(self, monkeypatch: pytest.MonkeyPatch, mocker: MockerFixture):
+    async def test_env_var_fallback_on_roots_exception(self, monkeypatch: pytest.MonkeyPatch, mocker: MockerFixture):
+        from unittest.mock import AsyncMock
+
+        monkeypatch.setenv("CRB_WORKSPACE", "/from/env")
+        ctx = mocker.MagicMock()
+        ctx.list_roots = AsyncMock(side_effect=Exception("roots not supported"))
+
+        assert await _get_workspace_cwd(ctx) == "/from/env"
+
+    async def test_returns_none_on_roots_exception_no_env(self, monkeypatch: pytest.MonkeyPatch, mocker: MockerFixture):
         from unittest.mock import AsyncMock
 
         monkeypatch.delenv("CRB_WORKSPACE", raising=False)

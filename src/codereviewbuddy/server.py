@@ -52,19 +52,13 @@ async def _get_workspace_cwd(ctx: Context | None = None) -> str | None:
     """Resolve the user's workspace directory for ``gh`` CLI commands.
 
     Priority:
-    1. ``CRB_WORKSPACE`` env var — explicit override, set in MCP client config.
-    2. MCP roots — protocol-correct, client-provided workspace.
+    1. MCP roots — per-window, protocol-correct (works with multi-window setups).
+    2. ``CRB_WORKSPACE`` env var — fallback for clients that don't send roots.
     3. ``None`` — falls back to the server's process cwd.
 
     See #142.
     """
-    # 1. Env var override (highest priority)
-    env_ws = os.environ.get("CRB_WORKSPACE")
-    if env_ws:
-        logger.debug("Workspace from CRB_WORKSPACE: %s", env_ws)
-        return env_ws
-
-    # 2. MCP roots
+    # 1. MCP roots (per-window — correct for multi-window setups)
     if ctx is not None:
         try:
             roots = await ctx.list_roots()
@@ -78,8 +72,14 @@ async def _get_workspace_cwd(ctx: Context | None = None) -> str | None:
                     return path
         except Exception:
             logger.warning(
-                "MCP roots unavailable — auto-detection will use process cwd. Set CRB_WORKSPACE env var or pass repo= explicitly to tools.",
+                "MCP roots unavailable — falling back to CRB_WORKSPACE or process cwd.",
             )
+
+    # 2. CRB_WORKSPACE env var (fallback for clients without MCP roots)
+    env_ws = os.environ.get("CRB_WORKSPACE")
+    if env_ws:
+        logger.debug("Workspace from CRB_WORKSPACE: %s", env_ws)
+        return env_ws
 
     # 3. Process cwd (weakest — may be wrong if server launched from a different dir)
     return None
@@ -192,8 +192,9 @@ and its severity level instead.
 ## Important: repo parameter
 
 All review tools auto-detect the repository from the current workspace (via
-`CRB_WORKSPACE` env var or MCP roots). The `repo` parameter on each tool is only
-needed when auto-detection fails. **Never use the self-improvement repo
+MCP roots sent by your client, or `CRB_WORKSPACE` env var as fallback).
+The `repo` parameter on each tool is only needed when auto-detection fails.
+**Never use the self-improvement repo
 (`CRB_SELF_IMPROVEMENT__REPO`) for review operations** — that repo is exclusively
 for filing issues about this MCP server itself, not for reviewing PRs.
 

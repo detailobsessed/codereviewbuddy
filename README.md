@@ -83,17 +83,14 @@ Add the following to your MCP client's config JSON (Windsurf, Claude Desktop, Cu
   "mcpServers": {
     "codereviewbuddy": {
       "command": "uvx",
-      "args": ["--prerelease=allow", "codereviewbuddy@latest"],
-      "env": {
-        "CRB_WORKSPACE": "/path/to/your/project"
-      }
+      "args": ["--prerelease=allow", "codereviewbuddy@latest"]
     }
   }
 }
 ```
 
-> **Why `CRB_WORKSPACE`?** The server needs to know which project you're working in so `gh` CLI commands target the right repo. Without this, auto-detection may pick the wrong repository.
->
+The server auto-detects your project from MCP roots (sent per-window by your client). This works correctly with multiple windows open on different projects — no env vars needed.
+
 > **Why `--prerelease=allow`?** codereviewbuddy depends on FastMCP v3 prerelease (`>=3.0.0rc1`). Without this flag, `uvx` refuses to resolve pre-release dependencies.
 >
 > **Why `@latest`?** Without it, `uvx` caches the first resolved version and never upgrades automatically.
@@ -109,9 +106,6 @@ For local development, use `uv run --directory` to run the server from your chec
       "command": "uv",
       "args": ["run", "--directory", "/path/to/codereviewbuddy", "codereviewbuddy"],
       "env": {
-        // Required: point at the repo you're reviewing PRs in
-        "CRB_WORKSPACE": "/path/to/your/project",
-
         // Self-improvement: agents file issues when they hit server gaps
         "CRB_SELF_IMPROVEMENT__ENABLED": "true",
         "CRB_SELF_IMPROVEMENT__REPO": "detailobsessed/codereviewbuddy",
@@ -160,7 +154,6 @@ codereviewbuddy works **zero-config** with sensible defaults. All configuration 
 
 | Env var | Type | Default | Description |
 | ------- | ---- | ------- | ----------- |
-| `CRB_WORKSPACE` | string | *(auto-detect)* | Project directory for `gh` CLI — set this to avoid wrong-repo detection |
 | `CRB_PR_DESCRIPTIONS__ENABLED` | bool | `true` | Whether `review_pr_descriptions` tool is available |
 | `CRB_SELF_IMPROVEMENT__ENABLED` | bool | `false` | Agents file issues when they encounter server gaps |
 | `CRB_SELF_IMPROVEMENT__REPO` | string | `""` | Repository to file issues against (e.g. `owner/repo`) |
