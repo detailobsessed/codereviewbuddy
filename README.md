@@ -76,9 +76,7 @@ uv tool install codereviewbuddy
 
 ## MCP Client Configuration
 
-### Windsurf
-
-Add to your MCP settings (`~/.codeium/windsurf/mcp_config.json`):
+Add the following to your MCP client's config JSON (Windsurf, Claude Desktop, Cursor, VS Code, Claude Code, Gemini CLI, etc. — the JSON shape is the (roughly) same everywhere and I assume you know what your client needs:
 
 ```json
 {
@@ -100,88 +98,32 @@ Add to your MCP settings (`~/.codeium/windsurf/mcp_config.json`):
 >
 > **Why `@latest`?** Without it, `uvx` caches the first resolved version and never upgrades automatically.
 
-### Claude Desktop
-
-Add to `~/Library/Application Support/Claude/claude_desktop_config.json`:
-
-```json
-{
-  "mcpServers": {
-    "codereviewbuddy": {
-      "command": "uvx",
-      "args": ["--prerelease=allow", "codereviewbuddy@latest"],
-      "env": {
-        "CRB_WORKSPACE": "/path/to/your/project"
-      }
-    }
-  }
-}
-```
-
-### Cursor
-
-Add to `.cursor/mcp.json` in your project:
-
-```json
-{
-  "mcpServers": {
-    "codereviewbuddy": {
-      "command": "uvx",
-      "args": ["--prerelease=allow", "codereviewbuddy@latest"],
-      "env": {
-        "CRB_WORKSPACE": "/path/to/your/project"
-      }
-    }
-  }
-}
-```
-
-### Other major MCP clients (VS Code, Claude Code, Gemini CLI, ChatGPT, etc.)
-
-For clients not listed above, use the MCP install-instructions generator to get the exact config block and file path for your client version:
-
-- Hosted: <https://hyprmcp.com/mcp-install-instructions-generator/>
-- CLI:
-
-```bash
-npx @hyprmcp/mcp-install-instructions-generator@latest codereviewbuddy --output md
-```
-
-You can target a specific client explicitly, for example:
-
-```bash
-npx @hyprmcp/mcp-install-instructions-generator@latest codereviewbuddy --target vscode --output md
-npx @hyprmcp/mcp-install-instructions-generator@latest codereviewbuddy --target claude-code --output md
-npx @hyprmcp/mcp-install-instructions-generator@latest codereviewbuddy --target gemini-cli --output md
-npx @hyprmcp/mcp-install-instructions-generator@latest codereviewbuddy --target chatgpt --output md
-```
-
-Use the same runtime settings in every client:
-
-```json
-{
-  "mcpServers": {
-    "codereviewbuddy": {
-      "command": "uvx",
-      "args": ["--prerelease=allow", "codereviewbuddy@latest"],
-      "env": {
-        "CRB_WORKSPACE": "/path/to/your/project"
-      }
-    }
-  }
-}
-```
-
 ### From source (development)
 
-```json
+For local development, use `uv run --directory` to run the server from your checkout instead of the PyPI-published version. Changes to the source take effect immediately — just restart the MCP server in your client.
+
+```jsonc
 {
   "mcpServers": {
     "codereviewbuddy": {
       "command": "uv",
       "args": ["run", "--directory", "/path/to/codereviewbuddy", "codereviewbuddy"],
       "env": {
-        "CRB_WORKSPACE": "/path/to/your/project"
+        // Required: point at the repo you're reviewing PRs in
+        "CRB_WORKSPACE": "/path/to/your/project",
+
+        // Self-improvement: agents file issues when they hit server gaps
+        "CRB_SELF_IMPROVEMENT__ENABLED": "true",
+        "CRB_SELF_IMPROVEMENT__REPO": "detailobsessed/codereviewbuddy",
+
+        // PR description review (enabled by default)
+        "CRB_PR_DESCRIPTIONS__ENABLED": "true",
+
+        // Diagnostics: transport and tool call logging
+        "CRB_DIAGNOSTICS__IO_TAP": "true",
+        "CRB_DIAGNOSTICS__TOOL_CALL_HEARTBEAT": "true",
+        "CRB_DIAGNOSTICS__HEARTBEAT_INTERVAL_MS": "5000",
+        "CRB_DIAGNOSTICS__INCLUDE_ARGS_FINGERPRINT": "true"
       }
     }
   }
@@ -190,17 +132,11 @@ Use the same runtime settings in every client:
 
 ### Troubleshooting
 
-If your MCP client reports:
-
-`No module named 'fastmcp.server.tasks.routing'`
-
-that runtime is using an incompatible FastMCP environment.
-
-Use one of these fixes:
+If your MCP client reports `No module named 'fastmcp.server.tasks.routing'`, the runtime has an incompatible FastMCP. Fixes:
 
 1. Prefer `uvx --prerelease=allow codereviewbuddy@latest` in MCP client config.
 2. For local source checkouts, launch with `uv run --directory /path/to/codereviewbuddy codereviewbuddy`.
-3. Reinstall the tool to refresh cached deps: `uv tool install --reinstall codereviewbuddy`.
+3. Reinstall to refresh cached deps: `uv tool install --reinstall codereviewbuddy`.
 
 ## MCP Tools
 
@@ -218,30 +154,7 @@ Use one of these fixes:
 
 ## Configuration
 
-codereviewbuddy works **zero-config** with sensible defaults. All configuration is via `CRB_*` environment variables set in your MCP client config JSON — no config files needed.
-
-### Environment variables
-
-Add env vars to the `"env"` block of your MCP client config:
-
-```json
-{
-  "mcpServers": {
-    "codereviewbuddy": {
-      "command": "uvx",
-      "args": ["--prerelease=allow", "codereviewbuddy@latest"],
-      "env": {
-        "CRB_WORKSPACE": "/path/to/your/project",
-        "CRB_SELF_IMPROVEMENT__ENABLED": "true",
-        "CRB_SELF_IMPROVEMENT__REPO": "owner/codereviewbuddy",
-        "CRB_DIAGNOSTICS__IO_TAP": "true"
-      }
-    }
-  }
-}
-```
-
-Nested settings use `__` (double underscore) as a delimiter, following the same pattern as FastMCP's own `FASTMCP_*` env vars.
+codereviewbuddy works **zero-config** with sensible defaults. All configuration is via `CRB_*` environment variables in the `"env"` block of your MCP client config — no config files needed. Nested settings use `__` (double underscore) as a delimiter. See the [dev setup](#from-source-development) above for a fully-commented example.
 
 ### All settings
 
