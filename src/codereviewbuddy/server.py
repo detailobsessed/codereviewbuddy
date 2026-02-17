@@ -46,6 +46,14 @@ _FASTMCP_TASK_ROUTING_MODULE = "fastmcp.server.tasks.routing"
 write_operation_middleware = WriteOperationMiddleware()
 
 
+_WORKSPACE_HELP = (
+    "Workspace not detected: your MCP client did not provide workspace roots "
+    "and CRB_WORKSPACE is not set. The server cannot reliably auto-detect "
+    "your repository or branch.\n"
+    "Fix: pass `repo` and `pr_number` (or `pr_numbers`) explicitly."
+)
+
+
 async def _get_workspace_cwd(ctx: Context | None = None) -> str | None:
     """Resolve the user's workspace directory for ``gh`` CLI commands.
 
@@ -54,7 +62,7 @@ async def _get_workspace_cwd(ctx: Context | None = None) -> str | None:
     2. ``CRB_WORKSPACE`` env var — fallback for clients that don't send roots.
     3. ``None`` — falls back to the server's process cwd.
 
-    See #142.
+    See #142, #174.
     """
     # 1. MCP roots (per-window — correct for multi-window setups)
     if ctx is not None:
@@ -66,11 +74,19 @@ async def _get_workspace_cwd(ctx: Context | None = None) -> str | None:
                 parsed = urlparse(str(roots[0].uri))
                 if parsed.scheme == "file" and parsed.path:
                     path = unquote(parsed.path)
-                    logger.debug("Workspace from MCP roots: %s", path)
+                    logger.info("Workspace from MCP roots: %s", path)
                     return path
-        except Exception:
+                logger.warning(
+                    "MCP root URI has unsupported scheme %r (expected 'file')",
+                    parsed.scheme,
+                )
+            else:
+                logger.warning("MCP client returned empty roots list")
+        except Exception as exc:
             logger.warning(
-                "MCP roots unavailable — falling back to CRB_WORKSPACE or process cwd.",
+                "MCP roots request failed: %s: %s",
+                type(exc).__name__,
+                exc,
             )
 
     # 2. CRB_WORKSPACE env var (fallback for clients without MCP roots)
@@ -79,8 +95,42 @@ async def _get_workspace_cwd(ctx: Context | None = None) -> str | None:
         logger.debug("Workspace from CRB_WORKSPACE: %s", env_ws)
         return env_ws
 
-    # 3. Process cwd (weakest — may be wrong if server launched from a different dir)
+    # 3. Process cwd (weakest — almost certainly wrong in MCP context)
+    if ctx is not None:
+        logger.warning(
+            "Workspace not detected (MCP roots unavailable, CRB_WORKSPACE not set). "
+            "Auto-detection of repo/branch will use the server's process directory "
+            "and may produce wrong results.",
+        )
     return None
+
+
+def _check_auto_detect_prerequisites(
+    cwd: str | None,
+    *,
+    has_pr: bool,
+    has_repo: bool,
+) -> None:
+    """Raise if workspace not detected and auto-detection parameters are missing.
+
+    This prevents confusing errors like "no pull requests found for branch main"
+    when the server's process cwd happens to be a different git repo.
+    See #174.
+    """
+    if cwd is not None:
+        return  # workspace detected — auto-detection is safe
+
+    if has_pr and has_repo:
+        return  # all params explicit — no auto-detection needed
+
+    missing = []
+    if not has_pr:
+        missing.append("`pr_number`/`pr_numbers`")
+    if not has_repo:
+        missing.append("`repo`")
+
+    msg = f"{_WORKSPACE_HELP}\nMissing: {', '.join(missing)}"
+    raise gh.GhError(msg)
 
 
 def _resolve_pr_number(pr_number: int | None, cwd: str | None = None) -> int:
@@ -270,6 +320,7 @@ async def list_review_comments(
     try:
         ctx = get_context()
         cwd = await _get_workspace_cwd(ctx)
+        _check_auto_detect_prerequisites(cwd, has_pr=pr_number is not None, has_repo=repo is not None)
         pr_number = _resolve_pr_number(pr_number, cwd=cwd)
         return await comments.list_review_comments(pr_number, repo=repo, status=status, cwd=cwd, ctx=ctx)
     except Exception as exc:
@@ -306,6 +357,7 @@ async def list_stack_review_comments(
     try:
         ctx = get_context()
         cwd = await _get_workspace_cwd(ctx)
+        _check_auto_detect_prerequisites(cwd, has_pr=True, has_repo=repo is not None)
         return await comments.list_stack_review_comments(pr_numbers, repo=repo, status=status, cwd=cwd, ctx=ctx)
     except Exception as exc:
         logger.exception("list_stack_review_comments failed")
@@ -332,6 +384,7 @@ async def resolve_comment(
     try:
         ctx = get_context()
         cwd = await _get_workspace_cwd(ctx)
+        _check_auto_detect_prerequisites(cwd, has_pr=pr_number is not None, has_repo=True)
         pr_number = _resolve_pr_number(pr_number, cwd=cwd)
         return comments.resolve_comment(pr_number, thread_id, cwd=cwd)
     except Exception as exc:
@@ -359,6 +412,7 @@ async def resolve_stale_comments(
     try:
         ctx = get_context()
         cwd = await _get_workspace_cwd(ctx)
+        _check_auto_detect_prerequisites(cwd, has_pr=pr_number is not None, has_repo=repo is not None)
         pr_number = _resolve_pr_number(pr_number, cwd=cwd)
         return await comments.resolve_stale_comments(pr_number, repo=repo, cwd=cwd, ctx=ctx)
     except Exception as exc:
@@ -390,6 +444,7 @@ async def reply_to_comment(
     try:
         ctx = get_context()
         cwd = await _get_workspace_cwd(ctx)
+        _check_auto_detect_prerequisites(cwd, has_pr=pr_number is not None, has_repo=repo is not None)
         pr_number = _resolve_pr_number(pr_number, cwd=cwd)
         return comments.reply_to_comment(pr_number, thread_id, body, repo=repo, cwd=cwd)
     except Exception as exc:
@@ -423,6 +478,7 @@ async def create_issue_from_comment(
     try:
         ctx = get_context()
         cwd = await _get_workspace_cwd(ctx)
+        _check_auto_detect_prerequisites(cwd, has_pr=pr_number is not None, has_repo=repo is not None)
         pr_number = _resolve_pr_number(pr_number, cwd=cwd)
         return issues.create_issue_from_comment(
             pr_number,
@@ -457,6 +513,7 @@ async def review_pr_descriptions(
     try:
         ctx = get_context()
         cwd = await _get_workspace_cwd(ctx)
+        _check_auto_detect_prerequisites(cwd, has_pr=True, has_repo=repo is not None)
         return await descriptions.review_pr_descriptions(pr_numbers, repo=repo, cwd=cwd, ctx=ctx)
     except Exception as exc:
         logger.exception("review_pr_descriptions failed")
@@ -494,6 +551,7 @@ async def summarize_review_status(
     try:
         ctx = get_context()
         cwd = await _get_workspace_cwd(ctx)
+        _check_auto_detect_prerequisites(cwd, has_pr=pr_numbers is not None, has_repo=repo is not None)
         return await stack.summarize_review_status(pr_numbers=pr_numbers, repo=repo, cwd=cwd, ctx=ctx)
     except Exception as exc:
         logger.exception("summarize_review_status failed")
@@ -526,6 +584,7 @@ async def stack_activity(
     try:
         ctx = get_context()
         cwd = await _get_workspace_cwd(ctx)
+        _check_auto_detect_prerequisites(cwd, has_pr=pr_numbers is not None, has_repo=repo is not None)
         return await stack.stack_activity(pr_numbers=pr_numbers, repo=repo, cwd=cwd, ctx=ctx)
     except Exception as exc:
         logger.exception("stack_activity failed")
@@ -562,6 +621,7 @@ async def triage_review_comments(
     try:
         ctx = get_context()
         cwd = await _get_workspace_cwd(ctx)
+        _check_auto_detect_prerequisites(cwd, has_pr=True, has_repo=repo is not None)
         return await comments.triage_review_comments(pr_numbers, repo=repo, owner_logins=owner_logins, cwd=cwd, ctx=ctx)
     except Exception as exc:
         logger.exception("triage_review_comments failed")

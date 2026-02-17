@@ -10,7 +10,13 @@ if TYPE_CHECKING:
     from pytest_mock import MockerFixture
 
 from codereviewbuddy.gh import GhError, GhNotAuthenticatedError, GhNotFoundError
-from codereviewbuddy.server import _get_workspace_cwd, _resolve_pr_number, check_fastmcp_runtime, check_prerequisites
+from codereviewbuddy.server import (
+    _check_auto_detect_prerequisites,
+    _get_workspace_cwd,
+    _resolve_pr_number,
+    check_fastmcp_runtime,
+    check_prerequisites,
+)
 
 
 class TestCheckPrerequisites:
@@ -154,3 +160,51 @@ class TestGetWorkspaceCwd:
         ctx.list_roots = AsyncMock(side_effect=Exception("roots not supported"))
 
         assert await _get_workspace_cwd(ctx) is None
+
+    async def test_unsupported_scheme_falls_through(self, monkeypatch: pytest.MonkeyPatch, mocker: MockerFixture):
+        from unittest.mock import AsyncMock
+
+        monkeypatch.delenv("CRB_WORKSPACE", raising=False)
+        root = mocker.MagicMock()
+        root.uri = "https://example.com/repo"
+        ctx = mocker.MagicMock()
+        ctx.list_roots = AsyncMock(return_value=[root])
+
+        assert await _get_workspace_cwd(ctx) is None
+
+
+class TestCheckAutoDetectPrerequisites:
+    """Tests for _check_auto_detect_prerequisites — prevents wrong-cwd auto-detection (#174)."""
+
+    def test_noop_when_cwd_detected(self):
+        _check_auto_detect_prerequisites("/some/path", has_pr=False, has_repo=False)
+
+    def test_noop_when_all_params_explicit(self):
+        _check_auto_detect_prerequisites(None, has_pr=True, has_repo=True)
+
+    def test_raises_when_cwd_none_and_pr_missing(self):
+        with pytest.raises(GhError, match="Workspace not detected"):
+            _check_auto_detect_prerequisites(None, has_pr=False, has_repo=True)
+
+    def test_raises_when_cwd_none_and_repo_missing(self):
+        with pytest.raises(GhError, match="Workspace not detected"):
+            _check_auto_detect_prerequisites(None, has_pr=True, has_repo=False)
+
+    def test_raises_when_cwd_none_and_both_missing(self):
+        with pytest.raises(GhError, match="Workspace not detected") as exc_info:
+            _check_auto_detect_prerequisites(None, has_pr=False, has_repo=False)
+        msg = str(exc_info.value)
+        assert "`pr_number`" in msg
+        assert "`repo`" in msg
+
+    def test_error_includes_fix_guidance(self):
+        with pytest.raises(GhError, match=r"pass `repo` and `pr_number`"):
+            _check_auto_detect_prerequisites(None, has_pr=False, has_repo=False)
+
+    def test_error_lists_only_missing_params(self):
+        with pytest.raises(GhError, match="`repo`") as exc_info:
+            _check_auto_detect_prerequisites(None, has_pr=True, has_repo=False)
+        # The "Missing:" line should only list repo, not pr_number
+        missing_line = next(line for line in str(exc_info.value).splitlines() if line.startswith("Missing:"))
+        assert "`repo`" in missing_line
+        assert "`pr_number`" not in missing_line
