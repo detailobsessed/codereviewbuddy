@@ -123,8 +123,17 @@ async def review_pr_descriptions(
     for i, pr_number in enumerate(pr_numbers):
         if ctx and total:
             await ctx.report_progress(i, total)
-        data = await call_sync_fn_in_threadpool(_fetch_pr_info, pr_number, repo=repo, cwd=cwd)
-        descriptions.append(_analyze_pr(data))
+        try:
+            data = await call_sync_fn_in_threadpool(_fetch_pr_info, pr_number, repo=repo, cwd=cwd)
+            descriptions.append(_analyze_pr(data))
+        except Exception as exc:
+            descriptions.append(
+                PRDescriptionInfo(
+                    pr_number=pr_number,
+                    title="",
+                    error=f"Failed to fetch PR #{pr_number}: {exc}",
+                )
+            )
 
     if ctx and total:
         await ctx.report_progress(total, total)
