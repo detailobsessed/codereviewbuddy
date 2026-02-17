@@ -172,6 +172,27 @@ class TestReviewPRDescriptions:
         ctx.report_progress.assert_any_call(1, 1)
         ctx.info.assert_called_once()
 
+    async def test_per_pr_error_handling(self, mocker: MockerFixture):
+        """One failing PR should not break the entire batch (#79)."""
+        from codereviewbuddy.gh import GhError
+
+        mocker.patch(
+            "codereviewbuddy.tools.descriptions._fetch_pr_info",
+            side_effect=[GOOD_PR, GhError("PR not found"), EMPTY_PR],
+        )
+        result = await review_pr_descriptions([42, 999, 10])
+        assert result.error is None
+        assert len(result.descriptions) == 3
+        # First and third PRs should be analyzed normally
+        assert result.descriptions[0].pr_number == 42
+        assert result.descriptions[0].error is None
+        assert result.descriptions[2].pr_number == 10
+        assert result.descriptions[2].error is None
+        # Second PR should have an error
+        assert result.descriptions[1].pr_number == 999
+        assert result.descriptions[1].error is not None
+        assert "Failed to fetch PR #999" in result.descriptions[1].error
+
     async def test_disabled_returns_error(self):
         set_config(Config(pr_descriptions=PRDescriptionsConfig(enabled=False)))
         result = await review_pr_descriptions([42])

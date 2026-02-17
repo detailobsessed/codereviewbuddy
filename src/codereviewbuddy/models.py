@@ -111,6 +111,7 @@ class PRDescriptionInfo(BaseModel):
     missing_elements: list[str] = Field(
         default_factory=list, description="Missing quality elements (e.g. 'no linked issues', 'empty body')"
     )
+    error: str | None = Field(default=None, description="Error message if fetching this PR failed")
 
 
 class PRDescriptionReviewResult(BaseModel):
