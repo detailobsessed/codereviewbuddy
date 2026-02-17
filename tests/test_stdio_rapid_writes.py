@@ -1,7 +1,7 @@
 """Reproduce MCP server hang after rapid write tool calls (issue #65).
 
 The server becomes unresponsive after a sequence of rapid write operations
-(resolve_stale → reply → resolve → resolve → request_rereview). This test
+(resolve_stale → reply → resolve → resolve). This test
 uses a mock server over stdio transport to isolate the transport-layer bug.
 
 Observability analysis (tool_calls.jsonl + io_tap.jsonl) confirmed the hang
@@ -29,7 +29,6 @@ WRITE_SEQUENCE = [
     ("reply_to_comment", {"pr_number": 42, "thread_id": "PRRT_test1", "body": "Fixed"}),
     ("resolve_comment", {"pr_number": 42, "thread_id": "PRRT_test1"}),
     ("resolve_comment", {"pr_number": 42, "thread_id": "PRRT_test1"}),
-    ("request_rereview", {"pr_number": 42}),
 ]
 
 

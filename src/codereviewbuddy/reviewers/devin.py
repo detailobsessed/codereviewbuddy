@@ -13,7 +13,6 @@ if TYPE_CHECKING:
 class DevinAdapter(ReviewerAdapter):
     """Adapter for the Devin AI reviewer.
 
-    - Auto-triggers re-review on new pushes.
     - Auto-resolves addressed comments.
     - Comments are posted by 'devin-ai-integration[bot]' or 'devin-ai'.
     """
@@ -23,12 +22,20 @@ class DevinAdapter(ReviewerAdapter):
         return "devin"
 
     @property
-    def needs_manual_rereview(self) -> bool:
-        return False
-
-    @property
     def auto_resolves_comments(self) -> bool:
         return True
+
+    @property
+    @override
+    def default_auto_resolve_stale(self) -> bool:
+        return False  # Devin auto-resolves its own bug threads
+
+    @property
+    @override
+    def default_resolve_levels(self) -> list[Severity]:
+        from codereviewbuddy.config import Severity  # noqa: PLC0415
+
+        return [Severity.INFO]  # Only allow resolving info-level
 
     # Devin's known emoji markers (verified from PR review comments).
     # Ordered most-critical-first so the first match wins.
@@ -57,7 +64,3 @@ class DevinAdapter(ReviewerAdapter):
     def identify(self, author: str) -> bool:
         normalized = author.lower().strip()
         return "devin" in normalized
-
-    @override
-    def rereview_trigger(self, pr_number: int, owner: str, repo: str) -> list[str]:
-        return []  # Devin auto-triggers on push

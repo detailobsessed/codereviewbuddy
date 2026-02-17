@@ -4,11 +4,12 @@ from __future__ import annotations
 
 import pytest
 
-from codereviewbuddy.config import ReviewerConfig, Severity
+from codereviewbuddy.config import Severity
 from codereviewbuddy.reviewers import (
     REVIEWERS,
     CodeRabbitAdapter,
     DevinAdapter,
+    GreptileAdapter,
     UnblockedAdapter,
     get_reviewer,
     identify_reviewer,
@@ -27,6 +28,9 @@ class TestIdentifyReviewer:
             ("Devin", "devin"),
             ("coderabbitai[bot]", "coderabbit"),
             ("CodeRabbit", "coderabbit"),
+            ("greptile-apps", "greptile"),
+            ("greptile-apps[bot]", "greptile"),
+            ("Greptile", "greptile"),
             ("randomuser", "unknown"),
             ("github-actions[bot]", "unknown"),
         ],
@@ -49,35 +53,13 @@ class TestUnblockedAdapter:
     def test_properties(self):
         adapter = UnblockedAdapter()
         assert adapter.name == "unblocked"
-        assert adapter.needs_manual_rereview is True
         assert adapter.auto_resolves_comments is False
-
-    def test_rereview_trigger_default_message(self):
-        adapter = UnblockedAdapter()
-        args = adapter.rereview_trigger(42, "owner", "repo")
-        assert args[0] == "pr"
-        assert "42" in args
-        assert "--body" in args
-        assert "@unblocked please re-review" in args
-
-    def test_rereview_trigger_custom_message(self):
-        adapter = UnblockedAdapter()
-        adapter.configure(ReviewerConfig(rereview_message="@unblocked re-review please, with context"))
-        args = adapter.rereview_trigger(42, "owner", "repo")
-        assert "@unblocked re-review please, with context" in args
-
-    def test_rereview_trigger_config_without_message_uses_default(self):
-        adapter = UnblockedAdapter()
-        adapter.configure(ReviewerConfig())
-        args = adapter.rereview_trigger(42, "owner", "repo")
-        assert "@unblocked please re-review" in args
 
 
 class TestDevinAdapter:
     def test_properties(self):
         adapter = DevinAdapter()
         assert adapter.name == "devin"
-        assert adapter.needs_manual_rereview is False
         assert adapter.auto_resolves_comments is True
 
     def test_auto_resolves_bug_thread(self):
@@ -91,10 +73,6 @@ class TestDevinAdapter:
     def test_does_not_auto_resolve_info_thread(self):
         adapter = DevinAdapter()
         assert adapter.auto_resolves_thread("📝 **Info: This is informational**") is False
-
-    def test_rereview_trigger_empty(self):
-        adapter = DevinAdapter()
-        assert adapter.rereview_trigger(42, "owner", "repo") == []
 
     @pytest.mark.parametrize(
         ("body", "expected"),
@@ -125,12 +103,7 @@ class TestCodeRabbitAdapter:
     def test_properties(self):
         adapter = CodeRabbitAdapter()
         assert adapter.name == "coderabbit"
-        assert adapter.needs_manual_rereview is False
         assert adapter.auto_resolves_comments is True
-
-    def test_rereview_trigger_empty(self):
-        adapter = CodeRabbitAdapter()
-        assert adapter.rereview_trigger(42, "owner", "repo") == []
 
     def test_severity_defaults_to_info(self):
         """CodeRabbit has no known severity format — base class returns info."""
@@ -138,7 +111,50 @@ class TestCodeRabbitAdapter:
         assert adapter.classify_severity("any comment") == Severity.INFO
 
 
+class TestGreptileAdapter:
+    def test_properties(self):
+        adapter = GreptileAdapter()
+        assert adapter.name == "greptile"
+        assert adapter.auto_resolves_comments is False
+
+    def test_default_resolve_levels(self):
+        adapter = GreptileAdapter()
+        assert set(adapter.default_resolve_levels) == set(Severity)
+
+    def test_default_auto_resolve_stale(self):
+        adapter = GreptileAdapter()
+        assert adapter.default_auto_resolve_stale is True
+
+    def test_severity_defaults_to_info(self):
+        adapter = GreptileAdapter()
+        assert adapter.classify_severity("any comment") == Severity.INFO
+
+
+class TestAdapterDefaults:
+    """Test that adapters declare correct default guardrail values."""
+
+    def test_devin_defaults(self):
+        adapter = DevinAdapter()
+        assert adapter.default_auto_resolve_stale is False
+        assert adapter.default_resolve_levels == [Severity.INFO]
+
+    def test_unblocked_defaults(self):
+        adapter = UnblockedAdapter()
+        assert adapter.default_auto_resolve_stale is True
+        assert set(adapter.default_resolve_levels) == set(Severity)
+
+    def test_coderabbit_defaults(self):
+        adapter = CodeRabbitAdapter()
+        assert adapter.default_auto_resolve_stale is False
+        assert adapter.default_resolve_levels == []
+
+    def test_greptile_defaults(self):
+        adapter = GreptileAdapter()
+        assert adapter.default_auto_resolve_stale is True
+        assert set(adapter.default_resolve_levels) == set(Severity)
+
+
 class TestReviewerRegistry:
     def test_all_reviewers_present(self):
         names = {r.name for r in REVIEWERS}
-        assert names == {"unblocked", "devin", "coderabbit"}
+        assert names == {"unblocked", "devin", "coderabbit", "greptile"}

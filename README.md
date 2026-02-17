@@ -78,12 +78,27 @@ uv tool install codereviewbuddy
 
 Add the following to your MCP client's config JSON (Windsurf, Claude Desktop, Cursor, VS Code, Claude Code, Gemini CLI, etc. — the JSON shape is the (roughly) same everywhere and I assume you know what your client needs):
 
-```json
+```jsonc
 {
   "mcpServers": {
     "codereviewbuddy": {
       "command": "uvx",
-      "args": ["--prerelease=allow", "codereviewbuddy@latest"]
+      "args": ["--prerelease=allow", "codereviewbuddy@latest"],
+      "env": {
+        // All CRB_* env vars are optional — zero-config works out of the box.
+        // See Configuration section below for the full list.
+
+        // Per-reviewer overrides (JSON string — omit to use adapter defaults)
+        // "CRB_REVIEWERS": "{\"devin\": {\"enabled\": false}}",
+
+        // Self-improvement: agents file issues when they hit server gaps
+        // "CRB_SELF_IMPROVEMENT__ENABLED": "true",
+        // "CRB_SELF_IMPROVEMENT__REPO": "your-org/codereviewbuddy",
+
+        // Diagnostics (off by default)
+        // "CRB_DIAGNOSTICS__IO_TAP": "true",
+        // "CRB_DIAGNOSTICS__TOOL_CALL_HEARTBEAT": "true"
+      }
     }
   }
 }
@@ -106,14 +121,9 @@ For local development, use `uv run --directory` to run the server from your chec
       "command": "uv",
       "args": ["run", "--directory", "/path/to/codereviewbuddy", "codereviewbuddy"],
       "env": {
-        // Self-improvement: agents file issues when they hit server gaps
+        // Same CRB_* env vars as above, plus dev-specific settings:
         "CRB_SELF_IMPROVEMENT__ENABLED": "true",
         "CRB_SELF_IMPROVEMENT__REPO": "detailobsessed/codereviewbuddy",
-
-        // PR description review (enabled by default)
-        "CRB_PR_DESCRIPTIONS__ENABLED": "true",
-
-        // Diagnostics: transport and tool call logging
         "CRB_DIAGNOSTICS__IO_TAP": "true",
         "CRB_DIAGNOSTICS__TOOL_CALL_HEARTBEAT": "true",
         "CRB_DIAGNOSTICS__HEARTBEAT_INTERVAL_MS": "5000",
@@ -142,7 +152,6 @@ If your MCP client reports `No module named 'fastmcp.server.tasks.routing'`, the
 | `resolve_comment` | Resolve a single inline thread by GraphQL node ID (`PRRT_...`) |
 | `resolve_stale_comments` | Bulk-resolve threads on files modified since the review, with smart skip for auto-resolving reviewers |
 | `reply_to_comment` | Reply to inline threads (`PRRT_`), PR-level reviews (`PRR_`), or bot comments (`IC_`) |
-| `request_rereview` | Trigger re-reviews per reviewer (handles differences automatically) |
 | `create_issue_from_comment` | Create a GitHub issue from a review comment with labels, PR backlink, and quoted text |
 | `review_pr_descriptions` | Analyze PR descriptions across a stack for quality issues (empty body, boilerplate, missing linked issues) |
 
@@ -154,6 +163,7 @@ codereviewbuddy works **zero-config** with sensible defaults. All configuration 
 
 | Env var | Type | Default | Description |
 | ------- | ---- | ------- | ----------- |
+| `CRB_REVIEWERS` | JSON | `{}` | Per-reviewer overrides as a JSON string (see [below](#per-reviewer-overrides)) |
 | `CRB_PR_DESCRIPTIONS__ENABLED` | bool | `true` | Whether `review_pr_descriptions` tool is available |
 | `CRB_SELF_IMPROVEMENT__ENABLED` | bool | `false` | Agents file issues when they encounter server gaps |
 | `CRB_SELF_IMPROVEMENT__REPO` | string | `""` | Repository to file issues against (e.g. `owner/repo`) |
@@ -178,6 +188,32 @@ Each reviewer adapter classifies comments using its own format. Currently only D
 
 Reviewers without a known format classify all comments as `info`. This means `resolve_levels = ["info"]` would allow resolving all their threads, while `resolve_levels = []` blocks everything.
 
+### Per-reviewer overrides
+
+Each adapter defines sensible defaults. To override, set `CRB_REVIEWERS` as a JSON string:
+
+```jsonc
+"CRB_REVIEWERS": "{\"devin\": {\"enabled\": false}, \"greptile\": {\"resolve_levels\": [\"info\", \"warning\"]}}"
+```
+
+Available fields per reviewer:
+
+| Field | Type | Default | Description |
+| ----- | ---- | ------- | ----------- |
+| `enabled` | bool | `true` | Whether this reviewer's threads appear in results |
+| `auto_resolve_stale` | bool | varies | Whether `resolve_stale_comments` touches this reviewer's threads |
+| `resolve_levels` | list | varies | Severity levels allowed to be resolved (`info`, `warning`, `flagged`, `bug`) |
+| `require_reply_before_resolve` | bool | `true` | Block resolve unless someone replied explaining the fix |
+
+**Adapter defaults** (used when no override is set):
+
+| Reviewer | `auto_resolve_stale` | `resolve_levels` |
+| -------- | ------------------- | ---------------- |
+| Unblocked | `true` | all |
+| Devin | `false` | `["info"]` |
+| CodeRabbit | `false` | `[]` (none) |
+| Greptile | `true` | all |
+
 ### Resolve enforcement
 
 The `resolve_levels` config is **enforced server-side**. If an agent tries to resolve a thread whose severity exceeds the allowed levels, the server returns an error. This prevents agents from resolving critical review comments regardless of their instructions.
@@ -188,9 +224,10 @@ For example, with the default config, resolving a 🔴 bug from Devin is blocked
 
 | Reviewer | Auto-reviews on push | Auto-resolves comments | Re-review trigger |
 | -------- | ------------------- | -------------------- | ----------------- |
-| **Unblocked** | No | No | `request_rereview` posts a configurable comment (default: "@unblocked please re-review") |
+| **Unblocked** | No | No | `gh pr comment <N> --body "@unblocked please re-review"` |
 | **Devin** | Yes | Yes | Auto on push (no action needed) |
 | **CodeRabbit** | Yes | Yes | Auto on push (no action needed) |
+| **Greptile** | No (not on force push) | No | `gh pr comment <N> --body "@greptileai review"` |
 
 ## Typical workflow
 
@@ -199,7 +236,7 @@ For example, with the default config, resolving a 🔴 bug from Devin is blocked
 2. list_review_comments(pr_number=42)           # See all threads with staleness
 3. resolve_stale_comments(pr_number=42)          # Batch-resolve changed files
 4. reply_to_comment(42, thread_id, "Fixed in ...")  # Reply to remaining threads
-5. request_rereview(pr_number=42)                # Trigger fresh review cycle
+5. gh pr comment 42 --body "@unblocked please re-review"  # Trigger re-review
 ```
 
 For stacked PRs, use `list_stack_review_comments` with all PR numbers to get a full picture before deciding what to fix.

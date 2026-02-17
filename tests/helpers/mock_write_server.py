@@ -47,13 +47,6 @@ def reply_to_comment(pr_number: int, thread_id: str, body: str, repo: str | None
 
 
 @mcp.tool
-async def request_rereview(pr_number: int, reviewer: str | None = None, repo: str | None = None) -> str:  # noqa: ARG001
-    """Simulate requesting re-review (write operation, ~100ms gh call)."""
-    await asyncio.sleep(0.1)
-    return '{"triggered": ["unblocked"], "auto_triggers": ["devin"]}'
-
-
-@mcp.tool
 async def check_for_updates() -> str:
     """Simulate version check (read, fast)."""
     await asyncio.sleep(0.01)

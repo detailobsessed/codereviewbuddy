@@ -34,6 +34,14 @@ class TestConfig:
         assert "devin" in config.reviewers
         assert "unblocked" in config.reviewers
         assert "coderabbit" in config.reviewers
+        assert "greptile" in config.reviewers
+
+    def test_greptile_defaults(self):
+        config = Config()
+        greptile = config.reviewers["greptile"]
+        assert greptile.enabled is True
+        assert greptile.auto_resolve_stale is True
+        assert set(greptile.resolve_levels) == set(Severity)
 
     def test_devin_defaults(self):
         config = Config()
@@ -256,3 +264,4 @@ class TestGetSetConfig:
         config = get_config()
         assert "devin" in config.reviewers
         assert "unblocked" in config.reviewers
+        assert "greptile" in config.reviewers

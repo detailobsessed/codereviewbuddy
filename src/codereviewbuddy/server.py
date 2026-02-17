@@ -28,15 +28,13 @@ from codereviewbuddy.models import (
     ConfigInfo,
     CreateIssueResult,
     PRDescriptionReviewResult,
-    RereviewResult,
     ResolveStaleResult,
     ReviewSummary,
     StackActivityResult,
     StackReviewStatusResult,
     TriageResult,
 )
-from codereviewbuddy.reviewers import apply_config
-from codereviewbuddy.tools import comments, descriptions, issues, rereview, stack
+from codereviewbuddy.tools import comments, descriptions, issues, stack
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
@@ -99,7 +97,6 @@ async def check_gh_cli(server: FastMCP) -> AsyncIterator[dict[str, object] | Non
     check_prerequisites()
     config = load_config()
     set_config(config)
-    apply_config(config)
     write_operation_middleware.configure_diagnostics(
         heartbeat_enabled=config.diagnostics.tool_call_heartbeat,
         heartbeat_interval_ms=config.diagnostics.heartbeat_interval_ms,
@@ -113,7 +110,7 @@ mcp = FastMCP(
     lifespan=check_gh_cli,
     instructions="""\
 AI code review buddy — fetch, resolve, and manage PR review comments
-across Unblocked, Devin, and CodeRabbit with staleness detection.
+across Unblocked, Devin, CodeRabbit, and Greptile with staleness detection.
 
 ## Stack discovery
 
@@ -139,7 +136,8 @@ Follow this exact sequence when reviewing or responding to AI review comments:
    or flagged (🚩) threads** — always reply first.
 6. **Resolve stale** — `resolve_stale_comments` to batch-resolve threads on changed files.
 7. **File issues** — for `action: "create_issue"` items, call `create_issue_from_comment`.
-8. **Re-review** — `request_rereview` for manual-trigger reviewers (e.g. Unblocked).
+8. **Re-review** — after pushing fixes, trigger re-reviews for manual-trigger reviewers
+   (see "Re-review triggers" section below).
 9. **Verify** — `summarize_review_status()` again to confirm all bugs are addressed.
 
 For full thread details (all comments, reviewer statuses), fall back to
@@ -153,11 +151,19 @@ silently push — reviewers need to see that their finding was acknowledged. For
 (📝) and warning (🟡) comments, a reply is optional but appreciated when you made
 changes based on them.
 
-## Reviewer behavior differences
+## Re-review triggers
 
-Some reviewers auto-trigger a new review on every push (e.g. CodeRabbit) while others
-require a manual trigger via `request_rereview` (e.g. Unblocked). The trigger message
-is configurable per-reviewer via the `CRB_{NAME}_REREVIEW_MESSAGE` env var.
+After pushing fixes, some reviewers need a manual trigger to start a new review.
+Post a PR comment using `gh pr comment <number> --repo <owner/repo> --body "<message>"`:
+
+| Reviewer   | Auto-reviews on push? | Trigger comment                   |
+|------------|----------------------|-----------------------------------|
+| Devin      | ✅ Yes                | —                                 |
+| CodeRabbit | ✅ Yes                | —                                 |
+| Unblocked  | ❌ No                 | `@unblocked please re-review`     |
+| Greptile   | ❌ No                 | `@greptileai review`              |
+
+Greptile does NOT re-review on force push despite documentation suggesting otherwise.
 
 ## Staleness
 
@@ -174,9 +180,13 @@ that do NOT auto-resolve (e.g. Unblocked) are batch-resolved. The result include
 
 ## Per-reviewer configuration
 
-Configuration is via `CRB_*` environment variables set in your MCP client config.
-Call `show_config` to inspect the active configuration. The config controls
-per-reviewer resolve policy:
+Each reviewer adapter defines sensible defaults (e.g. Devin only allows resolving
+info-level threads, CodeRabbit blocks all resolution). Users can override these via
+`CRB_REVIEWERS` as a JSON string in the MCP client config env block:
+
+    "CRB_REVIEWERS": "{\"devin\": {\"enabled\": false}}"
+
+Call `show_config` to inspect the active configuration. Overridable fields per reviewer:
 
 - **`resolve_levels`**: Which severity levels you're allowed to resolve. If you try to
   resolve a thread whose severity (🔴 bug, 🚩 flagged, 🟡 warning, 📝 info) exceeds
@@ -370,40 +380,6 @@ async def reply_to_comment(
     except Exception as exc:
         logger.exception("reply_to_comment failed for %s on PR #%s", thread_id, pr_number)
         return f"Error replying to {thread_id} on PR #{pr_number}: {exc}"
-
-
-@mcp.tool
-async def request_rereview(
-    pr_number: int | None = None,
-    reviewer: str | None = None,
-    repo: str | None = None,
-) -> RereviewResult:
-    """Trigger a re-review for AI reviewers on a PR.
-
-    Handles per-reviewer differences automatically. Reviewers that need manual
-    triggers get a configurable comment posted (see ``CRB_{NAME}_REREVIEW_MESSAGE``
-    env var). Reviewers that auto-trigger on push are reported
-    as needing no action.
-
-    Args:
-        pr_number: PR number. Auto-detected from current branch if omitted.
-        reviewer: Specific reviewer to trigger (e.g. "unblocked"). Triggers all if not set.
-        repo: Repository in "owner/repo" format. Auto-detected if not provided.
-
-    Returns:
-        Dict with "triggered" (manually triggered reviewers) and "auto_triggers" (no action needed).
-    """
-    try:
-        ctx = get_context()
-        cwd = await _get_workspace_cwd(ctx)
-        pr_number = _resolve_pr_number(pr_number, cwd=cwd)
-        return await rereview.request_rereview(pr_number, reviewer=reviewer, repo=repo, cwd=cwd, ctx=ctx)
-    except Exception as exc:
-        logger.exception("request_rereview failed for PR #%s", pr_number)
-        return RereviewResult(triggered=[], auto_triggers=[], error=f"Error: {exc}")
-    except asyncio.CancelledError:
-        logger.warning("request_rereview cancelled for PR #%s", pr_number)
-        return RereviewResult(triggered=[], auto_triggers=[], error="Cancelled")
 
 
 @mcp.tool
@@ -626,7 +602,8 @@ You are doing a full review pass on the current PR stack. Follow these steps in 
 
 6. **Resolve stale threads** — call `resolve_stale_comments` for each PR that had stale threads.
 
-7. **Request re-review** — call `request_rereview` for each PR you pushed fixes to.
+7. **Trigger re-reviews** — for manual-trigger reviewers, post a PR comment
+   (see "Re-review triggers" table in instructions).
 
 8. **Verify descriptions** — call `review_pr_descriptions(pr_numbers)` and fix any missing elements.
 
@@ -655,7 +632,7 @@ Run through this checklist before considering the stack ready to merge:
 
 ## Review cycle
 - [ ] `resolve_stale_comments` was called for PRs with stale threads
-- [ ] Re-review requested after pushing fixes (`request_rereview`)
+- [ ] Re-review triggered for manual-trigger reviewers (see instructions for trigger comments)
 
 ## Testing
 - [ ] New/changed code has test coverage
@@ -678,7 +655,8 @@ You are preparing to merge the current PR stack. Run these final checks:
 
 1. **Review status** — call `summarize_review_status()`.
    - Any unresolved bugs (🔴) or flagged (🚩) threads? → STOP, fix them first.
-   - Did you push fixes? → Call `request_rereview` to trigger fresh reviews.
+   - Did you push fixes? → Trigger re-reviews for manual-trigger reviewers
+     (see "Re-review triggers" table in instructions).
 
 2. **Activity check** — call `stack_activity()`.
    - Is the stack `settled` (no activity for 10+ min after push+review)? Good.
