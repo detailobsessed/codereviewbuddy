@@ -30,7 +30,7 @@ dependencies = [
 ]
 
 [project.scripts]
-codereviewbuddy = "codereviewbuddy.server:main"
+codereviewbuddy = "codereviewbuddy.cli:app"
 
 [project.urls]
 Homepage = "https://detailobsessed.github.io/codereviewbuddy"
@@ -148,6 +148,9 @@ select = [
 ]
 
 [tool.ruff.lint.per-file-ignores]
+"src/codereviewbuddy/cli.py" = [
+    "T201",       # CLI output uses print by design
+]
 "tests/**" = [
     "S101", "S603", "S607", "S701",  # Allow assert, subprocess, jinja2 in tests
     "T201",       # Allow print in tests

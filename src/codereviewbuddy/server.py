@@ -675,14 +675,6 @@ If anything blocks, list the specific items that need attention.
 """
 
 
-def main() -> None:
-    """Run the codereviewbuddy MCP server."""
-    from codereviewbuddy.io_tap import install_io_tap  # noqa: PLC0415
-
-    install_io_tap()
-    mcp.run()
-
-
 def check_prerequisites() -> None:
     """Verify that gh CLI is installed and authenticated."""
     try:
