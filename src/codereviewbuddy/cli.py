@@ -12,6 +12,11 @@ app = cyclopts.App(
     help="codereviewbuddy — AI code review buddy MCP server.",
 )
 
+# Register install subcommand group
+from codereviewbuddy.install import install_app  # noqa: E402
+
+app.command(install_app)
+
 
 @app.default
 def serve() -> None:

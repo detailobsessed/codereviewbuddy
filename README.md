@@ -76,7 +76,38 @@ uv tool install codereviewbuddy
 
 ## MCP Client Configuration
 
-Add the following to your MCP client's config JSON (Windsurf, Claude Desktop, Cursor, VS Code, Claude Code, Gemini CLI, etc. — the JSON shape is the (roughly) same everywhere and I assume you know what your client needs):
+### Quick setup (recommended)
+
+One command configures your MCP client — no manual JSON editing:
+
+```bash
+uvx codereviewbuddy install claude-desktop
+uvx codereviewbuddy install claude-code
+uvx codereviewbuddy install cursor
+uvx codereviewbuddy install windsurf
+uvx codereviewbuddy install windsurf-next
+```
+
+With optional environment variables:
+
+```bash
+uvx codereviewbuddy install windsurf \
+  --env CRB_SELF_IMPROVEMENT__ENABLED=true \
+  --env CRB_SELF_IMPROVEMENT__REPO=your-org/codereviewbuddy
+```
+
+For any other client, generate the JSON config:
+
+```bash
+uvx codereviewbuddy install mcp-json          # print to stdout
+uvx codereviewbuddy install mcp-json --copy   # copy to clipboard
+```
+
+Restart your MCP client after installing. See `uvx codereviewbuddy install --help` for all options.
+
+### Manual configuration
+
+If you prefer manual setup, add the following to your MCP client's config JSON:
 
 ```jsonc
 {
