@@ -1130,6 +1130,15 @@ class TestReplyToComment:
         with pytest.raises(GhError, match="Failed to dismiss"):
             resolve_comment(42, "PRR_kwDOtest123")
 
+    def test_resolve_prr_graphql_error_raises(self, mocker: MockerFixture):
+        """GraphQL errors when dismissing PRR_ should raise GhError."""
+        mocker.patch(
+            "codereviewbuddy.tools.comments.gh.graphql",
+            return_value={"errors": [{"message": "Could not resolve to a node"}]},
+        )
+        with pytest.raises(GhError, match="GraphQL error"):
+            resolve_comment(42, "PRR_kwDOtest123")
+
     def test_resolve_rejects_ic_id(self):
         """resolve_comment should reject IC_ IDs with a clear error."""
         with pytest.raises(GhError, match="Cannot resolve bot comments"):
