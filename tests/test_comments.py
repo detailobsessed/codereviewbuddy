@@ -1102,14 +1102,37 @@ class TestReplyToComment:
             cwd=None,
         )
 
-    def test_resolve_rejects_prr_id(self):
-        """resolve_comment should reject PRR_ IDs with a clear error."""
-        with pytest.raises(GhError, match="only inline review threads"):
+    def test_resolve_dismisses_prr_id(self, mocker: MockerFixture):
+        """resolve_comment should dismiss PRR_ IDs via dismissPullRequestReview (#120)."""
+        response = {
+            "data": {
+                "dismissPullRequestReview": {
+                    "pullRequestReview": {"id": "PRR_kwDOtest123", "state": "DISMISSED"},
+                }
+            }
+        }
+        mock_graphql = mocker.patch("codereviewbuddy.tools.comments.gh.graphql", return_value=response)
+        result = resolve_comment(42, "PRR_kwDOtest123")
+        assert "Dismissed" in result
+        call_kwargs = mock_graphql.call_args
+        assert call_kwargs.kwargs["variables"]["reviewId"] == "PRR_kwDOtest123"
+
+    def test_resolve_prr_failure(self, mocker: MockerFixture):
+        """resolve_comment should raise on failed PRR_ dismiss."""
+        response = {
+            "data": {
+                "dismissPullRequestReview": {
+                    "pullRequestReview": {"id": "PRR_kwDOtest123", "state": "COMMENTED"},
+                }
+            }
+        }
+        mocker.patch("codereviewbuddy.tools.comments.gh.graphql", return_value=response)
+        with pytest.raises(GhError, match="Failed to dismiss"):
             resolve_comment(42, "PRR_kwDOtest123")
 
     def test_resolve_rejects_ic_id(self):
         """resolve_comment should reject IC_ IDs with a clear error."""
-        with pytest.raises(GhError, match="only inline review threads"):
+        with pytest.raises(GhError, match="Cannot resolve bot comments"):
             resolve_comment(42, "IC_kwDOtest001")
 
     def test_inline_thread_graphql_error_raises(self, mocker: MockerFixture):
