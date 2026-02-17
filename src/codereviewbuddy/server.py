@@ -307,12 +307,12 @@ async def resolve_comment(
 ) -> str:
     """Resolve a specific review thread by its ID.
 
-    Uses the resolveReviewThread GraphQL mutation (not minimizeComment).
-    Thread IDs have the PRRT_ prefix.
+    For inline threads (PRRT_), uses the resolveReviewThread GraphQL mutation.
+    For PR-level reviews (PRR_), dismisses the review via dismissPullRequestReview.
 
     Args:
         pr_number: PR number (for context). Auto-detected from current branch if omitted.
-        thread_id: The GraphQL node ID (PRRT_...) of the thread to resolve.
+        thread_id: The GraphQL node ID (PRRT_... or PRR_...) to resolve/dismiss.
     """
     try:
         ctx = get_context()

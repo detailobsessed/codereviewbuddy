@@ -78,6 +78,15 @@ mutation($threadId: ID!) {
 }
 """
 
+# GraphQL mutation to dismiss a PR-level review (#120)
+_DISMISS_REVIEW_MUTATION = """
+mutation($reviewId: ID!, $message: String!) {
+  dismissPullRequestReview(input: {pullRequestReviewId: $reviewId, message: $message}) {
+    pullRequestReview { id state }
+  }
+}
+"""
+
 
 def _reviewer_auto_resolves(reviewer_name: str, comment_body: str = "") -> bool:
     """Check if a reviewer will auto-resolve a specific thread.
@@ -625,30 +634,71 @@ def _has_any_reply(all_logins: list[str]) -> bool:
     return len(all_logins) > 1
 
 
-def resolve_comment(
+def _dismiss_pr_review(
     pr_number: int,
-    thread_id: str,
+    review_id: str,
+    message: str = "Dismissed via codereviewbuddy",
     cwd: str | None = None,
 ) -> str:
-    """Resolve a specific review thread by its GraphQL ID.
-
-    Always fetches thread details server-side and enforces the per-reviewer
-    ``resolve_levels`` policy — agents cannot bypass this.
+    """Dismiss a PR-level review (PRR_ ID) via GraphQL mutation.
 
     Args:
         pr_number: PR number (for context/logging).
-        thread_id: The GraphQL node ID (PRRT_...) of the thread to resolve.
+        review_id: The GraphQL node ID (PRR_...) of the review to dismiss.
+        message: Reason for dismissal.
         cwd: Working directory.
 
     Returns:
         Confirmation message.
 
     Raises:
-        gh.GhError: If the thread type is not resolvable or resolve is blocked by config.
+        gh.GhError: If the dismiss fails.
     """
-    if thread_id.startswith(("PRR_", "IC_")):
-        msg = f"Cannot resolve PR-level reviews or bot comments — only inline review threads (PRRT_) are resolvable. Got: {thread_id}"
+    result = gh.graphql(
+        _DISMISS_REVIEW_MUTATION,
+        variables={"reviewId": review_id, "message": message},
+        cwd=cwd,
+    )
+    _check_graphql_errors(result, f"dismiss review {review_id}")
+
+    review_data = result.get("data", {}).get("dismissPullRequestReview", {}).get("pullRequestReview", {})
+    if review_data.get("state") == "DISMISSED":
+        return f"Dismissed PR-level review {review_id} on PR #{pr_number}"
+
+    msg = f"Failed to dismiss PR-level review {review_id} on PR #{pr_number}"
+    raise gh.GhError(msg)
+
+
+def resolve_comment(
+    pr_number: int,
+    thread_id: str,
+    cwd: str | None = None,
+) -> str:
+    """Resolve a review thread (PRRT_) or dismiss a PR-level review (PRR_).
+
+    For inline threads (PRRT_), fetches thread details server-side and enforces
+    the per-reviewer ``resolve_levels`` policy — agents cannot bypass this.
+    For PR-level reviews (PRR_), dismisses the review via GraphQL.
+
+    Args:
+        pr_number: PR number (for context/logging).
+        thread_id: The GraphQL node ID (PRRT_... or PRR_...) to resolve/dismiss.
+        cwd: Working directory.
+
+    Returns:
+        Confirmation message.
+
+    Raises:
+        gh.GhError: If the thread type is not supported or resolve is blocked by config.
+    """
+    if thread_id.startswith("IC_"):
+        msg = (
+            f"Cannot resolve bot comments — only inline review threads (PRRT_) and PR-level reviews (PRR_) are supported. Got: {thread_id}"
+        )
         raise gh.GhError(msg)
+
+    if thread_id.startswith("PRR_"):
+        return _dismiss_pr_review(pr_number, thread_id, cwd=cwd)
 
     # Config enforcement: fetch thread details and check resolve_levels + reply requirement
     reviewer_name, comment_body, all_logins = _fetch_thread_detail(thread_id, cwd=cwd)
