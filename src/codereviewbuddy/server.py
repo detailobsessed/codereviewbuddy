@@ -248,6 +248,17 @@ async def list_review_comments(
 ) -> ReviewSummary:
     """List all review threads for a PR with reviewer identification and staleness.
 
+    After fetching, always present a summary to the user:
+    1. Group comments by file for readability.
+    2. Classify each by severity using the reviewer's indicators:
+       🔴 Bug/Critical — must fix before merge
+       🚩 Flagged — likely needs a code change
+       🟡 Warning — worth addressing but not blocking
+       📝 Info — acknowledged, no action required
+    3. Mark stale threads (is_stale=true) — these are on files changed since
+       the review and can likely be resolved.
+    4. Show unresolved count and severity breakdown as a quick summary line.
+
     Args:
         pr_number: The PR number to fetch comments for. Auto-detected from current branch if omitted.
         repo: Repository in "owner/repo" format. Auto-detected from git remote if not provided.
@@ -279,6 +290,10 @@ async def list_stack_review_comments(
 
     Collapses N tool calls into 1 for the common stacked-PR review workflow.
     Gives the agent a full picture of the review state before deciding what to fix.
+
+    After fetching, present a per-PR summary: group by file, classify each
+    comment by severity (🔴 Bug, 🚩 Flagged, 🟡 Warning, 📝 Info), and
+    highlight stale threads that can likely be resolved.
 
     Args:
         pr_numbers: List of PR numbers to fetch comments for.
@@ -463,6 +478,10 @@ async def summarize_review_status(
 
     When ``pr_numbers`` is omitted, auto-discovers the stack from the current branch
     using the same branch-chain walking as ``list_review_comments``.
+
+    Present the result as a concise table: one row per PR with unresolved count,
+    severity breakdown (🔴 bugs, 🚩 flagged, 🟡 warnings, 📝 info), stale count,
+    and reviewer status. Highlight PRs that need immediate attention.
 
     Args:
         pr_numbers: PR numbers to summarize. Auto-discovers stack if omitted.
