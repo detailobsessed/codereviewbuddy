@@ -429,6 +429,7 @@ async def _fetch_raw_threads(
             variables["cursor"] = cursor
 
         result = await call_sync_fn_in_threadpool(gh.graphql, _THREADS_QUERY, variables=variables, cwd=cwd)
+        _check_graphql_errors(result, f"fetch review threads for PR #{pr_number} (page {page})")
         pr_data = result.get("data", {}).get("repository", {}).get("pullRequest") or {}
         threads_data = pr_data.get("reviewThreads", {})
         raw_threads.extend(threads_data.get("nodes", []))
@@ -601,6 +602,7 @@ def _fetch_thread_detail(thread_id: str, cwd: str | None = None) -> tuple[str, s
         (reviewer_name, comment_body, all_logins) — empty strings/list if lookup fails.
     """
     result = gh.graphql(_THREAD_DETAIL_QUERY, variables={"threadId": thread_id}, cwd=cwd)
+    _check_graphql_errors(result, f"fetch thread detail {thread_id}")
     node = result.get("data", {}).get("node") or {}
     comments = node.get("comments", {}).get("nodes", [])
     if not comments:

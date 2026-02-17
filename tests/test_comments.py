@@ -886,6 +886,71 @@ class TestListStackReviewComments:
         assert result == {}
 
 
+class TestGraphQLErrorChecks:
+    """Tests for _check_graphql_errors on query paths (#145)."""
+
+    async def test_fetch_raw_threads_raises_on_graphql_error(self, mocker: MockerFixture):
+        """_fetch_raw_threads should raise GhError when GraphQL response contains errors."""
+        from codereviewbuddy.tools.comments import _fetch_raw_threads
+
+        mocker.patch(
+            "codereviewbuddy.tools.comments.gh.graphql",
+            return_value={"errors": [{"message": "Something went wrong"}]},
+        )
+
+        with pytest.raises(GhError, match=r"GraphQL error.*fetch review threads"):
+            await _fetch_raw_threads("owner", "repo", 42, cwd=None, ctx=None)
+
+    async def test_fetch_raw_threads_ok_without_errors(self, mocker: MockerFixture):
+        """_fetch_raw_threads should work normally when no GraphQL errors."""
+        from codereviewbuddy.tools.comments import _fetch_raw_threads
+
+        mocker.patch(
+            "codereviewbuddy.tools.comments.gh.graphql",
+            return_value=SAMPLE_GRAPHQL_RESPONSE,
+        )
+
+        result = await _fetch_raw_threads("owner", "repo", 42, cwd=None, ctx=None)
+        assert len(result) == 2
+
+    def test_fetch_thread_detail_ok_without_errors(self, mocker: MockerFixture):
+        """_fetch_thread_detail should return (reviewer, body, all_logins) on valid data."""
+        from codereviewbuddy.tools.comments import _fetch_thread_detail
+
+        mocker.patch(
+            "codereviewbuddy.tools.comments.gh.graphql",
+            return_value={
+                "data": {
+                    "node": {
+                        "comments": {
+                            "nodes": [
+                                {"author": {"login": "devin-ai-integration[bot]"}, "body": "Consider refactoring"},
+                                {"author": {"login": "ichoosetoaccept"}, "body": "Done"},
+                            ]
+                        }
+                    }
+                }
+            },
+        )
+
+        reviewer, body, logins = _fetch_thread_detail("PRRT_valid_id")
+        assert reviewer == "devin"
+        assert body == "Consider refactoring"
+        assert logins == ["devin-ai-integration[bot]", "ichoosetoaccept"]
+
+    def test_fetch_thread_detail_raises_on_graphql_error(self, mocker: MockerFixture):
+        """_fetch_thread_detail should raise GhError when GraphQL response contains errors."""
+        from codereviewbuddy.tools.comments import _fetch_thread_detail
+
+        mocker.patch(
+            "codereviewbuddy.tools.comments.gh.graphql",
+            return_value={"errors": [{"message": "Could not resolve to a node"}]},
+        )
+
+        with pytest.raises(GhError, match=r"GraphQL error.*fetch thread detail"):
+            _fetch_thread_detail("PRRT_bad_id")
+
+
 class TestGetPrIssueComments:
     def test_returns_bot_comments(self, mocker: MockerFixture):
         """Bot comments (type=Bot or [bot] suffix) should be included."""
