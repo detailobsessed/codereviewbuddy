@@ -423,15 +423,13 @@ class TestCursorCommand:
 
 
 class TestEdgeCases:
-    def test_write_config_file_returns_false_on_error(self, mocker: MockerFixture, tmp_path: Path):
-        config_path = tmp_path / "mcp_config.json"
-        config_path.write_text('{"mcpServers": {}}', encoding="utf-8")
+    def test_write_config_file_returns_false_on_error(self, tmp_path: Path):
+        config_path = tmp_path / "readonly" / "mcp_config.json"
+        # Create a directory where the file would be, so write_text fails
+        config_path.parent.mkdir(parents=True)
+        config_path.mkdir()  # make config_path a dir so write_text raises
 
         server_config = _build_server_config()
-        mocker.patch(
-            "codereviewbuddy.install.update_config_file",
-            side_effect=OSError("disk full"),
-        )
         result = _write_config_file(config_path, server_config, client_name="Test")
         assert result is False
 
@@ -455,15 +453,12 @@ class TestEdgeCases:
 
     def test_claude_desktop_write_failure_exits(self, tmp_path: Path, mocker: MockerFixture):
         config_file = tmp_path / "claude_desktop_config.json"
-        config_file.write_text('{"mcpServers": {}}', encoding="utf-8")
+        # Make config_file a directory so write_text inside _write_config_file fails
+        config_file.mkdir(parents=True)
 
         mocker.patch(
             "codereviewbuddy.install._get_claude_desktop_config_path",
             return_value=config_file,
-        )
-        mocker.patch(
-            "codereviewbuddy.install.update_config_file",
-            side_effect=OSError("disk full"),
         )
         from codereviewbuddy.install import cmd_claude_desktop
 
