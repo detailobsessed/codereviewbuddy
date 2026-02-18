@@ -523,7 +523,7 @@ async def list_review_comments(
         ReviewSummary with threads and per-reviewer statuses.
     """
     if repo:
-        owner, repo_name = repo.split("/", 1)
+        owner, repo_name = gh.parse_repo(repo)
     else:
         owner, repo_name = await call_sync_fn_in_threadpool(gh.get_repo_info, cwd=cwd)
 
@@ -836,7 +836,7 @@ def reply_to_comment(
 
     # IC_ and PRR_ paths need owner/repo for the issues comments API
     if repo:
-        owner, repo_name = repo.split("/", 1)
+        owner, repo_name = gh.parse_repo(repo)
     else:
         owner, repo_name = gh.get_repo_info(cwd=cwd)
 
@@ -966,7 +966,7 @@ async def triage_review_comments(
     issue_items: list[TriageItem] = []
 
     if repo:
-        owner, repo_name = repo.split("/", 1)
+        owner, repo_name = gh.parse_repo(repo)
     else:
         owner, repo_name = await call_sync_fn_in_threadpool(gh.get_repo_info, cwd=cwd)
 

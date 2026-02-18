@@ -340,7 +340,7 @@ async def summarize_review_status(
         Compact per-PR status with severity counts.
     """
     if repo:
-        owner, repo_name = repo.split("/", 1)
+        owner, repo_name = gh.parse_repo(repo)
     else:
         owner, repo_name = await call_sync_fn_in_threadpool(gh.get_repo_info, cwd=cwd)
     full_repo = f"{owner}/{repo_name}"
@@ -445,7 +445,7 @@ async def list_recent_unresolved(
         StackReviewStatusResult containing only PRs that have unresolved threads.
     """
     if repo:
-        owner, repo_name = repo.split("/", 1)
+        owner, repo_name = gh.parse_repo(repo)
     else:
         owner, repo_name = await call_sync_fn_in_threadpool(gh.get_repo_info, cwd=cwd)
     full_repo = f"{owner}/{repo_name}"
@@ -593,7 +593,7 @@ async def stack_activity(  # noqa: PLR0914
     from datetime import UTC, datetime  # noqa: PLC0415
 
     if repo:
-        owner, repo_name = repo.split("/", 1)
+        owner, repo_name = gh.parse_repo(repo)
     else:
         owner, repo_name = await call_sync_fn_in_threadpool(gh.get_repo_info, cwd=cwd)
     full_repo = f"{owner}/{repo_name}"

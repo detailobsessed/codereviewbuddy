@@ -105,7 +105,7 @@ def create_issue_from_comment(  # noqa: PLR0913, PLR0917
         Created issue number, URL, and title.
     """
     if repo:
-        owner, repo_name = repo.split("/", 1)
+        owner, repo_name = gh.parse_repo(repo)
     else:
         owner, repo_name = gh.get_repo_info(cwd=cwd)
 
