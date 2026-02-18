@@ -21,6 +21,7 @@ from codereviewbuddy.gh import (
     get_current_pr_number,
     get_repo_info,
     graphql,
+    parse_repo,
     rest,
     run_gh,
 )
@@ -286,6 +287,29 @@ class TestGetCurrentPrNumber:
         _patch_run(mocker, stderr="no pull requests found", returncode=1)
         with pytest.raises(GhError, match="no pull requests found"):
             get_current_pr_number()
+
+
+class TestParseRepo:
+    def test_valid_repo(self):
+        owner, repo = parse_repo("detailobsessed/codereviewbuddy")
+        assert owner == "detailobsessed"
+        assert repo == "codereviewbuddy"
+
+    def test_missing_slash_raises(self):
+        with pytest.raises(GhError, match="owner/repo"):
+            parse_repo("myrepo")
+
+    def test_empty_string_raises(self):
+        with pytest.raises(GhError, match="owner/repo"):
+            parse_repo("")
+
+    def test_empty_owner_raises(self):
+        with pytest.raises(GhError, match="owner/repo"):
+            parse_repo("/repo")
+
+    def test_empty_repo_raises(self):
+        with pytest.raises(GhError, match="owner/repo"):
+            parse_repo("owner/")
 
 
 class TestGetRepoInfo:

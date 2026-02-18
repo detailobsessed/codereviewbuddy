@@ -287,6 +287,22 @@ def get_current_pr_number(cwd: str | None = None) -> int:
     return int(raw.strip())
 
 
+def parse_repo(repo: str) -> tuple[str, str]:
+    """Parse a repo string in "owner/repo" format into (owner, repo).
+
+    Raises:
+        GhError: If the repo string is not in "owner/repo" format.
+    """
+    if "/" not in repo:
+        msg = f'Invalid repo format: {repo!r}. Expected "owner/repo".'
+        raise GhError(msg)
+    owner, repo_name = repo.split("/", 1)
+    if not owner or not repo_name:
+        msg = f'Invalid repo format: {repo!r}. Expected "owner/repo".'
+        raise GhError(msg)
+    return owner, repo_name
+
+
 def get_repo_info(cwd: str | None = None) -> tuple[str, str]:
     """Get the owner and repo name for the current repository.
 
