@@ -5,7 +5,7 @@ and kept up to date on every `copier update`. Your project README lives in `READ
 
 ## Badges
 
-Copy these into your `README.md` to show project status on GitHub:
+Copy these into your `README.md` to show project status:
 
 ```markdown
 [![ci](https://github.com/detailobsessed/codereviewbuddy/workflows/ci/badge.svg)](https://github.com/detailobsessed/codereviewbuddy/actions?query=workflow%3Aci)

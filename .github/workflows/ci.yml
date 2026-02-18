@@ -165,3 +165,14 @@ jobs:
       with:
         token: ${{ secrets.CODECOV_TOKEN }}
         fail_ci_if_error: false
+
+  ci-pass:
+    if: always()
+    needs: [links, quality, tests]
+    runs-on: ubuntu-latest
+    steps:
+    - name: Check all jobs passed
+      uses: re-actors/alls-green@05ac9388f0aebcb5727afa17fcccfecd6f8ec5fe # v1.2.2
+      with:
+        allowed-skips: quality, tests
+        jobs: ${{ toJSON(needs) }}
