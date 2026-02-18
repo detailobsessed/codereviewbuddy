@@ -170,7 +170,7 @@ def _find_claude_command() -> str | None:
                 capture_output=True,
                 text=True,
             )
-            if "Claude Code" in result.stdout:
+            if "Claude Code" in result.stdout or "Claude Code" in result.stderr:
                 return claude_in_path
         except subprocess.CalledProcessError, FileNotFoundError:
             pass
@@ -189,7 +189,7 @@ def _find_claude_command() -> str | None:
                     capture_output=True,
                     text=True,
                 )
-                if "Claude Code" in result.stdout:
+                if "Claude Code" in result.stdout or "Claude Code" in result.stderr:
                     return str(path)
             except subprocess.CalledProcessError, FileNotFoundError:
                 continue
@@ -266,7 +266,7 @@ def cmd_cursor(
     """Install codereviewbuddy in Cursor (opens deeplink)."""
     server_config = _build_server_config(env_vars=env, env_file=env_file)
 
-    config_json = server_config.model_dump_json(exclude_none=True)
+    config_json = server_config.model_dump_json(exclude_none=True, exclude_defaults=True)
     config_b64 = base64.urlsafe_b64encode(config_json.encode()).decode()
     encoded_name = quote(SERVER_NAME, safe="")
     deeplink = f"cursor://anysphere.cursor-deeplink/mcp/install?name={encoded_name}&config={config_b64}"

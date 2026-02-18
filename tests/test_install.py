@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import base64
 import json
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -323,12 +324,24 @@ class TestFindClaudeCommand:
         result = _find_claude_command()
         assert result == "/usr/bin/claude"
 
+    def test_found_via_stderr(self, mocker: MockerFixture):
+        from codereviewbuddy.install import _find_claude_command
+
+        mocker.patch("codereviewbuddy.install.shutil.which", return_value="/usr/bin/claude")
+        mock_run = mocker.patch("codereviewbuddy.install.subprocess.run")
+        mock_run.return_value.stdout = ""
+        mock_run.return_value.stderr = "Claude Code v1.0"
+
+        result = _find_claude_command()
+        assert result == "/usr/bin/claude"
+
     def test_not_claude_code(self, mocker: MockerFixture):
         from codereviewbuddy.install import _find_claude_command
 
         mocker.patch("codereviewbuddy.install.shutil.which", return_value="/usr/bin/claude")
         mock_run = mocker.patch("codereviewbuddy.install.subprocess.run")
         mock_run.return_value.stdout = "some other claude"
+        mock_run.return_value.stderr = ""
 
         # Also mock potential_paths to not exist
         mocker.patch("pathlib.Path.exists", return_value=False)
@@ -408,6 +421,18 @@ class TestCursorCommand:
         url = mock_open.call_args[0][0]
         assert url.startswith("cursor://")
         assert SERVER_NAME in url
+
+    def test_deeplink_excludes_empty_env(self, mocker: MockerFixture):
+        mock_open = mocker.patch("codereviewbuddy.install._open_deeplink", return_value=True)
+        from codereviewbuddy.install import cmd_cursor
+
+        cmd_cursor()
+        url = mock_open.call_args[0][0]
+        # Decode the base64 config from the deeplink
+        config_b64 = url.split("config=")[1]
+        config_json = base64.urlsafe_b64decode(config_b64).decode()
+        config_data = json.loads(config_json)
+        assert "env" not in config_data
 
     def test_exits_on_deeplink_failure(self, mocker: MockerFixture):
         mocker.patch("codereviewbuddy.install._open_deeplink", return_value=False)
