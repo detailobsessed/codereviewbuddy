@@ -1,8 +1,8 @@
 """Install codereviewbuddy in MCP clients — one command setup.
 
-Reuses FastMCP's ``StdioMCPServer`` model and ``update_config_file()`` utility
-for config-file clients (Claude Desktop, Windsurf, Windsurf Next), but generates
-a ``uvx``-based command instead of FastMCP's ``uv run ... fastmcp run`` pattern.
+Reuses FastMCP's ``StdioMCPServer`` model for config-file clients (Claude Desktop,
+Windsurf, Windsurf Next), but generates a ``uvx``-based command instead of
+FastMCP's ``uv run ... fastmcp run`` pattern.
 """
 
 from __future__ import annotations
@@ -18,7 +18,7 @@ from typing import Annotated
 from urllib.parse import quote
 
 import cyclopts
-from fastmcp.mcp_config import StdioMCPServer, update_config_file
+from fastmcp.mcp_config import StdioMCPServer
 from rich import print as rprint
 
 SERVER_NAME = "codereviewbuddy"
@@ -72,16 +72,21 @@ def _write_config_file(
     *,
     client_name: str,
 ) -> bool:
-    """Write server config into an mcpServers JSON file, creating it if needed."""
+    """Write server config into an mcpServers JSON file, creating it if needed.
+
+    We implement config merging ourselves instead of using fastmcp's
+    ``update_config_file()`` because that function omits ``encoding=``
+    on its file I/O, which raises ``EncodingWarning`` under
+    ``PYTHONWARNDEFAULTENCODING=1`` (our CI environment).
+    """
     try:
-        # Ensure parent dirs exist
         config_path.parent.mkdir(parents=True, exist_ok=True)
 
-        # Create file with empty mcpServers if it doesn't exist or is empty
-        if not config_path.exists() or not config_path.read_text(encoding="utf-8").strip():
-            config_path.write_text('{"mcpServers": {}}', encoding="utf-8")
+        config = json.loads(raw) if config_path.exists() and (raw := config_path.read_text(encoding="utf-8").strip()) else {}
 
-        update_config_file(config_path, SERVER_NAME, server_config)
+        config.setdefault("mcpServers", {})
+        config["mcpServers"][SERVER_NAME] = server_config.model_dump(exclude_none=True)
+        config_path.write_text(json.dumps(config, indent=2), encoding="utf-8")
     except Exception as exc:
         rprint(f"[red]Failed to install in {client_name}: {exc}[/red]")
         return False
