@@ -13,8 +13,10 @@ from codereviewbuddy.models import StackPR
 from codereviewbuddy.tools.stack import (
     _build_stack,
     _classify_severity,
+    _fetch_merged_prs,
     _fetch_pr_summary,
     discover_stack,
+    list_recent_unresolved,
     summarize_review_status,
 )
 
@@ -285,3 +287,110 @@ class TestSummarizeReviewStatus:
         result = await summarize_review_status(pr_numbers=[])
         assert result.error is not None
         assert "No PRs" in result.error
+
+
+# -- list_recent_unresolved tests --------------------------------------------
+
+SAMPLE_MERGED_PRS = [
+    {"number": 176, "title": "build: copier update", "url": "https://github.com/o/r/pull/176", "mergedAt": "2026-02-18T09:00:00Z"},
+    {"number": 177, "title": "feat: install command", "url": "https://github.com/o/r/pull/177", "mergedAt": "2026-02-18T09:01:00Z"},
+]
+
+# Response with zero unresolved threads
+SAMPLE_CLEAN_GRAPHQL_RESPONSE = {
+    "data": {
+        "repository": {
+            "pullRequest": {
+                "title": "build: copier update",
+                "url": "https://github.com/o/r/pull/176",
+                "reviewThreads": {
+                    "pageInfo": {"hasNextPage": False, "endCursor": None},
+                    "nodes": [],
+                },
+            }
+        }
+    },
+}
+
+
+class TestListRecentUnresolved:
+    async def test_returns_only_prs_with_unresolved(self, mocker: MockerFixture):
+        mocker.patch("codereviewbuddy.tools.stack._fetch_merged_prs", return_value=SAMPLE_MERGED_PRS)
+        mocker.patch("codereviewbuddy.tools.stack.gh.get_repo_info", return_value=("o", "r"))
+        # PR 176 has no unresolved, PR 177 has 2 unresolved
+        mocker.patch(
+            "codereviewbuddy.tools.stack.gh.graphql",
+            side_effect=[SAMPLE_CLEAN_GRAPHQL_RESPONSE, SAMPLE_SUMMARY_GRAPHQL_RESPONSE],
+        )
+
+        result = await list_recent_unresolved(repo="o/r", limit=5)
+        assert result.error is None
+        assert len(result.prs) == 1
+        assert result.prs[0].unresolved == 2
+        assert result.total_unresolved == 2
+
+    async def test_empty_when_no_merged_prs(self, mocker: MockerFixture):
+        mocker.patch("codereviewbuddy.tools.stack._fetch_merged_prs", return_value=[])
+        mocker.patch("codereviewbuddy.tools.stack.gh.get_repo_info", return_value=("o", "r"))
+
+        result = await list_recent_unresolved(repo="o/r")
+        assert result.error is None
+        assert result.prs == []
+        assert result.total_unresolved == 0
+
+    async def test_empty_when_all_resolved(self, mocker: MockerFixture):
+        mocker.patch("codereviewbuddy.tools.stack._fetch_merged_prs", return_value=SAMPLE_MERGED_PRS)
+        mocker.patch("codereviewbuddy.tools.stack.gh.get_repo_info", return_value=("o", "r"))
+        mocker.patch("codereviewbuddy.tools.stack.gh.graphql", return_value=SAMPLE_CLEAN_GRAPHQL_RESPONSE)
+
+        result = await list_recent_unresolved(repo="o/r")
+        assert result.prs == []
+        assert result.total_unresolved == 0
+
+    async def test_auto_detects_repo(self, mocker: MockerFixture):
+        mocker.patch("codereviewbuddy.tools.stack._fetch_merged_prs", return_value=SAMPLE_MERGED_PRS)
+        mocker.patch("codereviewbuddy.tools.stack.gh.get_repo_info", return_value=("o", "r"))
+        mocker.patch("codereviewbuddy.tools.stack.gh.graphql", return_value=SAMPLE_CLEAN_GRAPHQL_RESPONSE)
+
+        result = await list_recent_unresolved()  # no repo arg
+        assert result.error is None
+
+    async def test_reports_progress_with_ctx(self, mocker: MockerFixture):
+        mocker.patch("codereviewbuddy.tools.stack._fetch_merged_prs", return_value=SAMPLE_MERGED_PRS)
+        mocker.patch("codereviewbuddy.tools.stack.gh.get_repo_info", return_value=("o", "r"))
+        mocker.patch("codereviewbuddy.tools.stack.gh.graphql", return_value=SAMPLE_SUMMARY_GRAPHQL_RESPONSE)
+
+        ctx = AsyncMock()
+        result = await list_recent_unresolved(repo="o/r", ctx=ctx)
+        assert result.total_unresolved > 0
+        # Progress reported: once per PR + final
+        assert ctx.report_progress.await_count == len(SAMPLE_MERGED_PRS) + 1
+
+    def test_fetch_merged_prs_passes_repo_and_limit(self, mocker: MockerFixture):
+        mock_run = mocker.patch("codereviewbuddy.tools.stack.gh.run_gh", return_value="[]")
+        _fetch_merged_prs(repo="o/r", limit=5)
+        call_args = mock_run.call_args[0]
+        assert "--state" in call_args
+        assert "merged" in call_args
+        assert "--limit" in call_args
+        assert "5" in call_args
+        assert "--repo" in call_args
+        assert "o/r" in call_args
+
+    def test_fetch_merged_prs_clamps_negative_to_one(self, mocker: MockerFixture):
+        mock_run = mocker.patch("codereviewbuddy.tools.stack.gh.run_gh", return_value="[]")
+        _fetch_merged_prs(limit=-5)
+        call_args = mock_run.call_args[0]
+        assert "1" in call_args
+
+    def test_fetch_merged_prs_clamps_zero_to_one(self, mocker: MockerFixture):
+        mock_run = mocker.patch("codereviewbuddy.tools.stack.gh.run_gh", return_value="[]")
+        _fetch_merged_prs(limit=0)
+        call_args = mock_run.call_args[0]
+        assert "1" in call_args
+
+    def test_fetch_merged_prs_caps_at_max(self, mocker: MockerFixture):
+        mock_run = mocker.patch("codereviewbuddy.tools.stack.gh.run_gh", return_value="[]")
+        _fetch_merged_prs(limit=100)
+        call_args = mock_run.call_args[0]
+        assert "50" in call_args

@@ -396,6 +396,92 @@ async def summarize_review_status(
 
 
 # ---------------------------------------------------------------------------
+# Recently merged PRs with unresolved comments (#182)
+# ---------------------------------------------------------------------------
+
+_MAX_MERGED_SCAN = 50
+
+
+def _fetch_merged_prs(
+    repo: str | None = None,
+    limit: int = 10,
+    cwd: str | None = None,
+) -> list[dict]:
+    """Fetch recently merged PRs via gh CLI."""
+    args = [
+        "pr",
+        "list",
+        "--json",
+        "number,title,url,mergedAt",
+        "--state",
+        "merged",
+        "--limit",
+        str(max(1, min(limit, _MAX_MERGED_SCAN))),
+    ]
+    if repo:
+        args.extend(["--repo", repo])
+    raw = gh.run_gh(*args, cwd=cwd)
+    return json.loads(raw)
+
+
+async def list_recent_unresolved(
+    repo: str | None = None,
+    limit: int = 10,
+    cwd: str | None = None,
+    ctx: Context | None = None,
+) -> StackReviewStatusResult:
+    """Scan recently merged PRs for unresolved review threads.
+
+    Reviewers like Greptile may post comments on already-merged PRs.
+    This tool surfaces those so agents don't miss late-arriving feedback.
+
+    Args:
+        repo: Repository in "owner/repo" format. Auto-detected if not provided.
+        limit: How many recently merged PRs to scan (default 10, max 50).
+        cwd: Working directory for git operations.
+        ctx: FastMCP context for progress reporting.
+
+    Returns:
+        StackReviewStatusResult containing only PRs that have unresolved threads.
+    """
+    if repo:
+        owner, repo_name = repo.split("/", 1)
+    else:
+        owner, repo_name = await call_sync_fn_in_threadpool(gh.get_repo_info, cwd=cwd)
+    full_repo = f"{owner}/{repo_name}"
+
+    merged_prs = await call_sync_fn_in_threadpool(_fetch_merged_prs, repo=full_repo, limit=limit, cwd=cwd)
+    if not merged_prs:
+        return StackReviewStatusResult(prs=[], total_unresolved=0)
+
+    summaries: list[PRReviewStatusSummary] = []
+    total = len(merged_prs)
+
+    for i, pr in enumerate(merged_prs):
+        if ctx and total:
+            await ctx.report_progress(i, total)
+        summary = await call_sync_fn_in_threadpool(
+            _fetch_pr_summary,
+            owner,
+            repo_name,
+            pr["number"],
+            cwd=cwd,
+        )
+        if summary.unresolved > 0:
+            summaries.append(summary)
+
+    if ctx and total:
+        await ctx.report_progress(total, total)
+
+    total_unresolved = sum(s.unresolved for s in summaries)
+
+    return StackReviewStatusResult(
+        prs=summaries,
+        total_unresolved=total_unresolved,
+    )
+
+
+# ---------------------------------------------------------------------------
 # Stack activity timeline (#98)
 # ---------------------------------------------------------------------------
 
