@@ -562,6 +562,39 @@ async def summarize_review_status(
 
 
 @mcp.tool
+async def list_recent_unresolved(
+    repo: str | None = None,
+    limit: int = 10,
+) -> StackReviewStatusResult:
+    """Scan recently merged PRs for unresolved review threads.
+
+    Reviewers like Greptile may post late comments on already-merged PRs.
+    Use this alongside ``summarize_review_status`` to catch feedback the
+    current stack view misses.
+
+    Only returns PRs that have at least one unresolved thread.
+
+    Args:
+        repo: Repository in "owner/repo" format. Auto-detected if not provided.
+        limit: How many recently merged PRs to scan (default 10, max 50).
+
+    Returns:
+        Per-PR status with severity counts — same format as ``summarize_review_status``.
+    """
+    try:
+        ctx = get_context()
+        cwd = await _get_workspace_cwd(ctx)
+        _check_auto_detect_prerequisites(cwd, has_pr=True, has_repo=repo is not None)
+        return await stack.list_recent_unresolved(repo=repo, limit=limit, cwd=cwd, ctx=ctx)
+    except Exception as exc:
+        logger.exception("list_recent_unresolved failed")
+        return StackReviewStatusResult(error=f"Error: {exc}")
+    except asyncio.CancelledError:
+        logger.warning("list_recent_unresolved cancelled")
+        return StackReviewStatusResult(error="Cancelled")
+
+
+@mcp.tool
 async def stack_activity(
     pr_numbers: list[int] | None = None,
     repo: str | None = None,
