@@ -25,7 +25,7 @@ classifiers = [
     "Typing :: Typed",
 ]
 dependencies = [
-    "fastmcp>=3.0.0rc1",
+    "fastmcp>=3.0.0",
     "pydantic-settings>=2.0",
 ]
 
