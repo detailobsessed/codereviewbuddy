@@ -112,6 +112,7 @@ async def client(mocker: MockerFixture):
 
 class TestToolRegistration:
     EXPECTED_TOOLS = frozenset({
+        "diagnose_ci",
         "list_review_comments",
         "list_stack_review_comments",
         "list_recent_unresolved",
@@ -133,7 +134,7 @@ class TestToolRegistration:
 
     async def test_tool_count(self, client: Client):
         tools = await client.list_tools()
-        assert len(tools) == 12
+        assert len(tools) == 13
 
 
 class TestPromptRegistration:
