@@ -25,6 +25,7 @@ from codereviewbuddy import gh
 from codereviewbuddy.config import get_config, load_config, set_config
 from codereviewbuddy.middleware import WriteOperationMiddleware
 from codereviewbuddy.models import (
+    CIDiagnosisResult,
     ConfigInfo,
     CreateIssueResult,
     PRDescriptionReviewResult,
@@ -34,7 +35,7 @@ from codereviewbuddy.models import (
     StackReviewStatusResult,
     TriageResult,
 )
-from codereviewbuddy.tools import comments, descriptions, issues, stack
+from codereviewbuddy.tools import ci, comments, descriptions, issues, stack
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
@@ -662,6 +663,41 @@ async def triage_review_comments(
     except asyncio.CancelledError:
         logger.warning("triage_review_comments cancelled")
         return TriageResult(error="Cancelled")
+
+
+@mcp.tool
+async def diagnose_ci(
+    pr_number: int | None = None,
+    repo: str | None = None,
+    run_id: int | None = None,
+) -> CIDiagnosisResult:
+    """Diagnose CI failures for a PR or workflow run in one call.
+
+    Collapses the typical 3-5 sequential ``gh`` commands into a single tool call:
+    finds the latest failed run, identifies failed jobs and steps, and extracts
+    actionable error lines from the logs.
+
+    Args:
+        pr_number: PR number to check CI for. Auto-detected from current branch if omitted.
+        repo: Repository in "owner/repo" format. Auto-detected if not provided.
+        run_id: Specific workflow run ID to diagnose. If omitted, finds the latest failed run.
+
+    Returns:
+        Structured diagnosis with run info, failed jobs, failed steps, and extracted error lines.
+    """
+    try:
+        ctx = get_context()
+        cwd = await _get_workspace_cwd(ctx)
+        if run_id is None:
+            _check_auto_detect_prerequisites(cwd, has_pr=pr_number is not None, has_repo=repo is not None)
+            if pr_number is None and cwd is not None:
+                pr_number = _resolve_pr_number(None, cwd=cwd)
+        else:
+            _check_auto_detect_prerequisites(cwd, has_pr=True, has_repo=repo is not None)
+        return ci.diagnose_ci(pr_number=pr_number, repo=repo, run_id=run_id, cwd=cwd)
+    except Exception as exc:
+        logger.exception("diagnose_ci failed")
+        return CIDiagnosisResult(error=f"Error: {exc}")
 
 
 @mcp.tool

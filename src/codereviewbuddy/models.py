@@ -178,6 +178,27 @@ class TriageResult(BaseModel):
     error: str | None = Field(default=None, description="Error message if the request failed")
 
 
+class CIJobFailure(BaseModel):
+    """A single failed job in a CI workflow run."""
+
+    job_name: str = Field(description="Name of the failed job")
+    conclusion: str = Field(description="Job conclusion (e.g. 'failure', 'cancelled')")
+    failed_step: str = Field(default="", description="Name of the first failed step within the job")
+    error_lines: list[str] = Field(default_factory=list, description="Extracted error/failure lines from the job logs")
+
+
+class CIDiagnosisResult(BaseModel):
+    """Structured CI failure diagnosis from a GitHub Actions workflow run."""
+
+    run_id: int = Field(default=0, description="Workflow run ID")
+    workflow: str = Field(default="", description="Workflow name (e.g. 'ci', 'release')")
+    branch: str = Field(default="", description="Branch the run was triggered on")
+    conclusion: str = Field(default="", description="Overall run conclusion (e.g. 'failure')")
+    url: str = Field(default="", description="URL to the workflow run")
+    failures: list[CIJobFailure] = Field(default_factory=list, description="Failed jobs with extracted error details")
+    error: str | None = Field(default=None, description="Error message if diagnosis itself failed")
+
+
 class ConfigInfo(BaseModel):
     """Active codereviewbuddy configuration with metadata."""
 
