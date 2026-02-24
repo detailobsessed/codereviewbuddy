@@ -65,6 +65,38 @@ _RUN_DETAILS = json.dumps({
     ],
 })
 
+_RUN_DETAILS_MULTI_FAILURE = json.dumps({
+    "name": "ci",
+    "headBranch": "feat-branch",
+    "conclusion": "failure",
+    "url": "https://github.com/org/repo/actions/runs/222",
+    "jobs": [
+        {
+            "name": "lint",
+            "conclusion": "failure",
+            "steps": [
+                {"name": "Checkout", "conclusion": "success"},
+                {"name": "Run ruff", "conclusion": "failure"},
+            ],
+        },
+        {
+            "name": "test",
+            "conclusion": "failure",
+            "steps": [
+                {"name": "Checkout", "conclusion": "success"},
+                {"name": "Run pytest", "conclusion": "failure"},
+            ],
+        },
+    ],
+})
+
+_FAILED_LOGS_MULTI = """\
+lint    UNKNOWN STEP    2026-02-19T08:30:36.6504054Z lint: src/app.py:10:1: E302 expected 2 blank lines
+lint    UNKNOWN STEP    2026-02-19T08:30:36.6506191Z lint: Found 1 error.
+test    UNKNOWN STEP    2026-02-19T08:31:36.6504054Z test: FAILED tests/test_app.py::test_main
+test    UNKNOWN STEP    2026-02-19T08:31:36.6506191Z test: AssertionError: expected 1 got 2
+"""
+
 _RUN_DETAILS_NO_FAILED_JOBS = json.dumps({
     "name": "ci",
     "headBranch": "feat-branch",
@@ -221,3 +253,41 @@ class TestDiagnoseCI:
         assert len(result.failures) == 1
         assert result.failures[0].error_lines == []
         assert result.error is None
+
+    def test_multi_job_failure_splits_errors(self, mocker: MockerFixture):
+        _mock_gh(mocker, [_RUN_LIST_FAILURE, _RUN_DETAILS_MULTI_FAILURE, _FAILED_LOGS_MULTI])
+        result = diagnose_ci(repo="org/repo")
+        assert len(result.failures) == 2
+        lint_failure = next(f for f in result.failures if f.job_name == "lint")
+        test_failure = next(f for f in result.failures if f.job_name == "test")
+        assert lint_failure.failed_step == "Run ruff"
+        assert test_failure.failed_step == "Run pytest"
+        assert any("lint" in line.lower() for line in lint_failure.error_lines)
+        assert any("test" in line.lower() for line in test_failure.error_lines)
+
+    def test_without_repo_param(self, mocker: MockerFixture):
+        _mock_gh(mocker, [_RUN_LIST_FAILURE, _RUN_DETAILS, _FAILED_LOGS])
+        result = diagnose_ci(cwd="/some/repo")
+        assert result.run_id == 222
+        assert result.error is None
+
+
+class TestExtractErrorLinesEdgeCases:
+    def test_truncates_long_logs(self):
+        long_log = "normal line\n" * 2500 + "##[error]Something failed\n"
+        lines = _extract_error_lines(long_log)
+        assert len(lines) > 0
+        assert any("failed" in line.lower() for line in lines)
+
+    def test_separator_between_error_groups(self):
+        log = (
+            "ok line 1\n"
+            "ok line 2\n"
+            "ok line 3\n"
+            "##[error]First error\n"
+            "ok line 4\n"
+            "ok line 5\n" + "clean line\n" * 10 + "##[error]Second error\n"
+            "ok line 6\n"
+        )
+        lines = _extract_error_lines(log)
+        assert "---" in lines
