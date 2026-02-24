@@ -272,7 +272,7 @@ class TestResolveCommentMCP:
 
         result = await client.call_tool("resolve_comment", {"pr_number": 42, "thread_id": "PRRT_test"})
         assert not result.is_error
-        assert "Error resolving PRRT_test" in result.content[0].text  # type: ignore[unresolved-attribute]
+        assert "resolve_comment failed" in result.content[0].text  # type: ignore[unresolved-attribute]
 
     async def test_blocked_by_config(self, client: Client, mocker: MockerFixture):
         mocker.patch(

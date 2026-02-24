@@ -230,13 +230,26 @@ def diagnose_ci(
 
     error_lines = _extract_error_lines(raw_logs) if raw_logs else []
 
+    failures = _build_failures(failed_jobs, error_lines)
+
+    # Build next_steps based on failures
+    next_steps: list[str] = []
+    if failures:
+        failed_steps = [f.failed_step for f in failures if f.failed_step]
+        if failed_steps:
+            next_steps.append(f"Fix the error in failed step(s): {', '.join(failed_steps)}. Then push and re-run CI.")
+        else:
+            next_steps.append("Fix the errors shown above, then push and re-run CI.")
+        next_steps.append(f"View the full run at: {url}" if url else "Re-run the workflow from GitHub Actions.")
+
     return CIDiagnosisResult(
         run_id=actual_run_id,
         workflow=workflow,
         branch=branch,
         conclusion=conclusion,
         url=url,
-        failures=_build_failures(failed_jobs, error_lines),
+        failures=failures,
+        next_steps=next_steps,
     )
 
 

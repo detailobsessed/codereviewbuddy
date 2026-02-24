@@ -5,14 +5,11 @@
 [![release](https://img.shields.io/github/v/release/detailobsessed/codereviewbuddy)](https://github.com/detailobsessed/codereviewbuddy/releases)
 [![documentation](https://img.shields.io/badge/docs-mkdocs-blue.svg)](https://detailobsessed.github.io/codereviewbuddy/)
 [![Python 3.14+](https://img.shields.io/badge/python-3.14+-blue.svg)](https://www.python.org/downloads/)
-[![FastMCP v3 prerelease](https://img.shields.io/badge/FastMCP-v3.0.0rc1-orange.svg)](https://github.com/jlowin/fastmcp)
+[![FastMCP v3](https://img.shields.io/badge/FastMCP-v3-blue.svg)](https://github.com/jlowin/fastmcp)
 
 An MCP server that helps your AI coding agent interact with AI code reviewers — smoothly.
 
-Manages review comments from **Unblocked**, **Devin**, and **CodeRabbit** on GitHub PRs with staleness detection, batch resolution, re-review triggering, and issue tracking.
-
-> [!WARNING]
-> **Bleeding edge.** This server runs on **Python 3.14** and **FastMCP v3 prerelease** (`>=3.0.0rc1`). FastMCP v3 is pre-release software — APIs may change before stable. We track it closely and pin versions in `uv.lock` for reproducibility, but be aware that upstream breaking changes are possible.
+Manages review comments from **Unblocked**, **Devin**, **CodeRabbit**, and **Greptile** on GitHub PRs with staleness detection, batch resolution, re-review triggering, and issue tracking.
 
 ## Features
 
@@ -25,9 +22,24 @@ Manages review comments from **Unblocked**, **Devin**, and **CodeRabbit** on Git
 - **Reply to anything** — inline review threads (`PRRT_`), PR-level reviews (`PRR_`), and bot issue comments (`IC_`) all routed to the correct GitHub API
 - **Request re-reviews** — per-reviewer logic handles differences automatically (manual trigger for Unblocked, auto for Devin/CodeRabbit)
 
+### Triage & CI diagnosis
+
+- **Triage review comments** — `triage_review_comments` filters to only actionable threads, pre-classifies severity, suggests fix/reply/create_issue actions, and includes direct GitHub URLs for each comment
+- **Diagnose CI failures** — `diagnose_ci` collapses 3-5 sequential `gh` commands into one call: finds the failed run, identifies failed jobs/steps, and extracts actionable error lines
+- **Stack activity feed** — `stack_activity` shows a chronological timeline of pushes, reviews, labels, merges across all PRs in a stack with a `settled` flag for deciding when to proceed
+- **Scan merged PRs** — `list_recent_unresolved` catches late review comments on already-merged PRs
+
 ### Issue tracking
 
 - **Create issues from review comments** — turn useful AI suggestions into GitHub issues with labels, PR backlinks, file/line location, and quoted comment text
+
+### Agent experience
+
+- **Recovery-guided errors** — every tool handler classifies errors (auth, rate limit, not found, workspace, GraphQL, config) and returns actionable recovery hints so agents self-correct instead of retrying blindly
+- **Next-action hints** — tool responses include `next_steps` suggestions guiding agents to the right follow-up tool call
+- **Empty result messages** — when results are empty, responses explain why and suggest what to try next
+- **GUI URLs** — triage items include `comment_url` so agents can link users directly to the comment on GitHub
+- **Tool classification tags** — tools are tagged `query`, `command`, or `discovery` for MCP clients that support filtering
 
 ### Server features (FastMCP v3)
 
@@ -114,7 +126,7 @@ If you prefer manual setup, add the following to your MCP client's config JSON:
   "mcpServers": {
     "codereviewbuddy": {
       "command": "uvx",
-      "args": ["--prerelease=allow", "codereviewbuddy@latest"],
+      "args": ["codereviewbuddy@latest"],
       "env": {
         // All CRB_* env vars are optional — zero-config works out of the box.
         // See Configuration section below for the full list.
@@ -137,8 +149,6 @@ If you prefer manual setup, add the following to your MCP client's config JSON:
 
 The server auto-detects your project from MCP roots (sent per-window by your client). This works correctly with multiple windows open on different projects — no env vars needed.
 
-> **Why `--prerelease=allow`?** codereviewbuddy depends on FastMCP v3 prerelease (`>=3.0.0rc1`). Without this flag, `uvx` refuses to resolve pre-release dependencies.
->
 > **Why `@latest`?** Without it, `uvx` caches the first resolved version and never upgrades automatically.
 
 ### From source (development)
@@ -169,22 +179,27 @@ For local development, use `uv run --directory` to run the server from your chec
 
 If your MCP client reports `No module named 'fastmcp.server.tasks.routing'`, the runtime has an incompatible FastMCP. Fixes:
 
-1. Prefer `uvx --prerelease=allow codereviewbuddy@latest` in MCP client config.
+1. Prefer `uvx codereviewbuddy@latest` in MCP client config.
 2. For local source checkouts, launch with `uv run --directory /path/to/codereviewbuddy codereviewbuddy`.
 3. Reinstall to refresh cached deps: `uv tool install --reinstall codereviewbuddy`.
 
 ## MCP Tools
 
-| Tool | Description |
-| ---- | ----------- |
-| `summarize_review_status` | Lightweight stack-wide overview with severity counts — auto-discovers stack when `pr_numbers` omitted |
-| `list_review_comments` | Fetch all review threads with reviewer ID, status, staleness, and auto-discovered `stack` field |
-| `list_stack_review_comments` | Fetch comments for multiple PRs in a stack in one call, grouped by PR number |
-| `resolve_comment` | Resolve a single inline thread by GraphQL node ID (`PRRT_...`) |
-| `resolve_stale_comments` | Bulk-resolve threads on files modified since the review, with smart skip for auto-resolving reviewers |
-| `reply_to_comment` | Reply to inline threads (`PRRT_`), PR-level reviews (`PRR_`), or bot comments (`IC_`) |
-| `create_issue_from_comment` | Create a GitHub issue from a review comment with labels, PR backlink, and quoted text |
-| `review_pr_descriptions` | Analyze PR descriptions across a stack for quality issues (empty body, boilerplate, missing linked issues) |
+| Tool | Tags | Description |
+| ---- | ---- | ----------- |
+| `summarize_review_status` | query, discovery | Lightweight stack-wide overview with severity counts — start here |
+| `triage_review_comments` | query | Only actionable threads, pre-classified with severity and suggested actions |
+| `list_review_comments` | query | All review threads with reviewer ID, status, staleness, and auto-discovered stack |
+| `list_stack_review_comments` | query | Comments for multiple PRs in one call, grouped by PR number |
+| `resolve_comment` | command | Resolve a single inline thread by GraphQL node ID (`PRRT_...`) |
+| `resolve_stale_comments` | command | Bulk-resolve threads on files modified since the review |
+| `reply_to_comment` | command | Reply to inline threads (`PRRT_`), PR-level reviews (`PRR_`), or bot comments (`IC_`) |
+| `create_issue_from_comment` | command | Create a GitHub issue from a review comment with labels and PR backlink |
+| `diagnose_ci` | query | Diagnose CI failures — finds the failed run, jobs, steps, and error lines in one call |
+| `stack_activity` | query | Chronological activity feed across a PR stack with a `settled` flag |
+| `list_recent_unresolved` | query | Scan recently merged PRs for unresolved review threads |
+| `review_pr_descriptions` | query | Analyze PR descriptions for quality issues (empty body, boilerplate, missing linked issues) |
+| `show_config` | discovery | Show active configuration with human-readable explanation |
 
 ## Configuration
 
@@ -263,14 +278,16 @@ For example, with the default config, resolving a 🔴 bug from Devin is blocked
 ## Typical workflow
 
 ```
-1. Push a fix
-2. list_review_comments(pr_number=42)           # See all threads with staleness
+1. summarize_review_status()                     # Stack-wide overview — start here
+2. triage_review_comments(pr_numbers=[42, 43])   # Only actionable threads with suggested actions
 3. resolve_stale_comments(pr_number=42)          # Batch-resolve changed files
-4. reply_to_comment(42, thread_id, "Fixed in ...")  # Reply to remaining threads
-5. gh pr comment 42 --body "@unblocked please re-review"  # Trigger re-review
+4. # Fix bugs flagged by triage, then:
+5. reply_to_comment(42, thread_id, "Fixed in ...")  # Reply explaining the fix
+6. create_issue_from_comment(thread_id, "Improve X")  # Track followups as issues
+7. diagnose_ci(pr_number=42)                     # If CI fails, diagnose in one call
 ```
 
-For stacked PRs, use `list_stack_review_comments` with all PR numbers to get a full picture before deciding what to fix.
+Each tool response includes `next_steps` hints guiding the agent to the right follow-up call. For stacked PRs, all query tools auto-discover the stack when `pr_numbers` is omitted.
 
 ## Development
 
@@ -301,12 +318,12 @@ poe prek          # run all pre-commit hooks
 
 The server is built on [FastMCP v3](https://github.com/jlowin/fastmcp) with a clean separation:
 
-- **`server.py`** — FastMCP server with tool registration, middleware, and instructions
+- **`server.py`** — FastMCP server with tool registration, middleware, instructions, and recovery-guided error handling
 - **`config.py`** — Per-reviewer configuration (`CRB_*` env vars via pydantic-settings, severity classifier, resolve policy)
-- **`tools/`** — Tool implementations (`comments.py`, `stack.py`, `descriptions.py`, `issues.py`, `rereview.py`)
+- **`tools/`** — Tool implementations (`comments.py`, `stack.py`, `ci.py`, `descriptions.py`, `issues.py`)
 - **`reviewers/`** — Pluggable reviewer adapters with behavior flags (auto-resolve, re-review triggers)
 - **`gh.py`** — Thin wrapper around the `gh` CLI for GraphQL and REST calls
-- **`models.py`** — Pydantic models for typed tool outputs
+- **`models.py`** — Pydantic models for typed tool outputs with `next_steps` and `message` fields for agent guidance
 
 All blocking `gh` CLI calls are wrapped with `call_sync_fn_in_threadpool` to avoid blocking the async event loop.
 

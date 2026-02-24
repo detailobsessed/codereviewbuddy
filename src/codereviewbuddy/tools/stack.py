@@ -320,6 +320,30 @@ def _fetch_pr_summary(
     )
 
 
+def _build_status_hints(
+    summaries: list[PRReviewStatusSummary],
+    pr_numbers: list[int],
+    total_unresolved: int,
+) -> list[str]:
+    """Build next_steps hints for a StackReviewStatusResult."""
+    next_steps: list[str] = []
+    if total_unresolved == 0:
+        next_steps.append("All threads resolved! Call review_pr_descriptions(pr_numbers) to check PR quality before merging.")
+        return next_steps
+
+    critical = sum(s.bugs + s.flagged for s in summaries)
+    if critical:
+        next_steps.append(
+            f"Call triage_review_comments(pr_numbers={pr_numbers}) to see the {critical} bug/flagged item(s) that need fixes."
+        )
+    else:
+        next_steps.append(f"Call triage_review_comments(pr_numbers={pr_numbers}) to see actionable threads.")
+    total_stale = sum(s.stale for s in summaries)
+    if total_stale:
+        next_steps.append(f"{total_stale} stale thread(s) can be batch-resolved with resolve_stale_comments().")
+    return next_steps
+
+
 async def summarize_review_status(
     pr_numbers: list[int] | None = None,
     repo: str | None = None,
@@ -388,10 +412,12 @@ async def summarize_review_status(
         await ctx.report_progress(total, total)
 
     total_unresolved = sum(s.unresolved for s in summaries)
+    next_steps = _build_status_hints(summaries, pr_numbers, total_unresolved)
 
     return StackReviewStatusResult(
         prs=summaries,
         total_unresolved=total_unresolved,
+        next_steps=next_steps,
     )
 
 

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 import re
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Literal
 
 from fastmcp.utilities.async_utils import call_sync_fn_in_threadpool
 
@@ -51,6 +51,7 @@ query($owner: String!, $repo: String!, $pr: Int!, $cursor: String) {
               createdAt
               path
               line
+              url
             }
           }
         }
@@ -174,6 +175,7 @@ def _parse_threads(raw_threads: list[dict[str, Any]], pr_number: int) -> list[Re
                 author=(c.get("author") or {}).get("login", "unknown"),
                 body=_strip_comment_body(c.get("body", "")),
                 created_at=c.get("createdAt"),
+                url=c.get("url", ""),
             )
             for c in comments_raw
         ]
@@ -549,10 +551,32 @@ async def list_review_comments(
     except Exception:
         stack_prs = []
 
+    # Build next_steps and message based on review state
+    next_steps: list[str] = []
+    message = ""
+    unresolved = [t for t in threads if t.status == CommentStatus.UNRESOLVED]
+
+    if not threads:
+        message = f"No review threads found on PR #{pr_number}. Reviewers may not have posted yet."
+    elif not unresolved:
+        message = f"All {len(threads)} review threads on PR #{pr_number} are resolved."
+        next_steps.append("Call resolve_stale_comments() if you pushed new changes since the last review.")
+    else:
+        stale_count = sum(1 for t in unresolved if t.is_stale)
+        if stale_count:
+            next_steps.append(f"Call resolve_stale_comments() to batch-resolve {stale_count} stale thread(s).")
+        if stack_prs and len(stack_prs) > 1:
+            pr_nums = [p.pr_number for p in stack_prs]
+            next_steps.append(f"Call triage_review_comments(pr_numbers={pr_nums}) for actionable threads across the stack.")
+        else:
+            next_steps.append(f"Call triage_review_comments(pr_numbers=[{pr_number}]) for actionable-only view.")
+
     return ReviewSummary(
         threads=threads,
         reviewer_statuses=reviewer_statuses,
         stack=stack_prs,
+        next_steps=next_steps,
+        message=message,
     )
 
 
@@ -772,11 +796,21 @@ async def resolve_stale_comments(  # noqa: PLR0914
             blocked_count += 1
 
     if not allowed:
+        no_resolve_steps: list[str] = []
+        if blocked_count:
+            no_resolve_steps.append(
+                f"{blocked_count} thread(s) blocked by resolve_levels config — inform the user about the severity restrictions."
+            )
+        if skipped:
+            no_resolve_steps.append(f"{len(skipped)} thread(s) skipped — their reviewer auto-resolves on push.")
+        if not blocked_count and not skipped:
+            no_resolve_steps.append("No stale unresolved threads found. All comments are on current code.")
         return ResolveStaleResult(
             resolved_count=0,
             resolved_thread_ids=[],
             skipped_count=len(skipped),
             blocked_count=blocked_count,
+            next_steps=no_resolve_steps,
         )
 
     # Batch resolve using GraphQL aliases with parameterized variables
@@ -798,11 +832,23 @@ async def resolve_stale_comments(  # noqa: PLR0914
         await ctx.info(f"Resolved {len(resolved_ids)} stale threads on PR #{pr_number}")
         if blocked_count:
             await ctx.warning(f"⚠️ {blocked_count} threads blocked by resolve_levels config")
+
+    resolve_steps: list[str] = []
+    if blocked_count:
+        resolve_steps.append(
+            f"{blocked_count} thread(s) blocked by resolve_levels config — inform the user about the severity restrictions."
+        )
+    resolve_steps.extend([
+        "Call summarize_review_status() to verify remaining unresolved threads.",
+        "Trigger re-reviews for manual-trigger reviewers (Unblocked, Greptile) if you pushed fixes.",
+    ])
+
     return ResolveStaleResult(
         resolved_count=len(resolved_ids),
         resolved_thread_ids=resolved_ids,
         skipped_count=len(skipped),
         blocked_count=blocked_count,
+        next_steps=resolve_steps,
     )
 
 
@@ -926,11 +972,59 @@ def _has_followup_without_issue(thread: ReviewThread, owner_logins: frozenset[st
     return not has_issue_ref
 
 
-def _classify_action(severity: str) -> str:
+def _classify_action(severity: str) -> Literal["fix", "reply"]:
     """Map severity to suggested action."""
     if severity in {"bug", "flagged"}:
         return "fix"
     return "reply"
+
+
+def _thread_to_triage_item(
+    thread: ReviewThread,
+    classify_severity: Any,
+    action: Literal["fix", "reply", "create_issue"] = "reply",
+) -> TriageItem:
+    """Convert a ReviewThread into a TriageItem with severity classification."""
+    first = thread.comments[0] if thread.comments else None
+    body = first.body if first else ""
+    severity = classify_severity(thread.reviewer, body).value
+    if action != "create_issue":
+        action = _classify_action(severity)
+    return TriageItem(
+        thread_id=thread.thread_id,
+        pr_number=thread.pr_number,
+        file=thread.file,
+        line=thread.line,
+        reviewer=thread.reviewer,
+        severity=severity,
+        title=_extract_title(body),
+        is_stale=thread.is_stale,
+        action=action,
+        snippet=body[:200],
+        comment_url=first.url if first else "",
+    )
+
+
+def _build_triage_hints(
+    all_items: list[TriageItem],
+    needs_fix: int,
+    needs_reply: int,
+    needs_issue: int,
+) -> tuple[list[str], str]:
+    """Build next_steps and message for a TriageResult."""
+    next_steps: list[str] = []
+    message = ""
+    if not all_items:
+        message = "No actionable threads — all threads have owner replies or are resolved."
+        next_steps.append("Call resolve_stale_comments() to clean up any stale threads.")
+    else:
+        if needs_fix:
+            next_steps.append(f"Fix the {needs_fix} bug/flagged item(s) first, then call reply_to_comment() for each explaining the fix.")
+        if needs_reply:
+            next_steps.append(f"Reply to the {needs_reply} info/warning thread(s) with reply_to_comment().")
+        if needs_issue:
+            next_steps.append(f"Call create_issue_from_comment() for the {needs_issue} followup(s) missing a GitHub issue reference.")
+    return next_steps, message
 
 
 async def triage_review_comments(
@@ -984,46 +1078,14 @@ async def triage_review_comments(
 
             # Check for "noted for followup" without issue ref (even if owner already replied)
             if _has_followup_without_issue(thread, owners):
-                first_body = thread.comments[0].body if thread.comments else ""
-                severity = _classify_severity(thread.reviewer, first_body).value
-                issue_items.append(
-                    TriageItem(
-                        thread_id=thread.thread_id,
-                        pr_number=thread.pr_number,
-                        file=thread.file,
-                        line=thread.line,
-                        reviewer=thread.reviewer,
-                        severity=severity,
-                        title=_extract_title(first_body),
-                        is_stale=thread.is_stale,
-                        action="create_issue",
-                        snippet=first_body[:200],
-                    )
-                )
+                issue_items.append(_thread_to_triage_item(thread, _classify_severity, action="create_issue"))
                 continue
 
             # Skip threads that already have an owner reply
             if _has_owner_reply(thread, owners):
                 continue
 
-            first_body = thread.comments[0].body if thread.comments else ""
-            severity = _classify_severity(thread.reviewer, first_body).value
-            action = _classify_action(severity)
-
-            items.append(
-                TriageItem(
-                    thread_id=thread.thread_id,
-                    pr_number=thread.pr_number,
-                    file=thread.file,
-                    line=thread.line,
-                    reviewer=thread.reviewer,
-                    severity=severity,
-                    title=_extract_title(first_body),
-                    is_stale=thread.is_stale,
-                    action=action,
-                    snippet=first_body[:200],
-                )
-            )
+            items.append(_thread_to_triage_item(thread, _classify_severity))
 
     if ctx and total:
         await ctx.report_progress(total, total)
@@ -1035,10 +1097,14 @@ async def triage_review_comments(
     needs_reply = sum(1 for item in all_items if item.action == "reply")
     needs_issue = len(issue_items)
 
+    next_steps, message = _build_triage_hints(all_items, needs_fix, needs_reply, needs_issue)
+
     return TriageResult(
         items=all_items,
         needs_fix=needs_fix,
         needs_reply=needs_reply,
         needs_issue=needs_issue,
         total=len(all_items),
+        next_steps=next_steps,
+        message=message,
     )
