@@ -11,7 +11,7 @@ import importlib
 import importlib.util
 import logging
 import os
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Annotated, Literal
 
 from fastmcp import FastMCP
 from fastmcp.server.dependencies import get_context
@@ -20,6 +20,8 @@ from fastmcp.server.middleware.error_handling import ErrorHandlingMiddleware
 from fastmcp.server.middleware.logging import LoggingMiddleware
 from fastmcp.server.middleware.ping import PingMiddleware
 from fastmcp.server.middleware.timing import TimingMiddleware
+from fastmcp.utilities.async_utils import call_sync_fn_in_threadpool
+from pydantic import Field
 
 from codereviewbuddy import gh
 from codereviewbuddy.config import get_config, load_config, set_config
@@ -284,6 +286,64 @@ is set. Call `show_config` to check settings before filing.
 """,
 )
 
+
+def _recovery_error(  # noqa: PLR0911
+    exc: Exception,
+    *,
+    tool_name: str,
+    pr_number: int | None = None,
+    repo: str | None = None,
+) -> str:
+    """Build an actionable error message with recovery hints.
+
+    Classifies errors into categories and suggests specific next steps
+    so agents can self-correct instead of retrying blindly.
+    """
+    msg = str(exc)
+    low = msg.lower()
+
+    # Auth errors — not retryable, needs human intervention
+    if isinstance(exc, gh.GhNotFoundError):
+        return f"{tool_name} failed: gh CLI not found. Install it from https://cli.github.com/ then run: gh auth login"
+    if isinstance(exc, gh.GhNotAuthenticatedError):
+        return f"{tool_name} failed: gh CLI not authenticated. Run: gh auth login"
+
+    # Rate limit — retryable after delay
+    if "rate limit" in low or "403" in msg:
+        return f"{tool_name} failed: GitHub API rate limit hit. Wait 60 seconds and retry."
+
+    # Not found — likely bad PR number or repo
+    if "not found" in low or "could not resolve" in low or "404" in msg:
+        hints = [f"{tool_name} failed: resource not found — {msg}."]
+        if pr_number:
+            hints.append(f"Verify PR #{pr_number} exists and is open.")
+        hints.append(f"Verify repo '{repo}' is correct." if repo else "Try passing repo='owner/repo' explicitly if auto-detection failed.")
+        return " ".join(hints)
+
+    # Workspace detection failure
+    if "workspace" in low or "CRB_WORKSPACE" in msg:
+        return (
+            f"{tool_name} failed: workspace not detected. "
+            "Pass repo='owner/repo' explicitly, or set CRB_WORKSPACE in your MCP client config."
+        )
+
+    # GraphQL errors
+    if "graphql" in low:
+        return f"{tool_name} failed: GitHub GraphQL error — {msg}. This may be a transient issue; retry once."
+
+    # Config-related
+    if "blocked by config" in low or "resolve_levels" in low:
+        return f"{tool_name} blocked by configuration: {msg}. Call show_config() to inspect active settings."
+
+    # Generic fallback — still better than bare "Error: ..."
+    parts = [f"{tool_name} failed: {msg}."]
+    if pr_number:
+        parts.append(f"Verify PR #{pr_number} exists.")
+    if not repo:
+        parts.append("Try passing repo='owner/repo' explicitly.")
+    return " ".join(parts)
+
+
 mcp.add_middleware(ErrorHandlingMiddleware(include_traceback=True, transform_errors=True))
 mcp.add_middleware(TimingMiddleware())
 mcp.add_middleware(LoggingMiddleware(include_payloads=True, max_payload_length=500))
@@ -291,11 +351,11 @@ mcp.add_middleware(PingMiddleware(interval_ms=30_000))
 mcp.add_middleware(write_operation_middleware)
 
 
-@mcp.tool
+@mcp.tool(tags={"query"})
 async def list_review_comments(
     pr_number: int | None = None,
     repo: str | None = None,
-    status: str | None = None,
+    status: Literal["resolved", "unresolved"] | None = None,
 ) -> ReviewSummary:
     """List all review threads for a PR with reviewer identification and staleness.
 
@@ -326,17 +386,17 @@ async def list_review_comments(
         return await comments.list_review_comments(pr_number, repo=repo, status=status, cwd=cwd, ctx=ctx)
     except Exception as exc:
         logger.exception("list_review_comments failed for PR #%s", pr_number)
-        return ReviewSummary(threads=[], error=f"Error: {exc}")
+        return ReviewSummary(threads=[], error=_recovery_error(exc, tool_name="list_review_comments", pr_number=pr_number, repo=repo))
     except asyncio.CancelledError:
         logger.warning("list_review_comments cancelled for PR #%s", pr_number)
         return ReviewSummary(threads=[], error="Cancelled")
 
 
-@mcp.tool
+@mcp.tool(tags={"query"})
 async def list_stack_review_comments(
     pr_numbers: list[int],
     repo: str | None = None,
-    status: str | None = None,
+    status: Literal["resolved", "unresolved"] | None = None,
 ) -> dict[int, ReviewSummary]:
     """List review threads for multiple PRs in a stack, grouped by PR number.
 
@@ -362,13 +422,14 @@ async def list_stack_review_comments(
         return await comments.list_stack_review_comments(pr_numbers, repo=repo, status=status, cwd=cwd, ctx=ctx)
     except Exception as exc:
         logger.exception("list_stack_review_comments failed")
-        return {pr: ReviewSummary(threads=[], error=f"Error: {exc}") for pr in pr_numbers}
+        error_msg = _recovery_error(exc, tool_name="list_stack_review_comments", repo=repo)
+        return {pr: ReviewSummary(threads=[], error=error_msg) for pr in pr_numbers}
     except asyncio.CancelledError:
         logger.warning("list_stack_review_comments cancelled")
         return {pr: ReviewSummary(threads=[], error="Cancelled") for pr in pr_numbers}
 
 
-@mcp.tool
+@mcp.tool(tags={"command"})
 async def resolve_comment(
     thread_id: str,
     pr_number: int | None = None,
@@ -390,10 +451,10 @@ async def resolve_comment(
         return comments.resolve_comment(pr_number, thread_id, cwd=cwd)
     except Exception as exc:
         logger.exception("resolve_comment failed for %s on PR #%s", thread_id, pr_number)
-        return f"Error resolving {thread_id} on PR #{pr_number}: {exc}"
+        return _recovery_error(exc, tool_name="resolve_comment", pr_number=pr_number)
 
 
-@mcp.tool
+@mcp.tool(tags={"command"})
 async def resolve_stale_comments(
     pr_number: int | None = None,
     repo: str | None = None,
@@ -418,13 +479,17 @@ async def resolve_stale_comments(
         return await comments.resolve_stale_comments(pr_number, repo=repo, cwd=cwd, ctx=ctx)
     except Exception as exc:
         logger.exception("resolve_stale_comments failed for PR #%s", pr_number)
-        return ResolveStaleResult(resolved_count=0, resolved_thread_ids=[], error=f"Error: {exc}")
+        return ResolveStaleResult(
+            resolved_count=0,
+            resolved_thread_ids=[],
+            error=_recovery_error(exc, tool_name="resolve_stale_comments", pr_number=pr_number, repo=repo),
+        )
     except asyncio.CancelledError:
         logger.warning("resolve_stale_comments cancelled for PR #%s", pr_number)
         return ResolveStaleResult(resolved_count=0, resolved_thread_ids=[], error="Cancelled")
 
 
-@mcp.tool
+@mcp.tool(tags={"command"})
 async def reply_to_comment(
     thread_id: str,
     body: str,
@@ -450,10 +515,10 @@ async def reply_to_comment(
         return comments.reply_to_comment(pr_number, thread_id, body, repo=repo, cwd=cwd)
     except Exception as exc:
         logger.exception("reply_to_comment failed for %s on PR #%s", thread_id, pr_number)
-        return f"Error replying to {thread_id} on PR #{pr_number}: {exc}"
+        return _recovery_error(exc, tool_name="reply_to_comment", pr_number=pr_number, repo=repo)
 
 
-@mcp.tool
+@mcp.tool(tags={"command"})
 async def create_issue_from_comment(
     thread_id: str,
     title: str,
@@ -491,10 +556,15 @@ async def create_issue_from_comment(
         )
     except Exception as exc:
         logger.exception("create_issue_from_comment failed for %s on PR #%s", thread_id, pr_number)
-        return CreateIssueResult(issue_number=0, issue_url="", title=title, error=f"Error: {exc}")
+        return CreateIssueResult(
+            issue_number=0,
+            issue_url="",
+            title=title,
+            error=_recovery_error(exc, tool_name="create_issue_from_comment", pr_number=pr_number, repo=repo),
+        )
 
 
-@mcp.tool
+@mcp.tool(tags={"query"})
 async def review_pr_descriptions(
     pr_numbers: list[int],
     repo: str | None = None,
@@ -518,13 +588,13 @@ async def review_pr_descriptions(
         return await descriptions.review_pr_descriptions(pr_numbers, repo=repo, cwd=cwd, ctx=ctx)
     except Exception as exc:
         logger.exception("review_pr_descriptions failed")
-        return PRDescriptionReviewResult(error=f"Error: {exc}")
+        return PRDescriptionReviewResult(error=_recovery_error(exc, tool_name="review_pr_descriptions", repo=repo))
     except asyncio.CancelledError:
         logger.warning("review_pr_descriptions cancelled")
         return PRDescriptionReviewResult(error="Cancelled")
 
 
-@mcp.tool
+@mcp.tool(tags={"query", "discovery"})
 async def summarize_review_status(
     pr_numbers: list[int] | None = None,
     repo: str | None = None,
@@ -556,16 +626,16 @@ async def summarize_review_status(
         return await stack.summarize_review_status(pr_numbers=pr_numbers, repo=repo, cwd=cwd, ctx=ctx)
     except Exception as exc:
         logger.exception("summarize_review_status failed")
-        return StackReviewStatusResult(error=f"Error: {exc}")
+        return StackReviewStatusResult(error=_recovery_error(exc, tool_name="summarize_review_status", repo=repo))
     except asyncio.CancelledError:
         logger.warning("summarize_review_status cancelled")
         return StackReviewStatusResult(error="Cancelled")
 
 
-@mcp.tool
+@mcp.tool(tags={"query"})
 async def list_recent_unresolved(
     repo: str | None = None,
-    limit: int = 10,
+    limit: Annotated[int, Field(ge=1, le=50)] = 10,
 ) -> StackReviewStatusResult:
     """Scan recently merged PRs for unresolved review threads.
 
@@ -589,13 +659,13 @@ async def list_recent_unresolved(
         return await stack.list_recent_unresolved(repo=repo, limit=limit, cwd=cwd, ctx=ctx)
     except Exception as exc:
         logger.exception("list_recent_unresolved failed")
-        return StackReviewStatusResult(error=f"Error: {exc}")
+        return StackReviewStatusResult(error=_recovery_error(exc, tool_name="list_recent_unresolved", repo=repo))
     except asyncio.CancelledError:
         logger.warning("list_recent_unresolved cancelled")
         return StackReviewStatusResult(error="Cancelled")
 
 
-@mcp.tool
+@mcp.tool(tags={"query"})
 async def stack_activity(
     pr_numbers: list[int] | None = None,
     repo: str | None = None,
@@ -622,13 +692,13 @@ async def stack_activity(
         return await stack.stack_activity(pr_numbers=pr_numbers, repo=repo, cwd=cwd, ctx=ctx)
     except Exception as exc:
         logger.exception("stack_activity failed")
-        return StackActivityResult(error=f"Error: {exc}")
+        return StackActivityResult(error=_recovery_error(exc, tool_name="stack_activity", repo=repo))
     except asyncio.CancelledError:
         logger.warning("stack_activity cancelled")
         return StackActivityResult(error="Cancelled")
 
 
-@mcp.tool
+@mcp.tool(tags={"query"})
 async def triage_review_comments(
     pr_numbers: list[int],
     repo: str | None = None,
@@ -659,13 +729,13 @@ async def triage_review_comments(
         return await comments.triage_review_comments(pr_numbers, repo=repo, owner_logins=owner_logins, cwd=cwd, ctx=ctx)
     except Exception as exc:
         logger.exception("triage_review_comments failed")
-        return TriageResult(error=f"Error: {exc}")
+        return TriageResult(error=_recovery_error(exc, tool_name="triage_review_comments", repo=repo))
     except asyncio.CancelledError:
         logger.warning("triage_review_comments cancelled")
         return TriageResult(error="Cancelled")
 
 
-@mcp.tool
+@mcp.tool(tags={"query"})
 async def diagnose_ci(
     pr_number: int | None = None,
     repo: str | None = None,
@@ -694,13 +764,13 @@ async def diagnose_ci(
                 pr_number = _resolve_pr_number(None, cwd=cwd)
         else:
             _check_auto_detect_prerequisites(cwd, has_pr=True, has_repo=repo is not None)
-        return ci.diagnose_ci(pr_number=pr_number, repo=repo, run_id=run_id, cwd=cwd)
+        return await call_sync_fn_in_threadpool(ci.diagnose_ci, pr_number=pr_number, repo=repo, run_id=run_id, cwd=cwd)
     except Exception as exc:
         logger.exception("diagnose_ci failed")
-        return CIDiagnosisResult(error=f"Error: {exc}")
+        return CIDiagnosisResult(error=_recovery_error(exc, tool_name="diagnose_ci", pr_number=pr_number, repo=repo))
 
 
-@mcp.tool
+@mcp.tool(tags={"discovery"})
 def show_config() -> ConfigInfo:
     """Show the active codereviewbuddy configuration.
 
@@ -709,9 +779,31 @@ def show_config() -> ConfigInfo:
     environment variables at server startup.
     """
     config = get_config()
+
+    # Build human-readable explanation
+    parts: list[str] = []
+    reviewer_summaries = []
+    for name, rc in config.reviewers.items():
+        status = "enabled" if rc.enabled else "disabled"
+        levels = ", ".join(s.value for s in rc.resolve_levels)
+        auto_stale = "auto-resolve stale" if rc.auto_resolve_stale else "skip stale"
+        reviewer_summaries.append(f"{name}: {status}, resolve=[{levels}], {auto_stale}")
+    parts.append(f"{len(config.reviewers)} reviewer(s) configured: {'; '.join(reviewer_summaries)}.")
+
+    if config.self_improvement.enabled and config.self_improvement.repo:
+        parts.append(f"Self-improvement: enabled → {config.self_improvement.repo}.")
+    else:
+        parts.append("Self-improvement: disabled.")
+
+    if config.pr_descriptions.enabled:
+        parts.append("PR description review: enabled.")
+    else:
+        parts.append("PR description review: disabled.")
+
     return ConfigInfo(
         config=config.model_dump(mode="json"),
         source="env",
+        explanation=" ".join(parts),
     )
 
 

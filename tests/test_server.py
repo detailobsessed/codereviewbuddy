@@ -13,6 +13,7 @@ from codereviewbuddy.gh import GhError, GhNotAuthenticatedError, GhNotFoundError
 from codereviewbuddy.server import (
     _check_auto_detect_prerequisites,
     _get_workspace_cwd,
+    _recovery_error,
     _resolve_pr_number,
     check_fastmcp_runtime,
     check_prerequisites,
@@ -208,3 +209,66 @@ class TestCheckAutoDetectPrerequisites:
         missing_line = next(line for line in str(exc_info.value).splitlines() if line.startswith("Missing:"))
         assert "`repo`" in missing_line
         assert "`pr_number`" not in missing_line
+
+
+class TestRecoveryError:
+    """Tests for the _recovery_error helper that builds actionable error messages."""
+
+    def test_gh_not_found(self):
+        result = _recovery_error(GhNotFoundError(), tool_name="test_tool")
+        assert "gh CLI not found" in result
+        assert "https://cli.github.com/" in result
+
+    def test_gh_not_authenticated(self):
+        result = _recovery_error(GhNotAuthenticatedError("not auth"), tool_name="test_tool")
+        assert "not authenticated" in result
+        assert "gh auth login" in result
+
+    def test_rate_limit(self):
+        result = _recovery_error(Exception("API rate limit exceeded"), tool_name="test_tool")
+        assert "rate limit" in result
+        assert "Wait 60 seconds" in result
+
+    def test_not_found_with_pr(self):
+        result = _recovery_error(Exception("not found"), tool_name="test_tool", pr_number=42)
+        assert "not found" in result
+        assert "PR #42" in result
+
+    def test_not_found_without_repo(self):
+        result = _recovery_error(Exception("resource not found"), tool_name="test_tool")
+        assert "repo='owner/repo' explicitly" in result
+
+    def test_not_found_with_repo(self):
+        result = _recovery_error(Exception("not found"), tool_name="test_tool", repo="owner/repo")
+        assert "'owner/repo' is correct" in result
+
+    def test_workspace_detection(self):
+        result = _recovery_error(Exception("workspace not detected"), tool_name="test_tool")
+        assert "CRB_WORKSPACE" in result
+
+    def test_graphql_error(self):
+        result = _recovery_error(Exception("GraphQL error in fetch"), tool_name="test_tool")
+        assert "GraphQL error" in result
+        assert "retry once" in result
+
+    def test_config_blocked(self):
+        result = _recovery_error(Exception("blocked by config: resolve_levels"), tool_name="test_tool")
+        assert "blocked by configuration" in result
+        assert "show_config()" in result
+
+    def test_generic_fallback_with_pr(self):
+        result = _recovery_error(Exception("something went wrong"), tool_name="test_tool", pr_number=99)
+        assert "test_tool failed" in result
+        assert "PR #99" in result
+
+    def test_generic_fallback_without_repo(self):
+        result = _recovery_error(Exception("something went wrong"), tool_name="test_tool")
+        assert "repo='owner/repo' explicitly" in result
+
+    def test_generic_fallback_with_repo(self):
+        result = _recovery_error(Exception("something"), tool_name="test_tool", repo="o/r")
+        assert "repo='owner/repo'" not in result
+
+    def test_403_triggers_rate_limit(self):
+        result = _recovery_error(Exception("HTTP 403 Forbidden"), tool_name="test_tool")
+        assert "rate limit" in result

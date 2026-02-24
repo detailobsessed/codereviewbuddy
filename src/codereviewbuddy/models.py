@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime  # noqa: TC003 - Pydantic needs this at runtime
 from enum import StrEnum
+from typing import Literal
 
 from pydantic import BaseModel, Field
 
@@ -21,6 +22,7 @@ class ReviewComment(BaseModel):
     author: str = Field(description="GitHub username of the comment author")
     body: str = Field(description="Comment body text")
     created_at: datetime | None = Field(default=None, description="When the comment was posted")
+    url: str = Field(default="", description="Direct URL to this comment on GitHub")
 
 
 class ReviewThread(BaseModel):
@@ -62,6 +64,8 @@ class ReviewSummary(BaseModel):
     threads: list[ReviewThread] = Field(default_factory=list, description="All review threads on the PR")
     reviewer_statuses: list[ReviewerStatus] = Field(default_factory=list, description="Per-reviewer status based on timestamp heuristic")
     stack: list[StackPR] = Field(default_factory=list, description="Other PRs in the same stack, discovered via branch chain")
+    next_steps: list[str] = Field(default_factory=list, description="Suggested next actions based on the review state")
+    message: str = Field(default="", description="Human-readable summary when results are empty or noteworthy")
     error: str | None = Field(default=None, description="Error message if the request failed")
 
 
@@ -85,6 +89,7 @@ class StackReviewStatusResult(BaseModel):
 
     prs: list[PRReviewStatusSummary] = Field(default_factory=list, description="Per-PR review status, bottom to top")
     total_unresolved: int = Field(default=0, description="Total unresolved threads across the stack")
+    next_steps: list[str] = Field(default_factory=list, description="Suggested next actions based on the stack state")
     error: str | None = Field(default=None, description="Error message if the request failed")
 
 
@@ -95,6 +100,7 @@ class ResolveStaleResult(BaseModel):
     resolved_thread_ids: list[str] = Field(default_factory=list, description="Thread IDs that were resolved")
     skipped_count: int = Field(default=0, description="Threads skipped because the reviewer auto-resolves (e.g. Devin, CodeRabbit)")
     blocked_count: int = Field(default=0, description="Threads blocked by resolve_levels config (severity too high)")
+    next_steps: list[str] = Field(default_factory=list, description="Suggested next actions after resolving")
     error: str | None = Field(default=None, description="Error message if the request failed")
 
 
@@ -127,6 +133,7 @@ class CreateIssueResult(BaseModel):
     issue_number: int = Field(default=0, description="Created issue number")
     issue_url: str = Field(default="", description="URL of the created issue")
     title: str = Field(default="", description="Issue title")
+    next_steps: list[str] = Field(default_factory=list, description="Suggested next actions after creating the issue")
     error: str | None = Field(default=None, description="Error message if the request failed")
 
 
@@ -138,13 +145,14 @@ class TriageItem(BaseModel):
     file: str | None = Field(default=None, description="File path the comment is on")
     line: int | None = Field(default=None, description="Line number in the file")
     reviewer: str = Field(description="Which reviewer posted this (e.g. devin, unblocked)")
-    severity: str = Field(description="Classified severity: bug, flagged, warning, info")
+    severity: Literal["bug", "flagged", "warning", "info"] = Field(description="Classified severity: bug, flagged, warning, info")
     title: str = Field(default="", description="Short title extracted from the comment (first bold text)")
     is_stale: bool = Field(default=False, description="Whether the commented file changed since the review")
-    action: str = Field(
+    action: Literal["fix", "reply", "create_issue"] = Field(
         description="Suggested action: 'fix' (bug/flagged), 'reply' (info/warning), or 'create_issue' (followup without issue ref)"
     )
     snippet: str = Field(default="", description="First 200 chars of the comment body for context")
+    comment_url: str = Field(default="", description="Direct URL to the comment on GitHub for user navigation")
 
 
 class ActivityEvent(BaseModel):
@@ -175,6 +183,8 @@ class TriageResult(BaseModel):
     needs_reply: int = Field(default=0, description="Count of threads that need a reply (info/warning)")
     needs_issue: int = Field(default=0, description="Count of 'noted for followup' replies missing a GH issue reference")
     total: int = Field(default=0, description="Total actionable threads")
+    next_steps: list[str] = Field(default_factory=list, description="Suggested next actions based on triage results")
+    message: str = Field(default="", description="Human-readable summary when results are empty or noteworthy")
     error: str | None = Field(default=None, description="Error message if the request failed")
 
 
@@ -196,6 +206,7 @@ class CIDiagnosisResult(BaseModel):
     conclusion: str = Field(default="", description="Overall run conclusion (e.g. 'failure')")
     url: str = Field(default="", description="URL to the workflow run")
     failures: list[CIJobFailure] = Field(default_factory=list, description="Failed jobs with extracted error details")
+    next_steps: list[str] = Field(default_factory=list, description="Suggested next actions for fixing the CI failure")
     error: str | None = Field(default=None, description="Error message if diagnosis itself failed")
 
 
@@ -204,3 +215,4 @@ class ConfigInfo(BaseModel):
 
     config: dict = Field(description="Full configuration as a dictionary")
     source: str = Field(default="env", description="Configuration source: 'env' (CRB_* environment variables)")
+    explanation: str = Field(default="", description="Human-readable summary of the active configuration highlights")
