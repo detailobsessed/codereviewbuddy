@@ -13,6 +13,7 @@ if TYPE_CHECKING:
 from codereviewbuddy.config import Config, PRDescriptionsConfig, set_config
 from codereviewbuddy.tools.descriptions import (
     _analyze_pr,
+    _fetch_pr_info,
     _is_boilerplate,
     review_pr_descriptions,
 )
@@ -136,6 +137,36 @@ class TestAnalyzePR:
         assert "#10" in info.linked_issues
         assert "#20" in info.linked_issues
         assert "#30" in info.linked_issues
+
+
+# -- Async tests: _fetch_pr_info -----------------------------------------------
+
+
+_RAW_PR = {**GOOD_PR, "html_url": GOOD_PR["url"]}
+
+
+class TestFetchPrInfo:
+    async def test_uses_repo_when_provided(self, mocker: MockerFixture):
+        mocker.patch(
+            "codereviewbuddy.tools.descriptions.github_api.rest",
+            new_callable=AsyncMock,
+            return_value=_RAW_PR,
+        )
+        result = await _fetch_pr_info(42, repo="owner/repo")
+        assert result["number"] == 42
+
+    async def test_falls_back_to_get_repo_info(self, mocker: MockerFixture):
+        mocker.patch(
+            "codereviewbuddy.gh.get_repo_info",
+            return_value=("owner", "repo"),
+        )
+        mocker.patch(
+            "codereviewbuddy.tools.descriptions.github_api.rest",
+            new_callable=AsyncMock,
+            return_value=_RAW_PR,
+        )
+        result = await _fetch_pr_info(42)
+        assert result["number"] == 42
 
 
 # -- Async tests: review_pr_descriptions --------------------------------------

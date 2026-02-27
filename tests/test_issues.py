@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from typing import TYPE_CHECKING
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -32,15 +33,18 @@ SAMPLE_THREAD_RESPONSE = {
 
 
 class TestCreateIssueFromComment:
-    def test_creates_issue_with_labels(self, mocker: MockerFixture):
+    async def test_creates_issue_with_labels(self, mocker: MockerFixture):
         mocker.patch("codereviewbuddy.tools.issues.gh.get_repo_info", return_value=("owner", "repo"))
-        mock_graphql = mocker.patch("codereviewbuddy.tools.issues.gh.graphql", return_value=SAMPLE_THREAD_RESPONSE)
-        mock_run_gh = mocker.patch(
-            "codereviewbuddy.tools.issues.gh.run_gh",
-            return_value="https://github.com/owner/repo/issues/42\n",
+        mock_graphql = mocker.patch(
+            "codereviewbuddy.tools.issues.github_api.graphql",
+            new=AsyncMock(return_value=SAMPLE_THREAD_RESPONSE),
+        )
+        mock_rest = mocker.patch(
+            "codereviewbuddy.tools.issues.github_api.rest",
+            new=AsyncMock(return_value={"number": 42, "html_url": "https://github.com/owner/repo/issues/42"}),
         )
 
-        result = create_issue_from_comment(
+        result = await create_issue_from_comment(
             pr_number=10,
             thread_id="PRRT_kwDOtest123",
             title="Refactor into helper function",
@@ -51,43 +55,45 @@ class TestCreateIssueFromComment:
         assert result.issue_url == "https://github.com/owner/repo/issues/42"
         assert result.title == "Refactor into helper function"
 
-        # Verify gh issue create was called with correct args
-        call_args = mock_run_gh.call_args[0]
-        assert "issue" in call_args
-        assert "create" in call_args
-        assert "--label" in call_args
-        assert "enhancement" in call_args
-        assert "P2" in call_args
+        # Verify REST was called with correct labels
+        mock_rest.assert_called_once()
+        assert mock_rest.call_args.kwargs.get("labels") == ["enhancement", "P2"]
 
         # Verify thread was fetched
         mock_graphql.assert_called_once()
 
-    def test_creates_issue_without_labels(self, mocker: MockerFixture):
+    async def test_creates_issue_without_labels(self, mocker: MockerFixture):
         mocker.patch("codereviewbuddy.tools.issues.gh.get_repo_info", return_value=("owner", "repo"))
-        mocker.patch("codereviewbuddy.tools.issues.gh.graphql", return_value=SAMPLE_THREAD_RESPONSE)
-        mock_run_gh = mocker.patch(
-            "codereviewbuddy.tools.issues.gh.run_gh",
-            return_value="https://github.com/owner/repo/issues/7\n",
+        mocker.patch(
+            "codereviewbuddy.tools.issues.github_api.graphql",
+            new=AsyncMock(return_value=SAMPLE_THREAD_RESPONSE),
+        )
+        mock_rest = mocker.patch(
+            "codereviewbuddy.tools.issues.github_api.rest",
+            new=AsyncMock(return_value={"number": 7, "html_url": "https://github.com/owner/repo/issues/7"}),
         )
 
-        result = create_issue_from_comment(
+        result = await create_issue_from_comment(
             pr_number=10,
             thread_id="PRRT_kwDOtest123",
             title="Track suggestion",
         )
 
         assert result.issue_number == 7
-        call_args = mock_run_gh.call_args[0]
-        assert "--label" not in call_args
+        mock_rest.assert_called_once()
+        assert "labels" not in (mock_rest.call_args.kwargs or {})
 
-    def test_explicit_repo(self, mocker: MockerFixture):
-        mocker.patch("codereviewbuddy.tools.issues.gh.graphql", return_value=SAMPLE_THREAD_RESPONSE)
-        mock_run_gh = mocker.patch(
-            "codereviewbuddy.tools.issues.gh.run_gh",
-            return_value="https://github.com/other/repo/issues/1\n",
+    async def test_explicit_repo(self, mocker: MockerFixture):
+        mocker.patch(
+            "codereviewbuddy.tools.issues.github_api.graphql",
+            new=AsyncMock(return_value=SAMPLE_THREAD_RESPONSE),
+        )
+        mock_rest = mocker.patch(
+            "codereviewbuddy.tools.issues.github_api.rest",
+            new=AsyncMock(return_value={"number": 1, "html_url": "https://github.com/other/repo/issues/1"}),
         )
 
-        result = create_issue_from_comment(
+        result = await create_issue_from_comment(
             pr_number=5,
             thread_id="PRRT_kwDOtest456",
             title="Test",
@@ -95,49 +101,48 @@ class TestCreateIssueFromComment:
         )
 
         assert result.issue_number == 1
-        call_args = mock_run_gh.call_args[0]
-        assert "other/repo" in call_args
+        mock_rest.assert_called_once()
+        assert "/repos/other/repo/issues" in mock_rest.call_args.args[0]
 
-    def test_thread_not_found_raises(self, mocker: MockerFixture):
+    async def test_thread_not_found_raises(self, mocker: MockerFixture):
         mocker.patch("codereviewbuddy.tools.issues.gh.get_repo_info", return_value=("owner", "repo"))
         mocker.patch(
-            "codereviewbuddy.tools.issues.gh.graphql",
-            return_value={"data": {"node": {"comments": {"nodes": []}}}},
+            "codereviewbuddy.tools.issues.github_api.graphql",
+            new=AsyncMock(return_value={"data": {"node": {"comments": {"nodes": []}}}}),
         )
 
         with pytest.raises(GhError, match="Could not find comment content"):
-            create_issue_from_comment(
+            await create_issue_from_comment(
                 pr_number=10,
                 thread_id="PRRT_kwDObad",
                 title="Should fail",
             )
 
-    def test_issue_body_contains_pr_reference(self, mocker: MockerFixture):
+    async def test_issue_body_contains_pr_reference(self, mocker: MockerFixture):
         mocker.patch("codereviewbuddy.tools.issues.gh.get_repo_info", return_value=("owner", "repo"))
-        mocker.patch("codereviewbuddy.tools.issues.gh.graphql", return_value=SAMPLE_THREAD_RESPONSE)
-        mock_run_gh = mocker.patch(
-            "codereviewbuddy.tools.issues.gh.run_gh",
-            return_value="https://github.com/owner/repo/issues/5\n",
+        mocker.patch(
+            "codereviewbuddy.tools.issues.github_api.graphql",
+            new=AsyncMock(return_value=SAMPLE_THREAD_RESPONSE),
+        )
+        mock_rest = mocker.patch(
+            "codereviewbuddy.tools.issues.github_api.rest",
+            new=AsyncMock(return_value={"number": 5, "html_url": "https://github.com/owner/repo/issues/5"}),
         )
 
-        create_issue_from_comment(
+        await create_issue_from_comment(
             pr_number=10,
             thread_id="PRRT_kwDOtest123",
             title="Test body content",
         )
 
-        # Extract the --body argument
-        call_args = mock_run_gh.call_args[0]
-        body_idx = list(call_args).index("--body") + 1
-        body = call_args[body_idx]
-
+        body = mock_rest.call_args.kwargs.get("body", "")
         assert "PR #10" in body
         assert "src/codereviewbuddy/tools/comments.py" in body
         assert "line 42" in body
         assert "unblocked[bot]" in body
         assert "Consider refactoring" in body
 
-    def test_comment_without_file_path(self, mocker: MockerFixture):
+    async def test_comment_without_file_path(self, mocker: MockerFixture):
         """PR-level comments may not have a file path."""
         response = {
             "data": {
@@ -157,21 +162,21 @@ class TestCreateIssueFromComment:
             },
         }
         mocker.patch("codereviewbuddy.tools.issues.gh.get_repo_info", return_value=("owner", "repo"))
-        mocker.patch("codereviewbuddy.tools.issues.gh.graphql", return_value=response)
-        mock_run_gh = mocker.patch(
-            "codereviewbuddy.tools.issues.gh.run_gh",
-            return_value="https://github.com/owner/repo/issues/99\n",
+        mocker.patch(
+            "codereviewbuddy.tools.issues.github_api.graphql",
+            new=AsyncMock(return_value=response),
+        )
+        mock_rest = mocker.patch(
+            "codereviewbuddy.tools.issues.github_api.rest",
+            new=AsyncMock(return_value={"number": 99, "html_url": "https://github.com/owner/repo/issues/99"}),
         )
 
-        result = create_issue_from_comment(
+        result = await create_issue_from_comment(
             pr_number=3,
             thread_id="PRRT_kwDOtest789",
             title="General suggestion",
         )
 
         assert result.issue_number == 99
-        # Body should not contain file location
-        call_args = mock_run_gh.call_args[0]
-        body_idx = list(call_args).index("--body") + 1
-        body = call_args[body_idx]
+        body = mock_rest.call_args.kwargs.get("body", "")
         assert "**Location:**" not in body

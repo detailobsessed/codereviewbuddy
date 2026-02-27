@@ -2,13 +2,12 @@
 
 from __future__ import annotations
 
-import json
 import logging
 from typing import TYPE_CHECKING
 
 from fastmcp.utilities.async_utils import call_sync_fn_in_threadpool
 
-from codereviewbuddy import gh
+from codereviewbuddy import gh, github_api
 from codereviewbuddy.config import Severity, get_config
 from codereviewbuddy.models import ActivityEvent, PRReviewStatusSummary, StackActivityResult, StackPR, StackReviewStatusResult
 from codereviewbuddy.reviewers import get_reviewer, identify_reviewer
@@ -22,22 +21,26 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
-def _fetch_open_prs(repo: str | None = None, cwd: str | None = None) -> list[dict]:
-    """Fetch all open PRs with branch info via gh CLI."""
-    args = [
-        "pr",
-        "list",
-        "--json",
-        "number,title,headRefName,baseRefName,url",
-        "--state",
-        "open",
-        "--limit",
-        "100",
+async def _fetch_open_prs(repo: str | None = None, cwd: str | None = None) -> list[dict]:
+    """Fetch all open PRs with branch info via REST API."""
+    if not repo:
+        owner, repo_name = await call_sync_fn_in_threadpool(gh.get_repo_info, cwd=cwd)
+    else:
+        owner, repo_name = github_api.parse_repo(repo)
+    prs = await github_api.rest(
+        f"/repos/{owner}/{repo_name}/pulls?state=open&per_page=100",
+        paginate=True,
+    )
+    return [
+        {
+            "number": pr["number"],
+            "title": pr["title"],
+            "headRefName": pr["head"]["ref"],
+            "baseRefName": pr["base"]["ref"],
+            "url": pr["html_url"],
+        }
+        for pr in (prs or [])
     ]
-    if repo:
-        args.extend(["--repo", repo])
-    raw = gh.run_gh(*args, cwd=cwd)
-    return json.loads(raw)
 
 
 def _index_prs(
@@ -144,7 +147,7 @@ async def discover_stack(
         except Exception:
             logger.debug("Session state not available, skipping cache", exc_info=True)
 
-    all_prs = await call_sync_fn_in_threadpool(_fetch_open_prs, repo=repo, cwd=cwd)
+    all_prs = await _fetch_open_prs(repo=repo, cwd=cwd)
     stack = _build_stack(pr_number, all_prs)
 
     # Cache in session state
@@ -201,11 +204,11 @@ def _classify_severity(reviewer_name: str, body: str) -> Severity:
     return adapter.classify_severity(body)
 
 
-def _paginate_summary_threads(
+async def _paginate_summary_threads(
     owner: str,
     repo: str,
     pr_number: int,
-    cwd: str | None = None,
+    cwd: str | None = None,  # noqa: ARG001
 ) -> tuple[list[dict[str, Any]], str, str]:
     """Paginate through review threads via the lightweight summary query.
 
@@ -220,7 +223,7 @@ def _paginate_summary_threads(
         variables: dict[str, Any] = {"owner": owner, "repo": repo, "pr": pr_number}
         if cursor:
             variables["cursor"] = cursor
-        result = gh.graphql(_SUMMARY_QUERY, variables=variables, cwd=cwd)
+        result = await github_api.graphql(_SUMMARY_QUERY, variables=variables)
         pr_data = result.get("data", {}).get("repository", {}).get("pullRequest") or {}
         threads_data = pr_data.get("reviewThreads", {})
         raw_threads.extend(threads_data.get("nodes", []))
@@ -300,14 +303,14 @@ def _count_stale_threads(raw_threads: list[dict[str, Any]]) -> int:
     return stale
 
 
-def _fetch_pr_summary(
+async def _fetch_pr_summary(
     owner: str,
     repo: str,
     pr_number: int,
     cwd: str | None = None,
 ) -> PRReviewStatusSummary:
     """Fetch lightweight review status for a single PR."""
-    raw_threads, title, url = _paginate_summary_threads(owner, repo, pr_number, cwd=cwd)
+    raw_threads, title, url = await _paginate_summary_threads(owner, repo, pr_number, cwd=cwd)
     counts = _count_thread_statuses(raw_threads)
     stale = _count_stale_threads(raw_threads)
 
@@ -364,7 +367,7 @@ async def summarize_review_status(
         Compact per-PR status with severity counts.
     """
     if repo:
-        owner, repo_name = gh.parse_repo(repo)
+        owner, repo_name = github_api.parse_repo(repo)
     else:
         owner, repo_name = await call_sync_fn_in_threadpool(gh.get_repo_info, cwd=cwd)
     full_repo = f"{owner}/{repo_name}"
@@ -399,13 +402,7 @@ async def summarize_review_status(
     for i, pr_num in enumerate(pr_numbers):
         if ctx and total:
             await ctx.report_progress(i, total)
-        summary = await call_sync_fn_in_threadpool(
-            _fetch_pr_summary,
-            owner,
-            repo_name,
-            pr_num,
-            cwd=cwd,
-        )
+        summary = await _fetch_pr_summary(owner, repo_name, pr_num, cwd=cwd)
         summaries.append(summary)
 
     if ctx and total:
@@ -428,26 +425,30 @@ async def summarize_review_status(
 _MAX_MERGED_SCAN = 50
 
 
-def _fetch_merged_prs(
+async def _fetch_merged_prs(
     repo: str | None = None,
     limit: int = 10,
     cwd: str | None = None,
 ) -> list[dict]:
-    """Fetch recently merged PRs via gh CLI."""
-    args = [
-        "pr",
-        "list",
-        "--json",
-        "number,title,url,mergedAt",
-        "--state",
-        "merged",
-        "--limit",
-        str(max(1, min(limit, _MAX_MERGED_SCAN))),
+    """Fetch recently merged PRs via REST API."""
+    if not repo:
+        owner, repo_name = await call_sync_fn_in_threadpool(gh.get_repo_info, cwd=cwd)
+    else:
+        owner, repo_name = github_api.parse_repo(repo)
+    per_page = max(1, min(limit, _MAX_MERGED_SCAN))
+    prs = await github_api.rest(
+        f"/repos/{owner}/{repo_name}/pulls?state=closed&per_page={per_page}",
+    )
+    return [
+        {
+            "number": pr["number"],
+            "title": pr["title"],
+            "url": pr["html_url"],
+            "mergedAt": pr["merged_at"],
+        }
+        for pr in (prs or [])
+        if pr.get("merged_at")
     ]
-    if repo:
-        args.extend(["--repo", repo])
-    raw = gh.run_gh(*args, cwd=cwd)
-    return json.loads(raw)
 
 
 async def list_recent_unresolved(
@@ -471,12 +472,12 @@ async def list_recent_unresolved(
         StackReviewStatusResult containing only PRs that have unresolved threads.
     """
     if repo:
-        owner, repo_name = gh.parse_repo(repo)
+        owner, repo_name = github_api.parse_repo(repo)
     else:
         owner, repo_name = await call_sync_fn_in_threadpool(gh.get_repo_info, cwd=cwd)
     full_repo = f"{owner}/{repo_name}"
 
-    merged_prs = await call_sync_fn_in_threadpool(_fetch_merged_prs, repo=full_repo, limit=limit, cwd=cwd)
+    merged_prs = await _fetch_merged_prs(repo=full_repo, limit=limit, cwd=cwd)
     if not merged_prs:
         return StackReviewStatusResult(prs=[], total_unresolved=0)
 
@@ -486,13 +487,7 @@ async def list_recent_unresolved(
     for i, pr in enumerate(merged_prs):
         if ctx and total:
             await ctx.report_progress(i, total)
-        summary = await call_sync_fn_in_threadpool(
-            _fetch_pr_summary,
-            owner,
-            repo_name,
-            pr["number"],
-            cwd=cwd,
-        )
+        summary = await _fetch_pr_summary(owner, repo_name, pr["number"], cwd=cwd)
         if summary.unresolved > 0:
             summaries.append(summary)
 
@@ -526,15 +521,15 @@ _TIMELINE_EVENT_MAP: dict[str, str] = {
 }
 
 
-def _fetch_timeline(
+async def _fetch_timeline(
     owner: str,
     repo: str,
     pr_number: int,
-    cwd: str | None = None,
+    cwd: str | None = None,  # noqa: ARG001
 ) -> list[dict[str, Any]]:
     """Fetch timeline events for a single PR via the GitHub REST API."""
     endpoint = f"/repos/{owner}/{repo}/issues/{pr_number}/timeline"
-    result = gh.rest(endpoint, paginate=True, cwd=cwd)
+    result = await github_api.rest(endpoint, paginate=True)
     return result if isinstance(result, list) else []
 
 
@@ -619,7 +614,7 @@ async def stack_activity(  # noqa: PLR0914
     from datetime import UTC, datetime  # noqa: PLC0415
 
     if repo:
-        owner, repo_name = gh.parse_repo(repo)
+        owner, repo_name = github_api.parse_repo(repo)
     else:
         owner, repo_name = await call_sync_fn_in_threadpool(gh.get_repo_info, cwd=cwd)
     full_repo = f"{owner}/{repo_name}"
@@ -652,7 +647,7 @@ async def stack_activity(  # noqa: PLR0914
     for i, pr_num in enumerate(pr_numbers):
         if ctx and total:
             await ctx.report_progress(i, total)
-        raw = await call_sync_fn_in_threadpool(_fetch_timeline, owner, repo_name, pr_num, cwd=cwd)
+        raw = await _fetch_timeline(owner, repo_name, pr_num, cwd=cwd)
         all_events.extend(_parse_timeline_events(raw, pr_num))
 
     if ctx and total:

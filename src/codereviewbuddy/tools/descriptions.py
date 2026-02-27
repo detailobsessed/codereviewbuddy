@@ -2,13 +2,10 @@
 
 from __future__ import annotations
 
-import json
 import re
 from typing import TYPE_CHECKING
 
-from fastmcp.utilities.async_utils import call_sync_fn_in_threadpool
-
-from codereviewbuddy import gh
+from codereviewbuddy import github_api
 from codereviewbuddy.config import get_config
 from codereviewbuddy.models import PRDescriptionInfo, PRDescriptionReviewResult
 
@@ -37,13 +34,23 @@ _BOILERPLATE_MATCH_THRESHOLD = 3
 _MIN_DESCRIPTION_CHARS = 50
 
 
-def _fetch_pr_info(pr_number: int, repo: str | None = None, cwd: str | None = None) -> dict:
-    """Fetch PR title, body, and URL via gh CLI."""
-    args = ["pr", "view", str(pr_number), "--json", "number,title,body,url"]
-    if repo:
-        args.extend(["--repo", repo])
-    raw = gh.run_gh(*args, cwd=cwd)
-    return json.loads(raw)
+async def _fetch_pr_info(pr_number: int, repo: str | None = None, cwd: str | None = None) -> dict:
+    """Fetch PR title, body, and URL via GitHub REST API."""
+    if not repo:
+        from fastmcp.utilities.async_utils import call_sync_fn_in_threadpool  # noqa: PLC0415
+
+        from codereviewbuddy import gh  # noqa: PLC0415
+
+        owner, repo_name = await call_sync_fn_in_threadpool(gh.get_repo_info, cwd=cwd)
+    else:
+        owner, repo_name = github_api.parse_repo(repo)
+    pr = await github_api.rest(f"/repos/{owner}/{repo_name}/pulls/{pr_number}")
+    return {
+        "number": pr["number"],
+        "title": pr["title"],
+        "body": pr.get("body") or "",
+        "url": pr["html_url"],
+    }
 
 
 def _is_boilerplate(body: str) -> bool:
@@ -124,7 +131,7 @@ async def review_pr_descriptions(
         if ctx and total:
             await ctx.report_progress(i, total)
         try:
-            data = await call_sync_fn_in_threadpool(_fetch_pr_info, pr_number, repo=repo, cwd=cwd)
+            data = await _fetch_pr_info(pr_number, repo=repo, cwd=cwd)
             descriptions.append(_analyze_pr(data))
         except Exception as exc:
             descriptions.append(

@@ -5,7 +5,9 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING
 
-from codereviewbuddy import gh
+from fastmcp.utilities.async_utils import call_sync_fn_in_threadpool
+
+from codereviewbuddy import gh, github_api
 from codereviewbuddy.models import CreateIssueResult
 
 if TYPE_CHECKING:
@@ -32,9 +34,9 @@ query($threadId: ID!) {
 """
 
 
-def _fetch_thread_comment(thread_id: str, cwd: str | None = None) -> dict[str, Any]:
+async def _fetch_thread_comment(thread_id: str, cwd: str | None = None) -> dict[str, Any]:  # noqa: ARG001
     """Fetch the first comment from a review thread, raising on failure."""
-    result = gh.graphql(_THREAD_QUERY, variables={"threadId": thread_id}, cwd=cwd)
+    result = await github_api.graphql(_THREAD_QUERY, variables={"threadId": thread_id})
     node = result.get("data", {}).get("node") or {}
     comment_nodes = node.get("comments", {}).get("nodes", [])
     if not comment_nodes:
@@ -83,7 +85,7 @@ def _parse_issue_number(issue_url: str) -> int:
         return 0
 
 
-def create_issue_from_comment(  # noqa: PLR0913, PLR0917
+async def create_issue_from_comment(  # noqa: PLR0913, PLR0917
     pr_number: int,
     thread_id: str,
     title: str,
@@ -105,32 +107,26 @@ def create_issue_from_comment(  # noqa: PLR0913, PLR0917
         Created issue number, URL, and title.
     """
     if repo:
-        owner, repo_name = gh.parse_repo(repo)
+        owner, repo_name = github_api.parse_repo(repo)
     else:
-        owner, repo_name = gh.get_repo_info(cwd=cwd)
+        owner, repo_name = await call_sync_fn_in_threadpool(gh.get_repo_info, cwd=cwd)
 
-    comment = _fetch_thread_comment(thread_id, cwd=cwd)
+    comment = await _fetch_thread_comment(thread_id, cwd=cwd)
     issue_body, _author = _build_issue_body(comment, pr_number)
 
-    full_repo = f"{owner}/{repo_name}"
-    args = [
-        "issue",
-        "create",
-        "--repo",
-        full_repo,
-        "--title",
-        title,
-        "--body",
-        issue_body,
-    ]
+    payload: dict[str, Any] = {"title": title, "body": issue_body}
     if labels:
-        for label in labels:
-            args.extend(["--label", label])
+        payload["labels"] = labels
 
-    issue_url = gh.run_gh(*args, cwd=cwd).strip()
+    created = await github_api.rest(
+        f"/repos/{owner}/{repo_name}/issues",
+        method="POST",
+        **payload,
+    )
+    issue_url: str = created.get("html_url", "")
 
     return CreateIssueResult(
-        issue_number=_parse_issue_number(issue_url),
+        issue_number=created.get("number", 0) or _parse_issue_number(issue_url),
         issue_url=issue_url,
         title=title,
     )

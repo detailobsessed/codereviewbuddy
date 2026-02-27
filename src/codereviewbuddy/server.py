@@ -448,7 +448,7 @@ async def resolve_comment(
         cwd = await _get_workspace_cwd(ctx)
         _check_auto_detect_prerequisites(cwd, has_pr=pr_number is not None, has_repo=True)
         pr_number = _resolve_pr_number(pr_number, cwd=cwd)
-        return comments.resolve_comment(pr_number, thread_id, cwd=cwd)
+        return await comments.resolve_comment(pr_number, thread_id, cwd=cwd)
     except Exception as exc:
         logger.exception("resolve_comment failed for %s on PR #%s", thread_id, pr_number)
         return _recovery_error(exc, tool_name="resolve_comment", pr_number=pr_number)
@@ -512,7 +512,7 @@ async def reply_to_comment(
         cwd = await _get_workspace_cwd(ctx)
         _check_auto_detect_prerequisites(cwd, has_pr=pr_number is not None, has_repo=repo is not None)
         pr_number = _resolve_pr_number(pr_number, cwd=cwd)
-        return comments.reply_to_comment(pr_number, thread_id, body, repo=repo, cwd=cwd)
+        return await comments.reply_to_comment(pr_number, thread_id, body, repo=repo, cwd=cwd)
     except Exception as exc:
         logger.exception("reply_to_comment failed for %s on PR #%s", thread_id, pr_number)
         return _recovery_error(exc, tool_name="reply_to_comment", pr_number=pr_number, repo=repo)
@@ -546,7 +546,7 @@ async def create_issue_from_comment(
         cwd = await _get_workspace_cwd(ctx)
         _check_auto_detect_prerequisites(cwd, has_pr=pr_number is not None, has_repo=repo is not None)
         pr_number = _resolve_pr_number(pr_number, cwd=cwd)
-        return issues.create_issue_from_comment(
+        return await issues.create_issue_from_comment(
             pr_number,
             thread_id,
             title,

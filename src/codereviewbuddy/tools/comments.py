@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING, Literal
 
 from fastmcp.utilities.async_utils import call_sync_fn_in_threadpool
 
-from codereviewbuddy import gh
+from codereviewbuddy import gh, github_api
 from codereviewbuddy.config import get_config
 from codereviewbuddy.models import (
     CommentStatus,
@@ -204,11 +204,11 @@ _REVIEW_STATE_MAP: dict[str, CommentStatus] = {
 }
 
 
-def _get_pr_reviews(
+async def _get_pr_reviews(
     owner: str,
     repo: str,
     pr_number: int,
-    cwd: str | None = None,
+    cwd: str | None = None,  # noqa: ARG001
 ) -> list[ReviewThread]:
     """Fetch PR-level reviews from known AI reviewers.
 
@@ -217,7 +217,7 @@ def _get_pr_reviews(
     NOT inline code threads. Without this, reviewers like Devin that don't create
     inline threads are completely invisible.
     """
-    result = gh.rest(f"/repos/{owner}/{repo}/pulls/{pr_number}/reviews?per_page=100", cwd=cwd, paginate=True)
+    result = await github_api.rest(f"/repos/{owner}/{repo}/pulls/{pr_number}/reviews?per_page=100", paginate=True)
     if not result:
         return []
 
@@ -257,11 +257,11 @@ def _get_pr_reviews(
     return threads
 
 
-def _get_pr_issue_comments(
+async def _get_pr_issue_comments(
     owner: str,
     repo: str,
     pr_number: int,
-    cwd: str | None = None,
+    cwd: str | None = None,  # noqa: ARG001
 ) -> list[ReviewThread]:
     """Fetch regular PR comments from bots (e.g. codecov, netlify, vercel).
 
@@ -269,7 +269,7 @@ def _get_pr_issue_comments(
     threads or PR reviews. Without this, bot feedback like coverage reports and
     deployment previews is invisible.
     """
-    result = gh.rest(f"/repos/{owner}/{repo}/issues/{pr_number}/comments?per_page=100", cwd=cwd, paginate=True)
+    result = await github_api.rest(f"/repos/{owner}/{repo}/issues/{pr_number}/comments?per_page=100", paginate=True)
     if not result:
         return []
 
@@ -309,18 +309,18 @@ def _get_pr_issue_comments(
     return threads
 
 
-def _get_pr_commits(
+async def _get_pr_commits(
     owner: str,
     repo: str,
     pr_number: int,
-    cwd: str | None = None,
+    cwd: str | None = None,  # noqa: ARG001
 ) -> list[dict[str, Any]]:
     """Fetch all commits on a PR with SHAs and timestamps.
 
-    Uses ``--paginate`` to follow Link headers so PRs with >100
+    Uses ``paginate`` to follow Link headers so PRs with >100
     commits return the complete list (fixes #95).
     """
-    return gh.rest(f"/repos/{owner}/{repo}/pulls/{pr_number}/commits?per_page=100", cwd=cwd, paginate=True) or []
+    return await github_api.rest(f"/repos/{owner}/{repo}/pulls/{pr_number}/commits?per_page=100", paginate=True) or []
 
 
 def _latest_push_time_from_commits(commits: list[dict[str, Any]]) -> datetime | None:
@@ -421,7 +421,7 @@ async def _fetch_raw_threads(
     owner: str,
     repo_name: str,
     pr_number: int,
-    cwd: str | None,
+    cwd: str | None,  # noqa: ARG001
     ctx: Context | None,
 ) -> list[dict[str, Any]]:
     """Paginate through all review threads for a PR via GraphQL."""
@@ -439,8 +439,7 @@ async def _fetch_raw_threads(
         if cursor:
             variables["cursor"] = cursor
 
-        result = await call_sync_fn_in_threadpool(gh.graphql, _THREADS_QUERY, variables=variables, cwd=cwd)
-        _check_graphql_errors(result, f"fetch review threads for PR #{pr_number} (page {page})")
+        result = await github_api.graphql(_THREADS_QUERY, variables=variables)
         pr_data = result.get("data", {}).get("repository", {}).get("pullRequest") or {}
         threads_data = pr_data.get("reviewThreads", {})
         raw_threads.extend(threads_data.get("nodes", []))
@@ -466,11 +465,11 @@ async def _collect_all_threads(
     threads = _parse_threads(raw_threads, pr_number)
 
     # Include PR-level reviews from AI reviewers (e.g. Devin summaries)
-    pr_reviews = await call_sync_fn_in_threadpool(_get_pr_reviews, owner, repo_name, pr_number, cwd=cwd)
+    pr_reviews = await _get_pr_reviews(owner, repo_name, pr_number, cwd=cwd)
     threads.extend(pr_reviews)
 
     # Include regular PR comments from bots (e.g. codecov, netlify, vercel)
-    bot_comments = await call_sync_fn_in_threadpool(_get_pr_issue_comments, owner, repo_name, pr_number, cwd=cwd)
+    bot_comments = await _get_pr_issue_comments(owner, repo_name, pr_number, cwd=cwd)
     threads.extend(bot_comments)
 
     # Filter out threads from disabled reviewers
@@ -525,14 +524,14 @@ async def list_review_comments(
         ReviewSummary with threads and per-reviewer statuses.
     """
     if repo:
-        owner, repo_name = gh.parse_repo(repo)
+        owner, repo_name = github_api.parse_repo(repo)
     else:
         owner, repo_name = await call_sync_fn_in_threadpool(gh.get_repo_info, cwd=cwd)
 
     threads = await _collect_all_threads(owner, repo_name, pr_number, cwd, ctx)
 
     # Build reviewer statuses (timestamp heuristic)
-    commits = await call_sync_fn_in_threadpool(_get_pr_commits, owner, repo_name, pr_number, cwd=cwd)
+    commits = await _get_pr_commits(owner, repo_name, pr_number, cwd=cwd)
     last_push_at = _latest_push_time_from_commits(commits)
     reviewer_statuses = _build_reviewer_statuses(threads, last_push_at)
 
@@ -628,14 +627,13 @@ query($threadId: ID!) {
 """
 
 
-def _fetch_thread_detail(thread_id: str, cwd: str | None = None) -> tuple[str, str, list[str]]:
+async def _fetch_thread_detail(thread_id: str, cwd: str | None = None) -> tuple[str, str, list[str]]:  # noqa: ARG001
     """Fetch reviewer name, first comment body, and all comment author logins for a thread.
 
     Returns:
         (reviewer_name, comment_body, all_logins) — empty strings/list if lookup fails.
     """
-    result = gh.graphql(_THREAD_DETAIL_QUERY, variables={"threadId": thread_id}, cwd=cwd)
-    _check_graphql_errors(result, f"fetch thread detail {thread_id}")
+    result = await github_api.graphql(_THREAD_DETAIL_QUERY, variables={"threadId": thread_id})
     node = result.get("data", {}).get("node") or {}
     comments = node.get("comments", {}).get("nodes", [])
     if not comments:
@@ -658,11 +656,11 @@ def _has_any_reply(all_logins: list[str]) -> bool:
     return len(all_logins) > 1
 
 
-def _dismiss_pr_review(
+async def _dismiss_pr_review(
     pr_number: int,
     review_id: str,
     message: str = "Dismissed via codereviewbuddy",
-    cwd: str | None = None,
+    cwd: str | None = None,  # noqa: ARG001
 ) -> str:
     """Dismiss a PR-level review (PRR_ ID) via GraphQL mutation.
 
@@ -678,12 +676,10 @@ def _dismiss_pr_review(
     Raises:
         gh.GhError: If the dismiss fails.
     """
-    result = gh.graphql(
+    result = await github_api.graphql(
         _DISMISS_REVIEW_MUTATION,
         variables={"reviewId": review_id, "message": message},
-        cwd=cwd,
     )
-    _check_graphql_errors(result, f"dismiss review {review_id}")
 
     review_data = result.get("data", {}).get("dismissPullRequestReview", {}).get("pullRequestReview", {})
     if review_data.get("state") == "DISMISSED":
@@ -693,7 +689,7 @@ def _dismiss_pr_review(
     raise gh.GhError(msg)
 
 
-def resolve_comment(
+async def resolve_comment(
     pr_number: int,
     thread_id: str,
     cwd: str | None = None,
@@ -722,10 +718,10 @@ def resolve_comment(
         raise gh.GhError(msg)
 
     if thread_id.startswith("PRR_"):
-        return _dismiss_pr_review(pr_number, thread_id, cwd=cwd)
+        return await _dismiss_pr_review(pr_number, thread_id, cwd=cwd)
 
     # Config enforcement: fetch thread details and check resolve_levels + reply requirement
-    reviewer_name, comment_body, all_logins = _fetch_thread_detail(thread_id, cwd=cwd)
+    reviewer_name, comment_body, all_logins = await _fetch_thread_detail(thread_id, cwd=cwd)
     if reviewer_name:
         from codereviewbuddy.tools.stack import _classify_severity  # noqa: PLC0415
 
@@ -740,8 +736,7 @@ def resolve_comment(
             msg = "Cannot resolve thread without a reply. Add a reply explaining how the feedback was addressed, then resolve."
             raise gh.GhError(msg)
 
-    result = gh.graphql(_RESOLVE_THREAD_MUTATION, variables={"threadId": thread_id}, cwd=cwd)
-    _check_graphql_errors(result, f"resolve thread {thread_id}")
+    result = await github_api.graphql(_RESOLVE_THREAD_MUTATION, variables={"threadId": thread_id})
 
     thread_data = result.get("data", {}).get("resolveReviewThread", {}).get("thread", {})
     if thread_data.get("isResolved"):
@@ -824,8 +819,7 @@ async def resolve_stale_comments(  # noqa: PLR0914
         variables[var] = thread.thread_id
 
     batch_mutation = f"mutation({', '.join(params)}) {{\n" + "\n".join(aliases) + "\n}"
-    result = await call_sync_fn_in_threadpool(gh.graphql, batch_mutation, variables=variables, cwd=cwd)
-    _check_graphql_errors(result, f"batch resolve {len(allowed)} threads on PR #{pr_number}")
+    await github_api.graphql(batch_mutation, variables=variables)
 
     resolved_ids = [t.thread_id for t in allowed]
     if ctx:
@@ -852,7 +846,7 @@ async def resolve_stale_comments(  # noqa: PLR0914
     )
 
 
-def reply_to_comment(
+async def reply_to_comment(
     pr_number: int,
     thread_id: str,
     body: str,
@@ -878,20 +872,20 @@ def reply_to_comment(
     """
     # PRRT_ threads use GraphQL with only the thread ID — no repo info needed
     if thread_id.startswith("PRRT_"):
-        return _reply_to_review_thread(pr_number, thread_id, body, cwd=cwd)
+        return await _reply_to_review_thread(pr_number, thread_id, body, cwd=cwd)
 
     # IC_ and PRR_ paths need owner/repo for the issues comments API
     if repo:
-        owner, repo_name = gh.parse_repo(repo)
+        owner, repo_name = github_api.parse_repo(repo)
     else:
-        owner, repo_name = gh.get_repo_info(cwd=cwd)
+        owner, repo_name = await call_sync_fn_in_threadpool(gh.get_repo_info, cwd=cwd)
 
     if thread_id.startswith("IC_"):
-        return _reply_to_pr_comment(pr_number, owner, repo_name, body, kind="bot comment", cwd=cwd)
+        return await _reply_to_pr_comment(pr_number, owner, repo_name, body, kind="bot comment", cwd=cwd)
     if thread_id.startswith("PRR_"):
-        return _reply_to_pr_comment(pr_number, owner, repo_name, body, kind="PR-level review", cwd=cwd)
+        return await _reply_to_pr_comment(pr_number, owner, repo_name, body, kind="PR-level review", cwd=cwd)
 
-    return _reply_to_review_thread(pr_number, thread_id, body, cwd=cwd)
+    return await _reply_to_review_thread(pr_number, thread_id, body, cwd=cwd)
 
 
 _REPLY_TO_THREAD_MUTATION = """
@@ -906,36 +900,33 @@ mutation($threadId: ID!, $body: String!) {
 """
 
 
-def _reply_to_review_thread(
+async def _reply_to_review_thread(
     pr_number: int,
     thread_id: str,
     body: str,
-    cwd: str | None = None,
+    cwd: str | None = None,  # noqa: ARG001
 ) -> str:
     """Reply to an inline review thread (PRRT_ ID) via GraphQL mutation."""
-    result = gh.graphql(
+    await github_api.graphql(
         _REPLY_TO_THREAD_MUTATION,
         variables={"threadId": thread_id, "body": body},
-        cwd=cwd,
     )
-    _check_graphql_errors(result, f"reply to thread {thread_id}")
     return f"Replied to thread {thread_id} on PR #{pr_number}"
 
 
-def _reply_to_pr_comment(  # noqa: PLR0913, PLR0917
+async def _reply_to_pr_comment(  # noqa: PLR0913, PLR0917
     pr_number: int,
     owner: str,
     repo_name: str,
     body: str,
     kind: str = "PR-level review",
-    cwd: str | None = None,
+    cwd: str | None = None,  # noqa: ARG001
 ) -> str:
     """Reply to a PR-level review or bot comment by posting an issue comment."""
-    gh.rest(
+    await github_api.rest(
         f"/repos/{owner}/{repo_name}/issues/{pr_number}/comments",
         method="POST",
         body=body,
-        cwd=cwd,
     )
     return f"Replied to {kind} on PR #{pr_number}"
 
@@ -1060,7 +1051,7 @@ async def triage_review_comments(
     issue_items: list[TriageItem] = []
 
     if repo:
-        owner, repo_name = gh.parse_repo(repo)
+        owner, repo_name = github_api.parse_repo(repo)
     else:
         owner, repo_name = await call_sync_fn_in_threadpool(gh.get_repo_info, cwd=cwd)
 
