@@ -103,7 +103,7 @@ jobs:
       run: uv run poe check
 
     - name: Store objects inventory for tests
-      uses: actions/upload-artifact@v6
+      uses: actions/upload-artifact@v7
       if: ${{ matrix.os == 'blacksmith-4vcpu-ubuntu-2404' && matrix.python-version == '3.14' }}
       with:
         name: objects.inv
