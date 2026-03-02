@@ -12,18 +12,22 @@ New users: https://github.com/settings/tokens/new?scopes=repo&description=codere
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import os
 import re
 import subprocess  # noqa: S404
+import time
 from typing import Any
 
 import httpx
 
 from codereviewbuddy import cache
+from codereviewbuddy.gh import _GH_LOG_FILE, _ISSUE_65_TRACKING_TAG
 
 logger = logging.getLogger(__name__)
 
+_GITHUB_API_TIMEOUT_SECS = 30.0
 _GITHUB_API_URL = "https://api.github.com"
 _GITHUB_GRAPHQL_URL = "https://api.github.com/graphql"
 TOKEN_CREATE_URL = "https://github.com/settings/tokens/new?scopes=repo&description=codereviewbuddy"  # noqa: S105
@@ -135,6 +139,21 @@ def reset_token() -> None:
 
 
 # ---------------------------------------------------------------------------
+# Observability
+# ---------------------------------------------------------------------------
+
+
+def _log_httpx_call(entry: dict[str, Any]) -> None:
+    """Append a JSON log entry to gh_calls.jsonl."""
+    try:
+        _GH_LOG_FILE.parent.mkdir(parents=True, exist_ok=True)
+        with _GH_LOG_FILE.open("a", encoding="utf-8") as f:
+            f.write(json.dumps(entry, default=str) + "\n")
+    except OSError:
+        pass
+
+
+# ---------------------------------------------------------------------------
 # HTTP helpers
 # ---------------------------------------------------------------------------
 
@@ -221,8 +240,34 @@ async def graphql(query: str, variables: dict[str, Any] | None = None) -> dict[s
         payload["variables"] = variables
 
     logger.debug("GraphQL %s", "mutation" if is_mutation else "query")
-    async with httpx.AsyncClient() as client:
-        response = await client.post(_GITHUB_GRAPHQL_URL, headers=headers, json=payload)
+    start_ts = time.strftime("%Y-%m-%dT%H:%M:%S%z")
+    start = time.perf_counter()
+    status: int | None = None
+    timed_out = False
+    try:
+        async with asyncio.timeout(_GITHUB_API_TIMEOUT_SECS):
+            async with httpx.AsyncClient() as client:
+                response = await client.post(_GITHUB_GRAPHQL_URL, headers=headers, json=payload)
+    except TimeoutError as exc:
+        timed_out = True
+        msg = f"GitHub GraphQL API timed out after {_GITHUB_API_TIMEOUT_SECS:.0f}s"
+        raise GitHubError(msg) from exc
+    else:
+        status = response.status_code
+    finally:
+        log_entry = {
+            "ts": start_ts,
+            "kind": "httpx",
+            "method": "POST",
+            "url": _GITHUB_GRAPHQL_URL,
+            "duration_ms": round((time.perf_counter() - start) * 1000),
+            "tracking_tag": _ISSUE_65_TRACKING_TAG,
+        }
+        if timed_out:
+            log_entry["timed_out"] = True
+        elif status is not None:
+            log_entry["status_code"] = status
+        _log_httpx_call(log_entry)
 
     _raise_for_status(response)
     result: dict[str, Any] = response.json()
@@ -302,8 +347,34 @@ async def _single_rest(url: str, method: str, headers: dict[str, str], **kwargs:
     params = dict(kwargs) if upper == "GET" and kwargs else None
     json_body = dict(kwargs) if upper != "GET" and kwargs else None
 
-    async with httpx.AsyncClient() as client:
-        response = await client.request(method, url, headers=headers, params=params, json=json_body)
+    start_ts = time.strftime("%Y-%m-%dT%H:%M:%S%z")
+    start = time.perf_counter()
+    status: int | None = None
+    timed_out = False
+    try:
+        async with asyncio.timeout(_GITHUB_API_TIMEOUT_SECS):
+            async with httpx.AsyncClient() as client:
+                response = await client.request(method, url, headers=headers, params=params, json=json_body)
+    except TimeoutError as exc:
+        timed_out = True
+        msg = f"GitHub REST API timed out after {_GITHUB_API_TIMEOUT_SECS:.0f}s"
+        raise GitHubError(msg) from exc
+    else:
+        status = response.status_code
+    finally:
+        log_entry = {
+            "ts": start_ts,
+            "kind": "httpx",
+            "method": method,
+            "url": url,
+            "duration_ms": round((time.perf_counter() - start) * 1000),
+            "tracking_tag": _ISSUE_65_TRACKING_TAG,
+        }
+        if timed_out:
+            log_entry["timed_out"] = True
+        elif status is not None:
+            log_entry["status_code"] = status
+        _log_httpx_call(log_entry)
 
     _raise_for_status(response)
     if not response.content:
@@ -317,10 +388,21 @@ async def _paginate_rest(url: str, headers: dict[str, str], **kwargs: Any) -> li
     next_url: str | None = url
     first = True
 
-    async with httpx.AsyncClient() as client:
+    start_ts = time.strftime("%Y-%m-%dT%H:%M:%S%z")
+    start = time.perf_counter()
+    timed_out = False
+    pages = 0
+    client = httpx.AsyncClient()
+    try:
         while next_url:
             params = dict(kwargs) if first and kwargs else None
-            response = await client.get(next_url, headers=headers, params=params)
+            try:
+                async with asyncio.timeout(_GITHUB_API_TIMEOUT_SECS):
+                    response = await client.get(next_url, headers=headers, params=params)
+            except TimeoutError as exc:
+                timed_out = True
+                msg = f"GitHub REST API timed out after {_GITHUB_API_TIMEOUT_SECS:.0f}s"
+                raise GitHubError(msg) from exc
             _raise_for_status(response)
             page = response.json()
             if isinstance(page, list):
@@ -329,6 +411,25 @@ async def _paginate_rest(url: str, headers: dict[str, str], **kwargs: Any) -> li
                 results.append(page)
             next_url = _parse_next_link(response.headers.get("link", ""))
             first = False
+            pages += 1
+    finally:
+        try:
+            async with asyncio.timeout(_GITHUB_API_TIMEOUT_SECS):
+                await client.aclose()
+        except TimeoutError:
+            pass
+        log_entry = {
+            "ts": start_ts,
+            "kind": "httpx",
+            "method": "GET",
+            "url": url,
+            "pages": pages,
+            "duration_ms": round((time.perf_counter() - start) * 1000),
+            "tracking_tag": _ISSUE_65_TRACKING_TAG,
+        }
+        if timed_out:
+            log_entry["timed_out"] = True
+        _log_httpx_call(log_entry)
 
     return results
 
@@ -354,7 +455,33 @@ async def download_bytes(url: str) -> bytes:
         GitHubAuthError: On authentication failure.
     """
     headers = await _get_headers()
-    async with httpx.AsyncClient(follow_redirects=True) as client:
-        response = await client.get(url, headers=headers)
+    start_ts = time.strftime("%Y-%m-%dT%H:%M:%S%z")
+    start = time.perf_counter()
+    status: int | None = None
+    timed_out = False
+    try:
+        async with asyncio.timeout(_GITHUB_API_TIMEOUT_SECS):
+            async with httpx.AsyncClient(follow_redirects=True) as client:
+                response = await client.get(url, headers=headers)
+    except TimeoutError as exc:
+        timed_out = True
+        msg = f"GitHub download timed out after {_GITHUB_API_TIMEOUT_SECS:.0f}s"
+        raise GitHubError(msg) from exc
+    else:
+        status = response.status_code
+    finally:
+        log_entry = {
+            "ts": start_ts,
+            "kind": "httpx",
+            "method": "GET",
+            "url": url,
+            "duration_ms": round((time.perf_counter() - start) * 1000),
+            "tracking_tag": _ISSUE_65_TRACKING_TAG,
+        }
+        if timed_out:
+            log_entry["timed_out"] = True
+        elif status is not None:
+            log_entry["status_code"] = status
+        _log_httpx_call(log_entry)
     _raise_for_status(response)
     return response.content

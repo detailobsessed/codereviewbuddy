@@ -369,3 +369,104 @@ class TestDownloadBytes:
                 await download_bytes("https://example.com/archive.zip")
 
         reset_token()
+
+
+# ---------------------------------------------------------------------------
+# Timeout handling (regression test for issue #65 hang)
+# ---------------------------------------------------------------------------
+
+
+class TestTimeouts:
+    """Verify that a stalled GitHub API never hangs indefinitely.
+
+    These tests patch asyncio.timeout to raise TimeoutError immediately,
+    simulating the TCP-half-open / aclose-hang scenario logged at 00:14:05.
+    """
+
+    async def test_graphql_timeout_raises_github_error(self, monkeypatch):
+        import asyncio
+        from contextlib import asynccontextmanager
+
+        from codereviewbuddy import cache
+
+        reset_token()
+        monkeypatch.setenv("GH_TOKEN", "tok_test")
+        cache.clear()
+
+        @asynccontextmanager
+        async def _instant_timeout(_seconds):  # noqa: RUF029
+            raise TimeoutError
+            yield
+
+        monkeypatch.setattr(asyncio, "timeout", _instant_timeout)
+
+        with pytest.raises(GitHubError, match="timed out"):
+            await graphql("{ viewer { login } }")
+
+        reset_token()
+        cache.clear()
+
+    async def test_rest_timeout_raises_github_error(self, monkeypatch):
+        import asyncio
+        from contextlib import asynccontextmanager
+
+        from codereviewbuddy import cache
+
+        reset_token()
+        monkeypatch.setenv("GH_TOKEN", "tok_test")
+        cache.clear()
+
+        @asynccontextmanager
+        async def _instant_timeout(_seconds):  # noqa: RUF029
+            raise TimeoutError
+            yield
+
+        monkeypatch.setattr(asyncio, "timeout", _instant_timeout)
+
+        with pytest.raises(GitHubError, match="timed out"):
+            await rest("/repos/o/r/pulls")
+
+        reset_token()
+        cache.clear()
+
+    async def test_paginated_rest_timeout_raises_github_error(self, monkeypatch):
+        import asyncio
+        from contextlib import asynccontextmanager
+
+        from codereviewbuddy import cache
+
+        reset_token()
+        monkeypatch.setenv("GH_TOKEN", "tok_test")
+        cache.clear()
+
+        @asynccontextmanager
+        async def _instant_timeout(_seconds):  # noqa: RUF029
+            raise TimeoutError
+            yield
+
+        monkeypatch.setattr(asyncio, "timeout", _instant_timeout)
+
+        with pytest.raises(GitHubError, match="timed out"):
+            await rest("/repos/o/r/pulls", paginate=True)
+
+        reset_token()
+        cache.clear()
+
+    async def test_download_bytes_timeout_raises_github_error(self, monkeypatch):
+        import asyncio
+        from contextlib import asynccontextmanager
+
+        reset_token()
+        monkeypatch.setenv("GH_TOKEN", "tok_test")
+
+        @asynccontextmanager
+        async def _instant_timeout(_seconds):  # noqa: RUF029
+            raise TimeoutError
+            yield
+
+        monkeypatch.setattr(asyncio, "timeout", _instant_timeout)
+
+        with pytest.raises(GitHubError, match="timed out"):
+            await download_bytes("https://example.com/archive.zip")
+
+        reset_token()
