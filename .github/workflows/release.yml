@@ -93,6 +93,6 @@ jobs:
         uv publish
 
   mcp-registry-publish:
-    needs: release
-    if: needs.release.outputs.released == 'true'
+    needs: [release, pypi-publish]
+    if: needs.release.outputs.released == 'true' && (needs.pypi-publish.result == 'success' || needs.pypi-publish.result == 'skipped')
     uses: detailobsessed/ci-components/.github/workflows/mcp-registry-publish.yml@main
