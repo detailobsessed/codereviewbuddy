@@ -48,7 +48,7 @@ jobs:
             - 'pyproject.toml'
             - 'uv.lock'
             - 'docs/**'
-            - 'mkdocs.yml'
+            - 'zensical.toml'
             - '*.md'
 
   links:
@@ -60,20 +60,27 @@ jobs:
       uses: lycheeverse/lychee-action@v2
       with:
         fail: true
-        args: --no-progress --config .lychee.toml .
+        args: --config .lychee.toml --no-progress .
+
+  prek:
+    runs-on: blacksmith-4vcpu-ubuntu-2404
+    steps:
+    - uses: actions/checkout@v6
+    - uses: astral-sh/setup-uv@v7
+      with:
+        python-version: "3.14"
+        enable-cache: true
+        github-token: ${{ secrets.GITHUB_TOKEN }}
+    - uses: j178/prek-action@v1
+      env:
+        SKIP: no-commit-to-branch,pytest-testmon,lychee
+      with:
+        extra-args: '--all-files'
 
   quality:
     needs: changes
     if: ${{ github.event_name == 'push' || needs.changes.outputs.src == 'true' }}
-    strategy:
-      matrix:
-        os:
-        - blacksmith-4vcpu-ubuntu-2404
-        - macos-latest
-        - blacksmith-4vcpu-windows-2025
-        python-version:
-        - "3.14"
-    runs-on: ${{ matrix.os }}
+    runs-on: blacksmith-4vcpu-ubuntu-2404
 
     steps:
     - name: Checkout
@@ -85,7 +92,7 @@ jobs:
     - name: Setup uv and Python
       uses: astral-sh/setup-uv@v7
       with:
-        python-version: ${{ matrix.python-version }}
+        python-version: "3.14"
         enable-cache: true
         cache-dependency-glob: pyproject.toml
         github-token: ${{ secrets.GITHUB_TOKEN }}
@@ -99,12 +106,8 @@ jobs:
         echo '<html><body>No coverage report yet</body></html>' > htmlcov/index.html
         uv run poe docs-build
 
-    - name: Check the code quality
-      run: uv run poe check
-
     - name: Store objects inventory for tests
       uses: actions/upload-artifact@v6
-      if: ${{ matrix.os == 'blacksmith-4vcpu-ubuntu-2404' && matrix.python-version == '3.14' }}
       with:
         name: objects.inv
         path: site/objects.inv
@@ -112,6 +115,7 @@ jobs:
   tests:
 
     needs:
+    - prek
     - quality
     strategy:
       matrix:
@@ -170,7 +174,7 @@ jobs:
 
   ci-pass:
     if: always()
-    needs: [links, quality, tests]
+    needs: [links, prek, quality, tests]
     runs-on: ubuntu-latest
     steps:
     - name: Check all jobs passed
