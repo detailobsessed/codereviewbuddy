@@ -10,7 +10,7 @@ Copy these into your `README.md` to show project status:
 ```markdown
 [![ci](https://github.com/detailobsessed/codereviewbuddy/workflows/ci/badge.svg)](https://github.com/detailobsessed/codereviewbuddy/actions?query=workflow%3Aci)
 [![release](https://github.com/detailobsessed/codereviewbuddy/workflows/release/badge.svg)](https://github.com/detailobsessed/codereviewbuddy/actions?query=workflow%3Arelease)
-[![documentation](https://img.shields.io/badge/docs-mkdocs-708FCC.svg?style=flat)](https://detailobsessed.github.io/codereviewbuddy/)
+[![documentation](https://img.shields.io/badge/docs-zensical-708FCC.svg?style=flat)](https://detailobsessed.github.io/codereviewbuddy/)
 [![pypi version](https://img.shields.io/pypi/v/codereviewbuddy.svg)](https://pypi.org/project/codereviewbuddy/)
 [![Python 3.14+](https://img.shields.io/badge/python-3.14+-blue.svg)](https://www.python.org/downloads/)
 [![codecov](https://codecov.io/gh/detailobsessed/codereviewbuddy/branch/main/graph/badge.svg)](https://codecov.io/gh/detailobsessed/codereviewbuddy)
@@ -35,8 +35,10 @@ This project was generated with [copier-uv-bleeding](https://github.com/detailob
 To pull the latest template changes (smart 3-way merge that respects your project changes):
 
 ```bash
-copier update --trust .
+poe update-template
 ```
+
+This runs `copier update --trust . --skip-answered --defaults` followed by `uv sync --upgrade` and `prek autoupdate` to keep dependencies and hooks current.
 
 To re-apply the template from scratch (ignores your project diff):
 
