@@ -19,6 +19,8 @@ import time
 from pathlib import Path
 from typing import Any
 
+_PID = os.getpid()
+
 logger = logging.getLogger(__name__)
 
 IO_TAP_ENV = "CODEREVIEWBUDDY_IO_TAP"
@@ -82,6 +84,11 @@ def _extract_jsonrpc_info(text: str) -> dict[str, str | int]:
     if isinstance(error_obj, dict) and isinstance(error_obj.get("code"), int):
         info["rpc_error_code"] = error_obj["code"]
 
+    if payload.get("method") == "tools/call":
+        params = payload.get("params")
+        if isinstance(params, dict) and isinstance(params.get("name"), str):
+            info["tool_name"] = params["name"]
+
     return info
 
 
@@ -115,6 +122,7 @@ def _log_entry(
             "direction": direction,
             "bytes": len(data),
             "line": text[:500],
+            "pid": _PID,
             "tracking_tag": ISSUE_65_TRACKING_TAG,
         }
         entry.update(_extract_jsonrpc_info(text))
