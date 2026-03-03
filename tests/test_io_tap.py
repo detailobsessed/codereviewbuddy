@@ -68,6 +68,20 @@ class TestExtractJsonrpcInfo:
         info = _extract_jsonrpc_info("not-json")
         assert info["rpc_envelope"] == "parse_error"
 
+    def test_extracts_tool_name_from_tools_call(self):
+        info = _extract_jsonrpc_info(
+            '{"jsonrpc":"2.0","id":41,"method":"tools/call","params":{"name":"summarize_review_status","arguments":{}}}'
+        )
+        assert info["tool_name"] == "summarize_review_status"
+
+    def test_no_tool_name_for_other_methods(self):
+        info = _extract_jsonrpc_info('{"jsonrpc":"2.0","id":1,"method":"roots/list"}')
+        assert "tool_name" not in info
+
+    def test_no_tool_name_when_params_missing(self):
+        info = _extract_jsonrpc_info('{"jsonrpc":"2.0","id":1,"method":"tools/call"}')
+        assert "tool_name" not in info
+
 
 class TestLogEntry:
     def test_writes_jsonl_entry(self, tmp_path: Path):
@@ -84,6 +98,24 @@ class TestLogEntry:
         assert "mono" in entry
         assert entry["phase"] == "data"
         assert entry["tracking_tag"] == ISSUE_65_TRACKING_TAG
+
+    def test_includes_pid(self, tmp_path: Path):
+        import os
+
+        log_file = tmp_path / "tap.jsonl"
+        _log_entry(log_file, "stdin", b'{"jsonrpc":"2.0"}')
+        entry = json.loads(log_file.read_text(encoding="utf-8"))
+        assert entry["pid"] == os.getpid()
+
+    def test_logs_tool_name_for_tools_call(self, tmp_path: Path):
+        log_file = tmp_path / "tap.jsonl"
+        _log_entry(
+            log_file,
+            "stdin",
+            b'{"jsonrpc":"2.0","id":41,"method":"tools/call","params":{"name":"resolve_comment","arguments":{}}}',
+        )
+        entry = json.loads(log_file.read_text(encoding="utf-8"))
+        assert entry["tool_name"] == "resolve_comment"
 
     def test_phase_and_extra(self, tmp_path: Path):
         log_file = tmp_path / "tap.jsonl"
