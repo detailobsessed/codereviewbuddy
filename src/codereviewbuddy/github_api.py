@@ -232,7 +232,7 @@ async def graphql(query: str, variables: dict[str, Any] | None = None) -> dict[s
         key = cache.make_key("graphql", query, variables)
         cached = cache.get(key)
         if cached is not cache._SENTINEL:
-            return cached  # type: ignore[return-value]
+            return cached
 
     headers = await _get_headers()
     payload: dict[str, Any] = {"query": query}
@@ -281,7 +281,7 @@ async def graphql(query: str, variables: dict[str, Any] | None = None) -> dict[s
     if is_mutation:
         cache.clear()
     else:
-        cache.put(key, result)  # type: ignore[possibly-undefined]
+        cache.put(key, result)
 
     return result
 
@@ -334,7 +334,7 @@ async def rest(
         result = await _single_rest(url, method, headers, **kwargs)
 
     if is_read:
-        cache.put(key, result)  # type: ignore[possibly-undefined]
+        cache.put(key, result)
     else:
         cache.clear()
 

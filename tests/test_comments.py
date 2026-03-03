@@ -397,6 +397,17 @@ class TestResolveComment:
         result = await resolve_comment(42, "PRRT_test")
         assert "Resolved" in result
 
+    async def test_resolve_inline_thread_without_pr_number(self, mocker: MockerFixture):
+        """PRRT_ resolve works without pr_number — regression for workspace detection bug."""
+        response = {"data": {"resolveReviewThread": {"thread": {"id": "PRRT_kwDOtest123", "isResolved": True}}}}
+        mocker.patch("codereviewbuddy.tools.comments._fetch_thread_detail", new=AsyncMock(return_value=("", "", [])))
+        mocker.patch("codereviewbuddy.tools.comments.github_api.graphql", new_callable=AsyncMock, return_value=response)
+
+        result = await resolve_comment(None, "PRRT_kwDOtest123")
+
+        assert "Resolved thread PRRT_kwDOtest123" in result
+        assert "on PR #" not in result
+
 
 def _mark_stale_thread_node():
     """Return SAMPLE_THREAD_NODE with isOutdated=True for stale tests."""
@@ -1074,10 +1085,32 @@ class TestReplyToComment:
         result = await reply_to_comment(42, "PRRT_kwDOtest123", "looks good")
 
         assert "Replied to thread PRRT_kwDOtest123" in result
+        assert "on PR #42" in result
         mock_graphql.assert_called_once()
         call_args = mock_graphql.call_args
         assert call_args.kwargs["variables"] == {"threadId": "PRRT_kwDOtest123", "body": "looks good"}
         assert "addPullRequestReviewThreadReply" in call_args.args[0]
+
+    async def test_reply_to_inline_thread_without_pr_number(self, mocker: MockerFixture):
+        """PRRT_ replies work without pr_number — regression for workspace detection bug."""
+        mock_graphql = mocker.patch(
+            "codereviewbuddy.tools.comments.github_api.graphql",
+            new_callable=AsyncMock,
+            return_value={"data": {"addPullRequestReviewThreadReply": {"comment": {"id": "C_456"}}}},
+        )
+
+        result = await reply_to_comment(None, "PRRT_kwDOtest123", "noted")
+
+        assert "Replied to thread PRRT_kwDOtest123" in result
+        assert "on PR #" not in result
+        mock_graphql.assert_called_once()
+        call_args = mock_graphql.call_args
+        assert call_args.kwargs["variables"] == {"threadId": "PRRT_kwDOtest123", "body": "noted"}
+
+    async def test_reply_to_unknown_prefix_raises(self):
+        """Unknown thread ID prefixes should raise GhError, not silently fall through."""
+        with pytest.raises(GhError, match="Unsupported thread ID prefix"):
+            await reply_to_comment(42, "XYZ_unknownthread", "hello")
 
     async def test_reply_to_pr_review(self, mocker: MockerFixture):
         """PRR_ IDs should use the issues comments API."""

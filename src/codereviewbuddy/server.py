@@ -143,6 +143,24 @@ def _resolve_pr_number(pr_number: int | None, cwd: str | None = None) -> int:
     return gh.get_current_pr_number(cwd=cwd)
 
 
+def _resolve_thread_pr_number(
+    thread_id: str,
+    pr_number: int | None,
+    cwd: str | None,
+    *,
+    has_repo: bool,
+) -> int | None:
+    """Resolve pr_number for thread-based tool operations.
+
+    PRRT_ threads use GraphQL with only thread_id — workspace/pr_number not needed.
+    All other thread types require workspace context and pr_number resolution.
+    """
+    if thread_id.startswith("PRRT_"):
+        return pr_number
+    _check_auto_detect_prerequisites(cwd, has_pr=pr_number is not None, has_repo=has_repo)
+    return _resolve_pr_number(pr_number, cwd=cwd)
+
+
 @lifespan
 async def check_gh_cli(server: FastMCP) -> AsyncIterator[dict[str, object] | None]:  # noqa: ARG001, RUF029
     """Verify gh CLI is installed and authenticated on server startup."""
@@ -440,14 +458,14 @@ async def resolve_comment(
     For PR-level reviews (PRR_), dismisses the review via dismissPullRequestReview.
 
     Args:
-        pr_number: PR number (for context). Auto-detected from current branch if omitted.
+        pr_number: PR number. Not required for inline threads (PRRT_). Auto-detected
+            from the current branch for PR-level reviews (PRR_) if omitted.
         thread_id: The GraphQL node ID (PRRT_... or PRR_...) to resolve/dismiss.
     """
     try:
         ctx = get_context()
         cwd = await _get_workspace_cwd(ctx)
-        _check_auto_detect_prerequisites(cwd, has_pr=pr_number is not None, has_repo=True)
-        pr_number = _resolve_pr_number(pr_number, cwd=cwd)
+        pr_number = _resolve_thread_pr_number(thread_id, pr_number, cwd, has_repo=True)
         return await comments.resolve_comment(pr_number, thread_id, cwd=cwd)
     except Exception as exc:
         logger.exception("resolve_comment failed for %s on PR #%s", thread_id, pr_number)
@@ -502,16 +520,17 @@ async def reply_to_comment(
     and issue comments (IC_ IDs, e.g. bot comments from codecov/netlify).
 
     Args:
-        pr_number: PR number. Auto-detected from current branch if omitted.
+        pr_number: PR number. Not required for inline threads (PRRT_). Auto-detected
+            from the current branch for PRR_ and IC_ threads if omitted.
         thread_id: The node ID (PRRT_..., PRR_..., or IC_...) to reply to.
         body: Reply text.
-        repo: Repository in "owner/repo" format. Auto-detected if not provided.
+        repo: Repository in "owner/repo" format. Not required for PRRT_ threads.
+            Auto-detected for PRR_ and IC_ threads if not provided.
     """
     try:
         ctx = get_context()
         cwd = await _get_workspace_cwd(ctx)
-        _check_auto_detect_prerequisites(cwd, has_pr=pr_number is not None, has_repo=repo is not None)
-        pr_number = _resolve_pr_number(pr_number, cwd=cwd)
+        pr_number = _resolve_thread_pr_number(thread_id, pr_number, cwd, has_repo=repo is not None)
         return await comments.reply_to_comment(pr_number, thread_id, body, repo=repo, cwd=cwd)
     except Exception as exc:
         logger.exception("reply_to_comment failed for %s on PR #%s", thread_id, pr_number)

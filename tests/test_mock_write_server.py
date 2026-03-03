@@ -14,38 +14,38 @@ from helpers import mock_write_server
 
 class TestMockWriteServerTools:
     async def test_list_review_comments(self):
-        result = await mock_write_server.list_review_comments(42)  # type: ignore[operator]
+        result = await mock_write_server.list_review_comments(42)
         data = json.loads(result)
         assert "threads" in data
 
     async def test_list_review_comments_with_params(self):
-        result = await mock_write_server.list_review_comments(42, repo="owner/repo", status="unresolved")  # type: ignore[operator]
+        result = await mock_write_server.list_review_comments(42, repo="owner/repo", status="unresolved")
         data = json.loads(result)
         assert "threads" in data
 
     async def test_resolve_stale_comments(self):
-        result = await mock_write_server.resolve_stale_comments(42)  # type: ignore[operator]
+        result = await mock_write_server.resolve_stale_comments(42)
         data = json.loads(result)
         assert data["resolved_count"] == 1
 
     async def test_resolve_stale_comments_with_repo(self):
-        result = await mock_write_server.resolve_stale_comments(42, repo="owner/repo")  # type: ignore[operator]
+        result = await mock_write_server.resolve_stale_comments(42, repo="owner/repo")
         data = json.loads(result)
         assert "resolved_thread_ids" in data
 
     def test_resolve_comment(self):
-        result = mock_write_server.resolve_comment(42, "PRRT_test1")  # type: ignore[operator]
+        result = mock_write_server.resolve_comment(42, "PRRT_test1")
         assert "PRRT_test1" in result
 
     def test_reply_to_comment(self):
-        result = mock_write_server.reply_to_comment(42, "PRRT_test1", "Fixed")  # type: ignore[operator]
+        result = mock_write_server.reply_to_comment(42, "PRRT_test1", "Fixed")
         assert "PRRT_test1" in result
 
     def test_reply_to_comment_with_repo(self):
-        result = mock_write_server.reply_to_comment(42, "PRRT_test1", "Fixed", repo="owner/repo")  # type: ignore[operator]
+        result = mock_write_server.reply_to_comment(42, "PRRT_test1", "Fixed", repo="owner/repo")
         assert "PRRT_test1" in result
 
     async def test_check_for_updates(self):
-        result = await mock_write_server.check_for_updates()  # type: ignore[operator]
+        result = await mock_write_server.check_for_updates()
         data = json.loads(result)
         assert data["update_available"] is False

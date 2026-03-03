@@ -690,7 +690,7 @@ async def _dismiss_pr_review(
 
 
 async def resolve_comment(
-    pr_number: int,
+    pr_number: int | None,
     thread_id: str,
     cwd: str | None = None,
 ) -> str:
@@ -718,6 +718,9 @@ async def resolve_comment(
         raise gh.GhError(msg)
 
     if thread_id.startswith("PRR_"):
+        if pr_number is None:
+            msg = "pr_number is required to dismiss a PR-level review (PRR_)"
+            raise ValueError(msg)
         return await _dismiss_pr_review(pr_number, thread_id, cwd=cwd)
 
     # Config enforcement: fetch thread details and check resolve_levels + reply requirement
@@ -739,10 +742,11 @@ async def resolve_comment(
     result = await github_api.graphql(_RESOLVE_THREAD_MUTATION, variables={"threadId": thread_id})
 
     thread_data = result.get("data", {}).get("resolveReviewThread", {}).get("thread", {})
+    pr_suffix = f" on PR #{pr_number}" if pr_number is not None else ""
     if thread_data.get("isResolved"):
-        return f"Resolved thread {thread_id} on PR #{pr_number}"
+        return f"Resolved thread {thread_id}{pr_suffix}"
 
-    msg = f"Failed to resolve thread {thread_id} on PR #{pr_number}"
+    msg = f"Failed to resolve thread {thread_id}{pr_suffix}"
     raise gh.GhError(msg)
 
 
@@ -847,7 +851,7 @@ async def resolve_stale_comments(  # noqa: PLR0914
 
 
 async def reply_to_comment(
-    pr_number: int,
+    pr_number: int | None,
     thread_id: str,
     body: str,
     repo: str | None = None,
@@ -870,22 +874,24 @@ async def reply_to_comment(
     Returns:
         Confirmation message.
     """
-    # PRRT_ threads use GraphQL with only the thread ID — no repo info needed
+    # PRRT_ threads use GraphQL with only the thread ID — no repo or pr_number needed
     if thread_id.startswith("PRRT_"):
         return await _reply_to_review_thread(pr_number, thread_id, body, cwd=cwd)
 
-    # IC_ and PRR_ paths need owner/repo for the issues comments API
-    if repo:
-        owner, repo_name = github_api.parse_repo(repo)
-    else:
-        owner, repo_name = await call_sync_fn_in_threadpool(gh.get_repo_info, cwd=cwd)
+    # IC_ and PRR_ paths need owner/repo + pr_number for the issues comments API
+    if thread_id.startswith(("IC_", "PRR_")):
+        if pr_number is None:
+            msg = "pr_number is required for IC_ and PRR_ thread replies"
+            raise ValueError(msg)
+        if repo:
+            owner, repo_name = github_api.parse_repo(repo)
+        else:
+            owner, repo_name = await call_sync_fn_in_threadpool(gh.get_repo_info, cwd=cwd)
+        kind = "bot comment" if thread_id.startswith("IC_") else "PR-level review"
+        return await _reply_to_pr_comment(pr_number, owner, repo_name, body, kind=kind, cwd=cwd)
 
-    if thread_id.startswith("IC_"):
-        return await _reply_to_pr_comment(pr_number, owner, repo_name, body, kind="bot comment", cwd=cwd)
-    if thread_id.startswith("PRR_"):
-        return await _reply_to_pr_comment(pr_number, owner, repo_name, body, kind="PR-level review", cwd=cwd)
-
-    return await _reply_to_review_thread(pr_number, thread_id, body, cwd=cwd)
+    msg = f"Unsupported thread ID prefix: {thread_id!r}. Expected PRRT_, IC_, or PRR_."
+    raise gh.GhError(msg)
 
 
 _REPLY_TO_THREAD_MUTATION = """
@@ -901,7 +907,7 @@ mutation($threadId: ID!, $body: String!) {
 
 
 async def _reply_to_review_thread(
-    pr_number: int,
+    pr_number: int | None,
     thread_id: str,
     body: str,
     cwd: str | None = None,  # noqa: ARG001
@@ -911,7 +917,8 @@ async def _reply_to_review_thread(
         _REPLY_TO_THREAD_MUTATION,
         variables={"threadId": thread_id, "body": body},
     )
-    return f"Replied to thread {thread_id} on PR #{pr_number}"
+    pr_suffix = f" on PR #{pr_number}" if pr_number is not None else ""
+    return f"Replied to thread {thread_id}{pr_suffix}"
 
 
 async def _reply_to_pr_comment(  # noqa: PLR0913, PLR0917
