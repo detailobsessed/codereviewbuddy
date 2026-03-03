@@ -164,6 +164,9 @@ def _resolve_thread_pr_number(
 @lifespan
 async def check_gh_cli(server: FastMCP) -> AsyncIterator[dict[str, object] | None]:  # noqa: ARG001, RUF029
     """Verify gh CLI is installed and authenticated on server startup."""
+    from codereviewbuddy._instance import _remove_pid_file, enforce_single_instance  # noqa: PLC0415
+
+    pid_file = enforce_single_instance()
     check_fastmcp_runtime()
     check_prerequisites()
     config = load_config()
@@ -173,7 +176,10 @@ async def check_gh_cli(server: FastMCP) -> AsyncIterator[dict[str, object] | Non
         heartbeat_interval_ms=config.diagnostics.heartbeat_interval_ms,
         include_args_fingerprint=config.diagnostics.include_args_fingerprint,
     )
-    yield {}
+    try:
+        yield {}
+    finally:
+        _remove_pid_file(pid_file)
 
 
 mcp = FastMCP(
