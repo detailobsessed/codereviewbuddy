@@ -18,7 +18,10 @@ import os
 import re
 import subprocess  # noqa: S404
 import time
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from collections.abc import Awaitable, Callable
 
 import httpx
 
@@ -206,6 +209,60 @@ def _parse_next_link(link_header: str) -> str | None:
 
 
 # ---------------------------------------------------------------------------
+# HTTP helpers (single-request lifecycle)
+# ---------------------------------------------------------------------------
+
+
+async def _httpx_request(
+    request_fn: Callable[[httpx.AsyncClient], Awaitable[httpx.Response]],
+    *,
+    method: str,
+    url: str,
+    timeout_msg: str,
+) -> httpx.Response:
+    """Run one httpx request with independent timeouts on the call and on aclose.
+
+    Both the request itself and the subsequent ``aclose()`` are wrapped in
+    separate ``asyncio.timeout`` guards.  This prevents a TCP half-open
+    scenario from blocking the event loop after the primary timeout fires.
+    """
+    start_ts = time.strftime("%Y-%m-%dT%H:%M:%S%z")
+    start = time.perf_counter()
+    status: int | None = None
+    timed_out = False
+    client = httpx.AsyncClient()
+    try:
+        try:
+            async with asyncio.timeout(_GITHUB_API_TIMEOUT_SECS):
+                response = await request_fn(client)
+        except TimeoutError as exc:
+            timed_out = True
+            raise GitHubError(timeout_msg) from exc
+        else:
+            status = response.status_code
+        return response
+    finally:
+        try:
+            async with asyncio.timeout(_GITHUB_API_TIMEOUT_SECS):
+                await client.aclose()
+        except TimeoutError:
+            pass
+        log_entry: dict[str, Any] = {
+            "ts": start_ts,
+            "kind": "httpx",
+            "method": method,
+            "url": url,
+            "duration_ms": round((time.perf_counter() - start) * 1000),
+            "tracking_tag": _ISSUE_65_TRACKING_TAG,
+        }
+        if timed_out:
+            log_entry["timed_out"] = True
+        elif status is not None:
+            log_entry["status_code"] = status
+        _log_httpx_call(log_entry)
+
+
+# ---------------------------------------------------------------------------
 # GraphQL
 # ---------------------------------------------------------------------------
 
@@ -240,34 +297,12 @@ async def graphql(query: str, variables: dict[str, Any] | None = None) -> dict[s
         payload["variables"] = variables
 
     logger.debug("GraphQL %s", "mutation" if is_mutation else "query")
-    start_ts = time.strftime("%Y-%m-%dT%H:%M:%S%z")
-    start = time.perf_counter()
-    status: int | None = None
-    timed_out = False
-    try:
-        async with asyncio.timeout(_GITHUB_API_TIMEOUT_SECS):
-            async with httpx.AsyncClient() as client:
-                response = await client.post(_GITHUB_GRAPHQL_URL, headers=headers, json=payload)
-    except TimeoutError as exc:
-        timed_out = True
-        msg = f"GitHub GraphQL API timed out after {_GITHUB_API_TIMEOUT_SECS:.0f}s"
-        raise GitHubError(msg) from exc
-    else:
-        status = response.status_code
-    finally:
-        log_entry = {
-            "ts": start_ts,
-            "kind": "httpx",
-            "method": "POST",
-            "url": _GITHUB_GRAPHQL_URL,
-            "duration_ms": round((time.perf_counter() - start) * 1000),
-            "tracking_tag": _ISSUE_65_TRACKING_TAG,
-        }
-        if timed_out:
-            log_entry["timed_out"] = True
-        elif status is not None:
-            log_entry["status_code"] = status
-        _log_httpx_call(log_entry)
+    response = await _httpx_request(
+        lambda client: client.post(_GITHUB_GRAPHQL_URL, headers=headers, json=payload),
+        method="POST",
+        url=_GITHUB_GRAPHQL_URL,
+        timeout_msg=f"GitHub GraphQL API timed out after {_GITHUB_API_TIMEOUT_SECS:.0f}s",
+    )
 
     _raise_for_status(response)
     result: dict[str, Any] = response.json()
@@ -347,34 +382,12 @@ async def _single_rest(url: str, method: str, headers: dict[str, str], **kwargs:
     params = dict(kwargs) if upper == "GET" and kwargs else None
     json_body = dict(kwargs) if upper != "GET" and kwargs else None
 
-    start_ts = time.strftime("%Y-%m-%dT%H:%M:%S%z")
-    start = time.perf_counter()
-    status: int | None = None
-    timed_out = False
-    try:
-        async with asyncio.timeout(_GITHUB_API_TIMEOUT_SECS):
-            async with httpx.AsyncClient() as client:
-                response = await client.request(method, url, headers=headers, params=params, json=json_body)
-    except TimeoutError as exc:
-        timed_out = True
-        msg = f"GitHub REST API timed out after {_GITHUB_API_TIMEOUT_SECS:.0f}s"
-        raise GitHubError(msg) from exc
-    else:
-        status = response.status_code
-    finally:
-        log_entry = {
-            "ts": start_ts,
-            "kind": "httpx",
-            "method": method,
-            "url": url,
-            "duration_ms": round((time.perf_counter() - start) * 1000),
-            "tracking_tag": _ISSUE_65_TRACKING_TAG,
-        }
-        if timed_out:
-            log_entry["timed_out"] = True
-        elif status is not None:
-            log_entry["status_code"] = status
-        _log_httpx_call(log_entry)
+    response = await _httpx_request(
+        lambda client: client.request(method, url, headers=headers, params=params, json=json_body),
+        method=method,
+        url=url,
+        timeout_msg=f"GitHub REST API timed out after {_GITHUB_API_TIMEOUT_SECS:.0f}s",
+    )
 
     _raise_for_status(response)
     if not response.content:
@@ -455,33 +468,11 @@ async def download_bytes(url: str) -> bytes:
         GitHubAuthError: On authentication failure.
     """
     headers = await _get_headers()
-    start_ts = time.strftime("%Y-%m-%dT%H:%M:%S%z")
-    start = time.perf_counter()
-    status: int | None = None
-    timed_out = False
-    try:
-        async with asyncio.timeout(_GITHUB_API_TIMEOUT_SECS):
-            async with httpx.AsyncClient(follow_redirects=True) as client:
-                response = await client.get(url, headers=headers)
-    except TimeoutError as exc:
-        timed_out = True
-        msg = f"GitHub download timed out after {_GITHUB_API_TIMEOUT_SECS:.0f}s"
-        raise GitHubError(msg) from exc
-    else:
-        status = response.status_code
-    finally:
-        log_entry = {
-            "ts": start_ts,
-            "kind": "httpx",
-            "method": "GET",
-            "url": url,
-            "duration_ms": round((time.perf_counter() - start) * 1000),
-            "tracking_tag": _ISSUE_65_TRACKING_TAG,
-        }
-        if timed_out:
-            log_entry["timed_out"] = True
-        elif status is not None:
-            log_entry["status_code"] = status
-        _log_httpx_call(log_entry)
+    response = await _httpx_request(
+        lambda client: client.get(url, headers=headers, follow_redirects=True),
+        method="GET",
+        url=url,
+        timeout_msg=f"GitHub download timed out after {_GITHUB_API_TIMEOUT_SECS:.0f}s",
+    )
     _raise_for_status(response)
     return response.content
