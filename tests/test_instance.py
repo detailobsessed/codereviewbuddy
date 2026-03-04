@@ -72,6 +72,12 @@ class TestTerminateExisting:
         with patch("os.kill", side_effect=PermissionError), patch("time.sleep"):
             _terminate_existing(pid_file)
 
+    def test_ignores_oserror_from_kill(self, tmp_path: Path) -> None:
+        pid_file = tmp_path / "server.pid"
+        pid_file.write_text("99999999", encoding="utf-8")
+        with patch("os.kill", side_effect=OSError(87, "The parameter is incorrect")), patch("time.sleep"):
+            _terminate_existing(pid_file)
+
     def test_ignores_invalid_pid_content(self, tmp_path: Path) -> None:
         pid_file = tmp_path / "server.pid"
         pid_file.write_text("not-a-pid", encoding="utf-8")

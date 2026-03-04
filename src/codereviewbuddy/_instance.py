@@ -67,7 +67,7 @@ def _terminate_existing(pid_file: Path) -> None:
         time.sleep(_SIGTERM_WAIT_SECS)
     except ProcessLookupError:
         logger.debug("Previous server process (pid=%d) already exited", old_pid)
-    except PermissionError:
+    except OSError:
         logger.warning(
             "Could not SIGTERM previous server process (pid=%d) — proceeding anyway; stdout corruption may occur",
             old_pid,
