@@ -11,6 +11,7 @@ import importlib
 import importlib.util
 import logging
 import os
+from pathlib import Path
 from typing import TYPE_CHECKING, Annotated, Literal
 
 from fastmcp import FastMCP
@@ -63,7 +64,7 @@ async def _get_workspace_cwd(ctx: Context | None = None) -> str | None:
     Priority:
     1. MCP roots — per-window, protocol-correct (works with multi-window setups).
     2. ``CRB_WORKSPACE`` env var — fallback for clients that don't send roots.
-    3. ``None`` — falls back to the server's process cwd.
+    3. Process cwd — only if it resolves to a git repository root.
 
     See #142, #174.
     """
@@ -98,13 +99,17 @@ async def _get_workspace_cwd(ctx: Context | None = None) -> str | None:
         logger.debug("Workspace from CRB_WORKSPACE: %s", env_ws)
         return env_ws
 
-    # 3. Process cwd (weakest — almost certainly wrong in MCP context)
-    if ctx is not None:
+    # 3. Process cwd — only if it is inside a git repository.
+    #    Windsurf sets process cwd to "/" for MCP servers, so we guard against
+    #    non-repo directories to avoid confusing gh errors downstream.
+    git_root = await asyncio.to_thread(gh._git_root_for_cwd, str(Path.cwd()))
+    if git_root:
         logger.warning(
-            "Workspace not detected (MCP roots unavailable, CRB_WORKSPACE not set). "
-            "Auto-detection of repo/branch will use the server's process directory "
-            "and may produce wrong results.",
+            "Workspace not detected (MCP roots unavailable, CRB_WORKSPACE not set). Using git root from process cwd: %s",
+            git_root,
         )
+        return git_root
+
     return None
 
 
