@@ -26,6 +26,11 @@ nav = [
   ]},
 ]
 
+[project.validation]
+omitted_files = "warn"
+absolute_links = "warn"
+unrecognized_links = "warn"
+
 [project.theme]
 custom_dir = "docs/.overrides"
 features = [
@@ -116,11 +121,6 @@ summary = true
 
 [project.plugins.mkdocstrings.handlers.python.options.docstring_options]
 ignore_init_summary = true
-
-[project.validation]
-omitted_files = "warn"
-absolute_links = "warn"
-unrecognized_links = "warn"
 
 [project.plugins.llmstxt]
 full_output = "llms-full.txt"
