@@ -88,7 +88,7 @@ class TestMain:
 
 
 class TestGetWorkspaceCwd:
-    """Tests for _get_workspace_cwd — MCP roots → CRB_WORKSPACE → None cascade (#142)."""
+    """Tests for _get_workspace_cwd — MCP roots → CRB_WORKSPACE → process cwd cascade (#142, #174)."""
 
     async def test_roots_take_priority_over_env_var(self, monkeypatch: pytest.MonkeyPatch, mocker: MockerFixture):
         from unittest.mock import AsyncMock
@@ -131,18 +131,20 @@ class TestGetWorkspaceCwd:
 
         assert await _get_workspace_cwd(ctx) == "/from/env"
 
-    async def test_returns_none_without_context_or_env(self, monkeypatch: pytest.MonkeyPatch):
+    async def test_falls_back_to_git_root_without_context_or_env(self, monkeypatch: pytest.MonkeyPatch, mocker: MockerFixture):
         monkeypatch.delenv("CRB_WORKSPACE", raising=False)
-        assert await _get_workspace_cwd(None) is None
+        mocker.patch("codereviewbuddy.server.gh._git_root_for_cwd", return_value="/git/root")
+        assert await _get_workspace_cwd(None) == "/git/root"
 
-    async def test_returns_none_when_roots_empty_no_env(self, monkeypatch: pytest.MonkeyPatch, mocker: MockerFixture):
+    async def test_falls_back_to_git_root_when_roots_empty_no_env(self, monkeypatch: pytest.MonkeyPatch, mocker: MockerFixture):
         from unittest.mock import AsyncMock
 
         monkeypatch.delenv("CRB_WORKSPACE", raising=False)
+        mocker.patch("codereviewbuddy.server.gh._git_root_for_cwd", return_value="/git/root")
         ctx = mocker.MagicMock()
         ctx.list_roots = AsyncMock(return_value=[])
 
-        assert await _get_workspace_cwd(ctx) is None
+        assert await _get_workspace_cwd(ctx) == "/git/root"
 
     async def test_env_var_fallback_on_roots_exception(self, monkeypatch: pytest.MonkeyPatch, mocker: MockerFixture):
         from unittest.mock import AsyncMock
@@ -153,25 +155,32 @@ class TestGetWorkspaceCwd:
 
         assert await _get_workspace_cwd(ctx) == "/from/env"
 
-    async def test_returns_none_on_roots_exception_no_env(self, monkeypatch: pytest.MonkeyPatch, mocker: MockerFixture):
+    async def test_falls_back_to_git_root_on_roots_exception_no_env(self, monkeypatch: pytest.MonkeyPatch, mocker: MockerFixture):
         from unittest.mock import AsyncMock
 
         monkeypatch.delenv("CRB_WORKSPACE", raising=False)
+        mocker.patch("codereviewbuddy.server.gh._git_root_for_cwd", return_value="/git/root")
         ctx = mocker.MagicMock()
         ctx.list_roots = AsyncMock(side_effect=Exception("roots not supported"))
 
-        assert await _get_workspace_cwd(ctx) is None
+        assert await _get_workspace_cwd(ctx) == "/git/root"
 
-    async def test_unsupported_scheme_falls_through(self, monkeypatch: pytest.MonkeyPatch, mocker: MockerFixture):
+    async def test_unsupported_scheme_falls_through_to_git_root(self, monkeypatch: pytest.MonkeyPatch, mocker: MockerFixture):
         from unittest.mock import AsyncMock
 
         monkeypatch.delenv("CRB_WORKSPACE", raising=False)
+        mocker.patch("codereviewbuddy.server.gh._git_root_for_cwd", return_value="/git/root")
         root = mocker.MagicMock()
         root.uri = "https://example.com/repo"
         ctx = mocker.MagicMock()
         ctx.list_roots = AsyncMock(return_value=[root])
 
-        assert await _get_workspace_cwd(ctx) is None
+        assert await _get_workspace_cwd(ctx) == "/git/root"
+
+    async def test_returns_none_when_not_in_git_repo(self, monkeypatch: pytest.MonkeyPatch, mocker: MockerFixture):
+        monkeypatch.delenv("CRB_WORKSPACE", raising=False)
+        mocker.patch("codereviewbuddy.server.gh._git_root_for_cwd", return_value=None)
+        assert await _get_workspace_cwd(None) is None
 
 
 class TestCheckAutoDetectPrerequisites:

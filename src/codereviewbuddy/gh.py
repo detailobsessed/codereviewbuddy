@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import logging
+import shutil
 import subprocess  # noqa: S404
 import time
 from pathlib import Path
@@ -24,6 +25,26 @@ _GH_ROTATE_EVERY_WRITES = 100
 _gh_log_state: dict[str, int] = {"write_count": 0}
 # Unique sentinel to grep/remove all temporary diagnostics once issue #65 is resolved.
 _ISSUE_65_TRACKING_TAG = "CRB-ISSUE-65-TRACKING"
+
+
+def _git_root_for_cwd(cwd: str) -> str | None:
+    """Return the git repository root for ``cwd``, or ``None`` if not inside a repo."""
+    git = shutil.which("git")
+    if not git:
+        return None
+    try:
+        result = subprocess.run(  # noqa: S603
+            [git, "rev-parse", "--show-toplevel"],
+            cwd=cwd,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if result.returncode == 0:
+            return result.stdout.strip()
+    except Exception as exc:
+        logger.debug("git rev-parse failed in %s: %s", cwd, exc)
+    return None
 
 
 def _truncate_gh_log_if_needed() -> None:
