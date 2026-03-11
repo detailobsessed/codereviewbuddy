@@ -23,8 +23,6 @@ from fastmcp.server.middleware.middleware import CallNext, Middleware, Middlewar
 logger = logging.getLogger(__name__)
 
 WRITE_TOOLS = frozenset({
-    "resolve_comment",
-    "resolve_stale_comments",
     "reply_to_comment",
     "create_issue_from_comment",
 })

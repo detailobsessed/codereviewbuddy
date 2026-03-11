@@ -7,9 +7,7 @@
 [![Python 3.14+](https://img.shields.io/badge/python-3.14+-blue.svg)](https://www.python.org/downloads/)
 [![FastMCP v3](https://img.shields.io/badge/FastMCP-v3-blue.svg)](https://github.com/jlowin/fastmcp)
 
-An MCP server that helps your AI coding agent interact with AI code reviewers — smoothly.
-
-Manages review comments from **Unblocked**, **Devin**, **CodeRabbit**, and **Greptile** on GitHub PRs with staleness detection, batch resolution, re-review triggering, and issue tracking.
+An MCP server that helps your AI coding agent manage PR review comments from any AI reviewer that uses GitHub's PR review infrastructure.
 
 ## Features
 
@@ -17,10 +15,7 @@ Manages review comments from **Unblocked**, **Devin**, **CodeRabbit**, and **Gre
 
 - **List review comments** — inline threads, PR-level reviews, and bot comments (codecov, netlify, vercel, etc.) with reviewer identification and staleness detection
 - **Stacked PR support** — `list_stack_review_comments` fetches comments across an entire PR stack in one call
-- **Resolve comments** — individually or bulk-resolve stale ones (files changed since the review)
-- **Smart skip logic** — `resolve_stale_comments` skips reviewers that auto-resolve their own comments (Devin, CodeRabbit), only batch-resolving threads from reviewers that don't (Unblocked)
 - **Reply to anything** — inline review threads (`PRRT_`), PR-level reviews (`PRR_`), and bot issue comments (`IC_`) all routed to the correct GitHub API
-- **Request re-reviews** — per-reviewer logic handles differences automatically (manual trigger for Unblocked, auto for Devin/CodeRabbit)
 
 ### Triage & CI diagnosis
 
@@ -131,9 +126,6 @@ If you prefer manual setup, add the following to your MCP client's config JSON:
         // All CRB_* env vars are optional — zero-config works out of the box.
         // See Configuration section below for the full list.
 
-        // Per-reviewer overrides (JSON string — omit to use adapter defaults)
-        // "CRB_REVIEWERS": "{\"devin\": {\"enabled\": false}}",
-
         // Self-improvement: agents file issues when they hit server gaps
         // "CRB_SELF_IMPROVEMENT__ENABLED": "true",
         // "CRB_SELF_IMPROVEMENT__REPO": "your-org/codereviewbuddy",
@@ -191,8 +183,6 @@ If your MCP client reports `No module named 'fastmcp.server.tasks.routing'`, the
 | `triage_review_comments` | query | Only actionable threads, pre-classified with severity and suggested actions |
 | `list_review_comments` | query | All review threads with reviewer ID, status, staleness, and auto-discovered stack |
 | `list_stack_review_comments` | query | Comments for multiple PRs in one call, grouped by PR number |
-| `resolve_comment` | command | Resolve a single inline thread by GraphQL node ID (`PRRT_...`) |
-| `resolve_stale_comments` | command | Bulk-resolve threads on files modified since the review |
 | `reply_to_comment` | command | Reply to inline threads (`PRRT_`), PR-level reviews (`PRR_`), or bot comments (`IC_`) |
 | `create_issue_from_comment` | command | Create a GitHub issue from a review comment with labels and PR backlink |
 | `diagnose_ci` | query | Diagnose CI failures — finds the failed run, jobs, steps, and error lines in one call |
@@ -209,7 +199,6 @@ codereviewbuddy works **zero-config** with sensible defaults. All configuration 
 
 | Env var | Type | Default | Description |
 | ------- | ---- | ------- | ----------- |
-| `CRB_REVIEWERS` | JSON | `{}` | Per-reviewer overrides as a JSON string (see [below](#per-reviewer-overrides)) |
 | `CRB_PR_DESCRIPTIONS__ENABLED` | bool | `true` | Whether `review_pr_descriptions` tool is available |
 | `CRB_SELF_IMPROVEMENT__ENABLED` | bool | `false` | Agents file issues when they encounter server gaps |
 | `CRB_SELF_IMPROVEMENT__REPO` | string | `""` | Repository to file issues against (e.g. `owner/repo`) |
@@ -220,9 +209,7 @@ codereviewbuddy works **zero-config** with sensible defaults. All configuration 
 
 ### Severity levels
 
-Each reviewer adapter classifies comments using its own format. Currently only Devin has a known severity format (emoji markers). Unblocked and CodeRabbit comments default to `info` until their formats are investigated.
-
-**Devin's emoji markers:**
+Severity is classified from emoji markers in comment bodies:
 
 | Emoji | Level | Meaning |
 | ----- | ----- | ------- |
@@ -232,59 +219,15 @@ Each reviewer adapter classifies comments using its own format. Currently only D
 | 📝 | `info` | Informational, no action required |
 | *(none)* | `info` | Default when no marker is present |
 
-Reviewers without a known format classify all comments as `info`. This means `resolve_levels = ["info"]` would allow resolving all their threads, while `resolve_levels = []` blocks everything.
-
-### Per-reviewer overrides
-
-Each adapter defines sensible defaults. To override, set `CRB_REVIEWERS` as a JSON string:
-
-```jsonc
-"CRB_REVIEWERS": "{\"devin\": {\"enabled\": false}, \"greptile\": {\"resolve_levels\": [\"info\", \"warning\"]}}"
-```
-
-Available fields per reviewer:
-
-| Field | Type | Default | Description |
-| ----- | ---- | ------- | ----------- |
-| `enabled` | bool | `true` | Whether this reviewer's threads appear in results |
-| `auto_resolve_stale` | bool | varies | Whether `resolve_stale_comments` touches this reviewer's threads |
-| `resolve_levels` | list | varies | Severity levels allowed to be resolved (`info`, `warning`, `flagged`, `bug`) |
-| `require_reply_before_resolve` | bool | `true` | Block resolve unless someone replied explaining the fix |
-
-**Adapter defaults** (used when no override is set):
-
-| Reviewer | `auto_resolve_stale` | `resolve_levels` |
-| -------- | ------------------- | ---------------- |
-| Unblocked | `true` | all |
-| Devin | `false` | `["info"]` |
-| CodeRabbit | `false` | `[]` (none) |
-| Greptile | `true` | all |
-
-### Resolve enforcement
-
-The `resolve_levels` config is **enforced server-side**. If an agent tries to resolve a thread whose severity exceeds the allowed levels, the server returns an error. This prevents agents from resolving critical review comments regardless of their instructions.
-
-For example, with the default config, resolving a 🔴 bug from Devin is blocked — only 📝 info threads can be resolved.
-
-## Reviewer behavior
-
-| Reviewer | Auto-reviews on push | Auto-resolves comments | Re-review trigger |
-| -------- | ------------------- | -------------------- | ----------------- |
-| **Unblocked** | No | No | `gh pr comment <N> --body "@unblocked please re-review"` |
-| **Devin** | Yes | Yes | Auto on push (no action needed) |
-| **CodeRabbit** | Yes | Yes | Auto on push (no action needed) |
-| **Greptile** | No (not on force push) | No | `gh pr comment <N> --body "@greptileai review"` |
-
 ## Typical workflow
 
 ```
 1. summarize_review_status()                     # Stack-wide overview — start here
 2. triage_review_comments(pr_numbers=[42, 43])   # Only actionable threads with suggested actions
-3. resolve_stale_comments(pr_number=42)          # Batch-resolve changed files
-4. # Fix bugs flagged by triage, then:
-5. reply_to_comment(42, thread_id, "Fixed in ...")  # Reply explaining the fix
-6. create_issue_from_comment(thread_id, "Improve X")  # Track followups as issues
-7. diagnose_ci(pr_number=42)                     # If CI fails, diagnose in one call
+3. # Fix bugs flagged by triage, then:
+4. reply_to_comment(42, thread_id, "Fixed in ...")  # Reply explaining the fix
+5. create_issue_from_comment(thread_id, "Improve X")  # Track followups as issues
+6. diagnose_ci(pr_number=42)                     # If CI fails, diagnose in one call
 ```
 
 Each tool response includes `next_steps` hints guiding the agent to the right follow-up call. For stacked PRs, all query tools auto-discover the stack when `pr_numbers` is omitted.
@@ -319,9 +262,8 @@ poe prek          # run all pre-commit hooks
 The server is built on [FastMCP v3](https://github.com/jlowin/fastmcp) with a clean separation:
 
 - **`server.py`** — FastMCP server with tool registration, middleware, instructions, and recovery-guided error handling
-- **`config.py`** — Per-reviewer configuration (`CRB_*` env vars via pydantic-settings, severity classifier, resolve policy)
+- **`config.py`** — Configuration (`CRB_*` env vars via pydantic-settings)
 - **`tools/`** — Tool implementations (`comments.py`, `stack.py`, `ci.py`, `descriptions.py`, `issues.py`)
-- **`reviewers/`** — Pluggable reviewer adapters with behavior flags (auto-resolve, re-review triggers)
 - **`gh.py`** — Thin wrapper around the `gh` CLI for GraphQL and REST calls
 - **`models.py`** — Pydantic models for typed tool outputs with `next_steps` and `message` fields for agent guidance
 

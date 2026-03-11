@@ -13,18 +13,30 @@ if TYPE_CHECKING:
 from codereviewbuddy.gh import GhError
 from codereviewbuddy.github_api import GitHubError
 from codereviewbuddy.tools.comments import (
-    _build_reviewer_statuses,
+    _check_graphql_errors,
     _get_pr_issue_comments,
     _get_pr_reviews,
-    _latest_push_time_from_commits,
     _parse_threads,
     _strip_comment_body,
     list_review_comments,
     list_stack_review_comments,
     reply_to_comment,
-    resolve_comment,
-    resolve_stale_comments,
 )
+
+# ---------------------------------------------------------------------------
+# GraphQL error checking
+# ---------------------------------------------------------------------------
+
+
+class TestCheckGraphqlErrors:
+    def test_no_errors_passes(self):
+        _check_graphql_errors({"data": {"node": {}}}, "test")
+
+    def test_raises_on_errors(self):
+        result = {"errors": [{"message": "Not found"}]}
+        with pytest.raises(GhError, match="Not found"):
+            _check_graphql_errors(result, "fetching threads")
+
 
 # ---------------------------------------------------------------------------
 # Fixture data
@@ -33,11 +45,10 @@ from codereviewbuddy.tools.comments import (
 SAMPLE_THREAD_NODE = {
     "id": "PRRT_kwDOtest123",
     "isResolved": False,
-    "isOutdated": False,
     "comments": {
         "nodes": [
             {
-                "author": {"login": "unblocked[bot]"},
+                "author": {"login": "ai-reviewer-a[bot]"},
                 "body": "Consider adding error handling here.",
                 "createdAt": "2026-02-06T10:00:00Z",
                 "path": "src/codereviewbuddy/gh.py",
@@ -50,11 +61,10 @@ SAMPLE_THREAD_NODE = {
 SAMPLE_RESOLVED_THREAD = {
     "id": "PRRT_kwDOresolved",
     "isResolved": True,
-    "isOutdated": False,
     "comments": {
         "nodes": [
             {
-                "author": {"login": "devin-ai-integration[bot]"},
+                "author": {"login": "ai-reviewer-b[bot]"},
                 "body": "Looks good now.",
                 "createdAt": "2026-02-06T11:00:00Z",
                 "path": "main.py",
@@ -87,7 +97,7 @@ SAMPLE_GRAPHQL_RESPONSE = {
 
 class TestStripCommentBody:
     def test_removes_html_comments(self):
-        body = "Before <!-- devin-review-badge-begin --><img src='badge.svg'><!-- devin-review-badge-end --> After"
+        body = "Before <!-- ai-reviewer-badge-begin --><img src='badge.svg'><!-- ai-reviewer-badge-end --> After"
         result = _strip_comment_body(body)
         assert "badge" not in result
         assert "Before" in result
@@ -134,19 +144,9 @@ class TestParseThreads:
         assert t.status == "unresolved"
         assert t.file == "src/codereviewbuddy/gh.py"
         assert t.line == 42
-        assert t.reviewer == "unblocked"
+        assert t.reviewer == "ai-reviewer-a[bot]"
         assert len(t.comments) == 1
-        assert t.comments[0].author == "unblocked[bot]"
-
-    def test_maps_is_outdated_to_is_stale(self):
-        """_parse_threads maps GraphQL isOutdated to is_stale."""
-        outdated_node = {**SAMPLE_THREAD_NODE, "isOutdated": True}
-        threads = _parse_threads([outdated_node], pr_number=42)
-        assert threads[0].is_stale is True
-
-    def test_not_outdated_maps_to_not_stale(self):
-        threads = _parse_threads([SAMPLE_THREAD_NODE], pr_number=42)
-        assert threads[0].is_stale is False
+        assert t.comments[0].author == "ai-reviewer-a[bot]"
 
     def test_empty_comments_skipped(self):
         node = {"id": "PRRT_empty", "isResolved": False, "comments": {"nodes": []}}
@@ -156,7 +156,7 @@ class TestParseThreads:
     def test_resolved_status(self):
         threads = _parse_threads([SAMPLE_RESOLVED_THREAD], pr_number=42)
         assert threads[0].status == "resolved"
-        assert threads[0].reviewer == "devin"
+        assert threads[0].reviewer == "ai-reviewer-b[bot]"
 
     def test_null_author_does_not_crash(self):
         """Regression: author=null (ghost/deleted user) must not raise AttributeError."""
@@ -180,41 +180,6 @@ class TestParseThreads:
         assert threads[0].comments[0].author == "unknown"
 
 
-class TestGetPrCommits:
-    """Tests for _get_pr_commits — pagination regression (#95)."""
-
-    async def test_passes_paginate_flag(self, mocker: MockerFixture):
-        """_get_pr_commits must use paginate=True so PRs with >100 commits work."""
-        from codereviewbuddy.tools.comments import _get_pr_commits
-
-        mock_rest = mocker.patch("codereviewbuddy.tools.comments.github_api.rest", new_callable=AsyncMock, return_value=[{"sha": "abc"}])
-        result = await _get_pr_commits("owner", "repo", 42)
-        assert result == [{"sha": "abc"}]
-        mock_rest.assert_called_once_with(
-            "/repos/owner/repo/pulls/42/commits?per_page=100",
-            paginate=True,
-        )
-
-    async def test_returns_empty_list_on_none(self, mocker: MockerFixture):
-        """github_api.rest returning None should be normalised to an empty list."""
-        from codereviewbuddy.tools.comments import _get_pr_commits
-
-        mocker.patch("codereviewbuddy.tools.comments.github_api.rest", new_callable=AsyncMock, return_value=None)
-        assert await _get_pr_commits("owner", "repo", 42) == []
-
-
-SAMPLE_COMMITS_RESPONSE = [
-    {
-        "sha": "abc123",
-        "commit": {
-            "committer": {
-                "date": "2026-02-06T12:00:00Z",
-            }
-        },
-    },
-]
-
-
 class TestListReviewComments:
     @pytest.fixture(autouse=True)
     def _mock_gh(self, mocker: MockerFixture):
@@ -225,7 +190,6 @@ class TestListReviewComments:
             side_effect=[
                 [],  # _get_pr_reviews
                 [],  # _get_pr_issue_comments
-                SAMPLE_COMMITS_RESPONSE,  # _get_pr_commits
             ],
         )
         mocker.patch("codereviewbuddy.tools.comments.gh.get_repo_info", return_value=("owner", "repo"))
@@ -250,7 +214,7 @@ class TestListReviewComments:
         mocker.patch(
             "codereviewbuddy.tools.comments.github_api.rest",
             new_callable=AsyncMock,
-            side_effect=[[], [], SAMPLE_COMMITS_RESPONSE],
+            side_effect=[[], []],
         )
         summary = await list_review_comments(42, repo="myorg/myrepo")
         assert len(summary.threads) == 2
@@ -261,7 +225,7 @@ class TestListReviewComments:
         mocker.patch(
             "codereviewbuddy.tools.comments.github_api.rest",
             new_callable=AsyncMock,
-            side_effect=[[], [], SAMPLE_COMMITS_RESPONSE],
+            side_effect=[[], []],
         )
         mocker.patch("codereviewbuddy.tools.comments.gh.get_repo_info", return_value=("owner", "repo"))
         mocker.patch("codereviewbuddy.tools.stack._fetch_open_prs", side_effect=RuntimeError("network error"))
@@ -269,25 +233,6 @@ class TestListReviewComments:
         summary = await list_review_comments(42)
         assert len(summary.threads) == 2  # threads preserved despite stack failure
         assert summary.stack == []  # stack gracefully empty
-
-    async def test_returns_reviewer_statuses(self):
-        summary = await list_review_comments(42)
-        # Should have statuses for unblocked and devin (both present in SAMPLE threads)
-        reviewer_names = {s.reviewer for s in summary.reviewer_statuses}
-        assert "unblocked" in reviewer_names
-        assert "devin" in reviewer_names
-
-    async def test_disabled_reviewer_threads_filtered(self, mocker: MockerFixture):
-        """Threads from disabled reviewers should not appear in results."""
-        from codereviewbuddy.config import Config, ReviewerConfig
-
-        custom = Config(reviewers={"devin": ReviewerConfig(enabled=False)})
-        mocker.patch("codereviewbuddy.tools.comments.get_config", return_value=custom)
-
-        summary = await list_review_comments(42)
-        reviewers_in_results = {t.reviewer for t in summary.threads}
-        assert "devin" not in reviewers_in_results
-        assert "unblocked" in reviewers_in_results
 
 
 class TestNonExistentPR:
@@ -304,7 +249,7 @@ class TestNonExistentPR:
         mocker.patch(
             "codereviewbuddy.tools.comments.github_api.rest",
             new_callable=AsyncMock,
-            side_effect=[[], [], []],
+            side_effect=[[], []],
         )
         mocker.patch("codereviewbuddy.tools.comments.gh.get_repo_info", return_value=("owner", "repo"))
         mocker.patch("codereviewbuddy.tools.stack._fetch_open_prs", return_value=[])
@@ -313,288 +258,16 @@ class TestNonExistentPR:
         assert summary.threads == []
 
 
-class TestResolveComment:
-    async def test_success(self, mocker: MockerFixture):
-        response = {"data": {"resolveReviewThread": {"thread": {"id": "PRRT_test", "isResolved": True}}}}
-        mocker.patch(
-            "codereviewbuddy.tools.comments._fetch_thread_detail",
-            new=AsyncMock(return_value=("unblocked", "some comment", ["unblocked-ai[bot]", "ichoosetoaccept"])),
-        )
-        mocker.patch("codereviewbuddy.tools.comments.github_api.graphql", new_callable=AsyncMock, return_value=response)
-        result = await resolve_comment(42, "PRRT_test")
-        assert "Resolved" in result
-
-    async def test_failure(self, mocker: MockerFixture):
-        response = {"data": {"resolveReviewThread": {"thread": {"id": "PRRT_test", "isResolved": False}}}}
-        mocker.patch(
-            "codereviewbuddy.tools.comments._fetch_thread_detail",
-            new=AsyncMock(return_value=("unblocked", "some comment", ["unblocked-ai[bot]", "ichoosetoaccept"])),
-        )
-        mocker.patch("codereviewbuddy.tools.comments.github_api.graphql", new_callable=AsyncMock, return_value=response)
-        with pytest.raises(GhError, match="Failed to resolve"):
-            await resolve_comment(42, "PRRT_test")
-
-    async def test_blocked_by_config(self, mocker: MockerFixture):
-        """Resolving a Devin bug thread should be blocked by default config."""
-        mocker.patch(
-            "codereviewbuddy.tools.comments._fetch_thread_detail",
-            new=AsyncMock(return_value=("devin", "🔴 **Bug: something is broken**", ["devin-ai-integration[bot]", "ichoosetoaccept"])),
-        )
-        with pytest.raises(GhError, match="Config blocks resolving"):
-            await resolve_comment(42, "PRRT_test")
-
-    async def test_allowed_devin_info(self, mocker: MockerFixture):
-        """Resolving a Devin info thread should be allowed by default config."""
-        response = {"data": {"resolveReviewThread": {"thread": {"id": "PRRT_test", "isResolved": True}}}}
-        mocker.patch(
-            "codereviewbuddy.tools.comments._fetch_thread_detail",
-            new=AsyncMock(return_value=("devin", "📝 **Info: something informational**", ["devin-ai-integration[bot]", "ichoosetoaccept"])),
-        )
-        mocker.patch("codereviewbuddy.tools.comments.github_api.graphql", new_callable=AsyncMock, return_value=response)
-        result = await resolve_comment(42, "PRRT_test")
-        assert "Resolved" in result
-
-    async def test_unknown_reviewer_allowed(self, mocker: MockerFixture):
-        """Unknown reviewer (empty string from lookup failure) should not block."""
-        response = {"data": {"resolveReviewThread": {"thread": {"id": "PRRT_test", "isResolved": True}}}}
-        mocker.patch("codereviewbuddy.tools.comments._fetch_thread_detail", new=AsyncMock(return_value=("", "", [])))
-        mocker.patch("codereviewbuddy.tools.comments.github_api.graphql", new_callable=AsyncMock, return_value=response)
-        result = await resolve_comment(42, "PRRT_test")
-        assert "Resolved" in result
-
-    async def test_blocked_without_reply(self, mocker: MockerFixture):
-        """Resolving should be blocked when no non-reviewer reply exists (#110)."""
-        mocker.patch(
-            "codereviewbuddy.tools.comments._fetch_thread_detail",
-            new=AsyncMock(return_value=("unblocked", "some comment", ["unblocked-ai[bot]"])),
-        )
-        with pytest.raises(GhError, match="Cannot resolve thread without a reply"):
-            await resolve_comment(42, "PRRT_test")
-
-    async def test_allowed_with_reply(self, mocker: MockerFixture):
-        """Resolving should succeed when a non-reviewer reply exists (#110)."""
-        response = {"data": {"resolveReviewThread": {"thread": {"id": "PRRT_test", "isResolved": True}}}}
-        mocker.patch(
-            "codereviewbuddy.tools.comments._fetch_thread_detail",
-            new=AsyncMock(return_value=("unblocked", "some comment", ["unblocked-ai[bot]", "ichoosetoaccept"])),
-        )
-        mocker.patch("codereviewbuddy.tools.comments.github_api.graphql", new_callable=AsyncMock, return_value=response)
-        result = await resolve_comment(42, "PRRT_test")
-        assert "Resolved" in result
-
-    async def test_reply_check_disabled_by_config(self, mocker: MockerFixture):
-        """Resolving without reply should succeed when require_reply_before_resolve=False."""
-        from codereviewbuddy.config import Config, ReviewerConfig
-
-        custom_config = Config(reviewers={"unblocked": ReviewerConfig(require_reply_before_resolve=False)})
-        mocker.patch("codereviewbuddy.tools.comments.get_config", return_value=custom_config)
-        response = {"data": {"resolveReviewThread": {"thread": {"id": "PRRT_test", "isResolved": True}}}}
-        mocker.patch(
-            "codereviewbuddy.tools.comments._fetch_thread_detail",
-            new=AsyncMock(return_value=("unblocked", "some comment", ["unblocked-ai[bot]"])),
-        )
-        mocker.patch("codereviewbuddy.tools.comments.github_api.graphql", new_callable=AsyncMock, return_value=response)
-        result = await resolve_comment(42, "PRRT_test")
-        assert "Resolved" in result
-
-    async def test_resolve_inline_thread_without_pr_number(self, mocker: MockerFixture):
-        """PRRT_ resolve works without pr_number — regression for workspace detection bug."""
-        response = {"data": {"resolveReviewThread": {"thread": {"id": "PRRT_kwDOtest123", "isResolved": True}}}}
-        mocker.patch("codereviewbuddy.tools.comments._fetch_thread_detail", new=AsyncMock(return_value=("", "", [])))
-        mocker.patch("codereviewbuddy.tools.comments.github_api.graphql", new_callable=AsyncMock, return_value=response)
-
-        result = await resolve_comment(None, "PRRT_kwDOtest123")
-
-        assert "Resolved thread PRRT_kwDOtest123" in result
-        assert "on PR #" not in result
-
-
-def _mark_stale_thread_node():
-    """Return SAMPLE_THREAD_NODE with isOutdated=True for stale tests."""
-    return {**SAMPLE_THREAD_NODE, "isOutdated": True}
-
-
-class TestResolveStaleComments:
-    @pytest.fixture(autouse=True)
-    def _mock_stack(self, mocker: MockerFixture):
-        mocker.patch("codereviewbuddy.tools.stack._fetch_open_prs", return_value=[])
-
-    async def test_resolves_stale(self, mocker: MockerFixture):
-        stale_thread = _mark_stale_thread_node()
-        stale_response = {
-            "data": {
-                "repository": {
-                    "pullRequest": {
-                        "title": "Test PR",
-                        "url": "https://github.com/owner/repo/pull/42",
-                        "reviewThreads": {
-                            "pageInfo": {"hasNextPage": False, "endCursor": None},
-                            "nodes": [stale_thread, SAMPLE_RESOLVED_THREAD],
-                        },
-                    }
-                }
-            },
-        }
-
-        graphql_responses = [
-            stale_response,  # list_review_comments → threads query
-            {"data": {"t0": {"thread": {"id": stale_thread["id"], "isResolved": True}}}},  # batch resolve
-        ]
-
-        mocker.patch(
-            "codereviewbuddy.tools.comments.github_api.graphql",
-            new_callable=AsyncMock,
-            side_effect=graphql_responses,
-        )
-        mocker.patch(
-            "codereviewbuddy.tools.comments.github_api.rest",
-            new_callable=AsyncMock,
-            side_effect=[[], [], SAMPLE_COMMITS_RESPONSE],
-        )
-        mocker.patch("codereviewbuddy.tools.comments.gh.get_repo_info", return_value=("owner", "repo"))
-
-        result = await resolve_stale_comments(42)
-        assert result.resolved_count == 1
-        assert "PRRT_kwDOtest123" in result.resolved_thread_ids
-
-    async def test_skips_auto_resolving_reviewers(self, mocker: MockerFixture):
-        """Devin/CodeRabbit threads should be skipped — they auto-resolve themselves."""
-        devin_thread = {
-            "id": "PRRT_kwDOdevin456",
-            "isResolved": False,
-            "isOutdated": True,
-            "comments": {
-                "nodes": [
-                    {
-                        "author": {"login": "devin-ai-integration[bot]"},
-                        "body": "🔴 **Bug: Consider refactoring this.**",
-                        "createdAt": "2026-02-06T10:00:00Z",
-                        "path": "src/codereviewbuddy/gh.py",
-                        "line": 10,
-                    }
-                ]
-            },
-        }
-        mixed_response = {
-            "data": {
-                "repository": {
-                    "pullRequest": {
-                        "title": "Test PR",
-                        "url": "https://github.com/owner/repo/pull/42",
-                        "reviewThreads": {
-                            "pageInfo": {"hasNextPage": False, "endCursor": None},
-                            "nodes": [_mark_stale_thread_node(), devin_thread],
-                        },
-                    }
-                }
-            },
-        }
-
-        graphql_responses = [
-            mixed_response,  # list_review_comments → threads query
-            {"data": {"t0": {"thread": {"id": "PRRT_kwDOtest123", "isResolved": True}}}},  # batch resolve (only unblocked)
-        ]
-
-        mocker.patch("codereviewbuddy.tools.comments.github_api.graphql", new_callable=AsyncMock, side_effect=graphql_responses)
-        mocker.patch(
-            "codereviewbuddy.tools.comments.github_api.rest",
-            new_callable=AsyncMock,
-            side_effect=[[], [], SAMPLE_COMMITS_RESPONSE],
-        )
-        mocker.patch("codereviewbuddy.tools.comments.gh.get_repo_info", return_value=("owner", "repo"))
-
-        result = await resolve_stale_comments(42)
-        # Only the unblocked thread should be resolved; Devin thread skipped
-        assert result.resolved_count == 1
-        assert "PRRT_kwDOtest123" in result.resolved_thread_ids
-        assert "PRRT_kwDOdevin456" not in result.resolved_thread_ids
-        assert result.skipped_count == 1
-
-    async def test_resolves_devin_info_threads(self, mocker: MockerFixture):
-        """Devin info threads (📝) should be resolved — Devin won't auto-resolve them."""
-        devin_info_thread = {
-            "id": "PRRT_kwDOdevin_info",
-            "isResolved": False,
-            "isOutdated": True,
-            "comments": {
-                "nodes": [
-                    {
-                        "author": {"login": "devin-ai-integration[bot]"},
-                        "body": "📝 **Info: This is an informational comment**\n\nSome analysis details.",
-                        "createdAt": "2026-02-06T10:00:00Z",
-                        "path": "src/codereviewbuddy/gh.py",
-                        "line": 15,
-                    }
-                ]
-            },
-        }
-        mixed_response = {
-            "data": {
-                "repository": {
-                    "pullRequest": {
-                        "title": "Test PR",
-                        "url": "https://github.com/owner/repo/pull/42",
-                        "reviewThreads": {
-                            "pageInfo": {"hasNextPage": False, "endCursor": None},
-                            "nodes": [_mark_stale_thread_node(), devin_info_thread],
-                        },
-                    }
-                }
-            },
-        }
-
-        graphql_responses = [
-            mixed_response,
-            # Both threads resolved: unblocked + devin info
-            {
-                "data": {
-                    "t0": {"thread": {"id": "PRRT_kwDOtest123", "isResolved": True}},
-                    "t1": {"thread": {"id": "PRRT_kwDOdevin_info", "isResolved": True}},
-                }
-            },
-        ]
-
-        mocker.patch("codereviewbuddy.tools.comments.github_api.graphql", new_callable=AsyncMock, side_effect=graphql_responses)
-        mocker.patch(
-            "codereviewbuddy.tools.comments.github_api.rest",
-            new_callable=AsyncMock,
-            side_effect=[[], [], SAMPLE_COMMITS_RESPONSE],
-        )
-        mocker.patch("codereviewbuddy.tools.comments.gh.get_repo_info", return_value=("owner", "repo"))
-
-        result = await resolve_stale_comments(42)
-        assert result.resolved_count == 2
-        assert "PRRT_kwDOtest123" in result.resolved_thread_ids
-        assert "PRRT_kwDOdevin_info" in result.resolved_thread_ids
-        assert result.skipped_count == 0
-
-    async def test_nothing_to_resolve(self, mocker: MockerFixture):
-        mocker.patch(
-            "codereviewbuddy.tools.comments.github_api.graphql",
-            new_callable=AsyncMock,
-            return_value=SAMPLE_GRAPHQL_RESPONSE,
-        )
-        mocker.patch(
-            "codereviewbuddy.tools.comments.github_api.rest",
-            new_callable=AsyncMock,
-            side_effect=[[], [], SAMPLE_COMMITS_RESPONSE],
-        )
-        mocker.patch("codereviewbuddy.tools.comments.gh.get_repo_info", return_value=("owner", "repo"))
-
-        result = await resolve_stale_comments(42)
-        assert result.resolved_count == 0
-
-
 class TestGetPrReviews:
     """Tests for _get_pr_reviews — PR-level review summaries from AI reviewers."""
 
-    async def test_returns_devin_review(self, mocker: MockerFixture):
+    async def test_returns_pr_level_review(self, mocker: MockerFixture):
         reviews = [
             {
-                "node_id": "PRR_devin_123",
-                "user": {"login": "devin-ai-integration[bot]"},
+                "node_id": "PRR_bot_123",
+                "user": {"login": "ai-reviewer-a[bot]"},
                 "state": "COMMENTED",
-                "body": "**Devin Review** found 2 potential issues.",
+                "body": "**AI Review** found 2 potential issues.",
                 "submitted_at": "2026-02-07T10:00:00Z",
             },
         ]
@@ -602,19 +275,20 @@ class TestGetPrReviews:
 
         result = await _get_pr_reviews("owner", "repo", 42)
         assert len(result) == 1
-        assert result[0].reviewer == "devin"
-        assert result[0].thread_id == "PRR_devin_123"
+        assert result[0].reviewer == "ai-reviewer-a[bot]"
+        assert result[0].thread_id == "PRR_bot_123"
         assert result[0].file is None
         assert result[0].line is None
         assert result[0].status == "unresolved"
         assert "2 potential issues" in result[0].comments[0].body
+
         assert result[0].is_pr_review is True
 
-    async def test_returns_unblocked_review(self, mocker: MockerFixture):
+    async def test_returns_second_pr_level_review(self, mocker: MockerFixture):
         reviews = [
             {
-                "node_id": "PRR_unblocked_456",
-                "user": {"login": "unblocked[bot]"},
+                "node_id": "PRR_bot_456",
+                "user": {"login": "ai-reviewer-b[bot]"},
                 "state": "COMMENTED",
                 "body": "2 issues found.",
                 "submitted_at": "2026-02-07T09:00:00Z",
@@ -624,9 +298,9 @@ class TestGetPrReviews:
 
         result = await _get_pr_reviews("owner", "repo", 42)
         assert len(result) == 1
-        assert result[0].reviewer == "unblocked"
+        assert result[0].reviewer == "ai-reviewer-b[bot]"
 
-    async def test_skips_unknown_reviewers(self, mocker: MockerFixture):
+    async def test_includes_all_non_empty_reviews(self, mocker: MockerFixture):
         reviews = [
             {
                 "node_id": "PRR_human",
@@ -639,13 +313,14 @@ class TestGetPrReviews:
         mocker.patch("codereviewbuddy.tools.comments.github_api.rest", new_callable=AsyncMock, return_value=reviews)
 
         result = await _get_pr_reviews("owner", "repo", 42)
-        assert result == []
+        assert len(result) == 1
+        assert result[0].reviewer == "humanuser"
 
     async def test_skips_empty_bodies(self, mocker: MockerFixture):
         reviews = [
             {
                 "node_id": "PRR_empty",
-                "user": {"login": "unblocked[bot]"},
+                "user": {"login": "ai-reviewer-a[bot]"},
                 "state": "COMMENTED",
                 "body": "",
                 "submitted_at": "2026-02-07T09:00:00Z",
@@ -660,7 +335,7 @@ class TestGetPrReviews:
         reviews = [
             {
                 "node_id": "PRR_approved",
-                "user": {"login": "devin-ai-integration[bot]"},
+                "user": {"login": "ai-reviewer-a[bot]"},
                 "state": "APPROVED",
                 "body": "No Issues Found",
                 "submitted_at": "2026-02-07T10:00:00Z",
@@ -676,7 +351,7 @@ class TestGetPrReviews:
         reviews = [
             {
                 "node_id": "PRR_changes",
-                "user": {"login": "unblocked[bot]"},
+                "user": {"login": "ai-reviewer-b[bot]"},
                 "state": "CHANGES_REQUESTED",
                 "body": "3 issues found.",
                 "submitted_at": "2026-02-07T10:00:00Z",
@@ -707,7 +382,8 @@ class TestGetPrReviews:
         mocker.patch("codereviewbuddy.tools.comments.github_api.rest", new_callable=AsyncMock, return_value=reviews)
 
         result = await _get_pr_reviews("owner", "repo", 42)
-        assert result == []
+        assert len(result) == 1
+        assert result[0].reviewer == "unknown"
 
     async def test_passes_paginate_flag(self, mocker: MockerFixture):
         """_get_pr_reviews must use paginate=True (#111)."""
@@ -733,8 +409,8 @@ class TestListIncludesPrReviews:
                 # _get_pr_reviews call
                 [
                     {
-                        "node_id": "PRR_devin",
-                        "user": {"login": "devin-ai-integration[bot]"},
+                        "node_id": "PRR_bot",
+                        "user": {"login": "ai-reviewer-a[bot]"},
                         "state": "COMMENTED",
                         "body": "2 potential issues found.",
                         "submitted_at": "2026-02-07T10:00:00Z",
@@ -742,8 +418,6 @@ class TestListIncludesPrReviews:
                 ],
                 # _get_pr_issue_comments call
                 [],
-                # _get_pr_commits call
-                SAMPLE_COMMITS_RESPONSE,
             ],
         )
 
@@ -752,7 +426,7 @@ class TestListIncludesPrReviews:
         assert len(summary.threads) == 3
         pr_reviews = [t for t in summary.threads if t.file is None]
         assert len(pr_reviews) == 1
-        assert pr_reviews[0].reviewer == "devin"
+        assert pr_reviews[0].reviewer == "ai-reviewer-a[bot]"
 
 
 class TestThreadsPagination:
@@ -793,7 +467,7 @@ class TestThreadsPagination:
         mocker.patch(
             "codereviewbuddy.tools.comments.github_api.rest",
             new_callable=AsyncMock,
-            side_effect=[[], [], SAMPLE_COMMITS_RESPONSE],
+            side_effect=[[], []],
         )
         mocker.patch("codereviewbuddy.tools.comments.gh.get_repo_info", return_value=("owner", "repo"))
         mocker.patch("codereviewbuddy.tools.stack._fetch_open_prs", return_value=[])
@@ -829,7 +503,7 @@ class TestThreadsPagination:
         mocker.patch(
             "codereviewbuddy.tools.comments.github_api.rest",
             new_callable=AsyncMock,
-            side_effect=[[], [], SAMPLE_COMMITS_RESPONSE],
+            side_effect=[[], []],
         )
         mocker.patch("codereviewbuddy.tools.comments.gh.get_repo_info", return_value=("owner", "repo"))
         mocker.patch("codereviewbuddy.tools.stack._fetch_open_prs", return_value=[])
@@ -856,9 +530,8 @@ class TestListStackReviewComments:
             status=CommentStatus.UNRESOLVED,
             file="a.py",
             line=1,
-            reviewer="devin",
+            reviewer="ai-reviewer-a[bot]",
             comments=[],
-            is_stale=False,
         )
         thread_11 = ReviewThread(
             thread_id="PRRT_11",
@@ -866,9 +539,8 @@ class TestListStackReviewComments:
             status=CommentStatus.RESOLVED,
             file="b.py",
             line=5,
-            reviewer="coderabbit",
+            reviewer="ai-reviewer-b[bot]",
             comments=[],
-            is_stale=False,
         )
         summary_10 = ReviewSummary(threads=[thread_10])
         summary_11 = ReviewSummary(threads=[thread_11])
@@ -940,44 +612,6 @@ class TestGraphQLErrorChecks:
         result = await _fetch_raw_threads("owner", "repo", 42, cwd=None, ctx=None)
         assert len(result) == 2
 
-    async def test_fetch_thread_detail_ok_without_errors(self, mocker: MockerFixture):
-        """_fetch_thread_detail should return (reviewer, body, all_logins) on valid data."""
-        from codereviewbuddy.tools.comments import _fetch_thread_detail
-
-        mocker.patch(
-            "codereviewbuddy.tools.comments.github_api.graphql",
-            new_callable=AsyncMock,
-            return_value={
-                "data": {
-                    "node": {
-                        "comments": {
-                            "nodes": [
-                                {"author": {"login": "devin-ai-integration[bot]"}, "body": "Consider refactoring"},
-                                {"author": {"login": "ichoosetoaccept"}, "body": "Done"},
-                            ]
-                        }
-                    }
-                }
-            },
-        )
-
-        reviewer, body, logins = await _fetch_thread_detail("PRRT_valid_id")
-        assert reviewer == "devin"
-        assert body == "Consider refactoring"
-        assert logins == ["devin-ai-integration[bot]", "ichoosetoaccept"]
-
-    async def test_fetch_thread_detail_raises_on_graphql_error(self, mocker: MockerFixture):
-        """_fetch_thread_detail should propagate GitHubError from github_api.graphql."""
-        from codereviewbuddy.tools.comments import _fetch_thread_detail
-
-        mocker.patch(
-            "codereviewbuddy.tools.comments.github_api.graphql",
-            new=AsyncMock(side_effect=GitHubError("Could not resolve to a node")),
-        )
-
-        with pytest.raises(GitHubError, match="Could not resolve to a node"):
-            await _fetch_thread_detail("PRRT_bad_id")
-
 
 class TestGetPrIssueComments:
     async def test_returns_bot_comments(self, mocker: MockerFixture):
@@ -1043,16 +677,16 @@ class TestGetPrIssueComments:
         result = await _get_pr_issue_comments("owner", "repo", 42)
         assert result == []
 
-    async def test_known_reviewer_uses_reviewer_name(self, mocker: MockerFixture):
-        """Known AI reviewers should be identified by their reviewer name."""
+    async def test_reviewer_is_raw_login(self, mocker: MockerFixture):
+        """reviewer field should be the raw GitHub login."""
         mocker.patch(
             "codereviewbuddy.tools.comments.github_api.rest",
             new_callable=AsyncMock,
             return_value=[
                 {
                     "node_id": "IC_kwDOtest004",
-                    "user": {"login": "unblocked[bot]", "type": "Bot"},
-                    "body": "@unblocked please re-review",
+                    "user": {"login": "ai-reviewer-a[bot]", "type": "Bot"},
+                    "body": "please re-review",
                     "created_at": "2026-02-08T10:00:00Z",
                 },
             ],
@@ -1060,7 +694,7 @@ class TestGetPrIssueComments:
 
         result = await _get_pr_issue_comments("owner", "repo", 42)
         assert len(result) == 1
-        assert result[0].reviewer == "unblocked"
+        assert result[0].reviewer == "ai-reviewer-a[bot]"
 
     async def test_passes_paginate_flag(self, mocker: MockerFixture):
         """_get_pr_issue_comments must use paginate=True (#111)."""
@@ -1153,48 +787,6 @@ class TestReplyToComment:
             body="thanks for the coverage report",
         )
 
-    async def test_resolve_dismisses_prr_id(self, mocker: MockerFixture):
-        """resolve_comment should dismiss PRR_ IDs via dismissPullRequestReview (#120)."""
-        response = {
-            "data": {
-                "dismissPullRequestReview": {
-                    "pullRequestReview": {"id": "PRR_kwDOtest123", "state": "DISMISSED"},
-                }
-            }
-        }
-        mock_graphql = mocker.patch("codereviewbuddy.tools.comments.github_api.graphql", new_callable=AsyncMock, return_value=response)
-        result = await resolve_comment(42, "PRR_kwDOtest123")
-        assert "Dismissed" in result
-        call_kwargs = mock_graphql.call_args
-        assert call_kwargs.kwargs["variables"]["reviewId"] == "PRR_kwDOtest123"
-
-    async def test_resolve_prr_failure(self, mocker: MockerFixture):
-        """resolve_comment should raise on failed PRR_ dismiss."""
-        response = {
-            "data": {
-                "dismissPullRequestReview": {
-                    "pullRequestReview": {"id": "PRR_kwDOtest123", "state": "COMMENTED"},
-                }
-            }
-        }
-        mocker.patch("codereviewbuddy.tools.comments.github_api.graphql", new_callable=AsyncMock, return_value=response)
-        with pytest.raises(GhError, match="Failed to dismiss"):
-            await resolve_comment(42, "PRR_kwDOtest123")
-
-    async def test_resolve_prr_graphql_error_raises(self, mocker: MockerFixture):
-        """GitHubError from github_api.graphql when dismissing PRR_ should propagate."""
-        mocker.patch(
-            "codereviewbuddy.tools.comments.github_api.graphql",
-            new=AsyncMock(side_effect=GitHubError("Could not resolve to a node")),
-        )
-        with pytest.raises(GitHubError, match="Could not resolve to a node"):
-            await resolve_comment(42, "PRR_kwDOtest123")
-
-    async def test_resolve_rejects_ic_id(self):
-        """resolve_comment should reject IC_ IDs with a clear error."""
-        with pytest.raises(GhError, match="Cannot resolve bot comments"):
-            await resolve_comment(42, "IC_kwDOtest001")
-
     async def test_inline_thread_graphql_error_raises(self, mocker: MockerFixture):
         """GitHubError when replying to PRRT_ should propagate."""
         mocker.patch(
@@ -1204,169 +796,3 @@ class TestReplyToComment:
 
         with pytest.raises(GitHubError, match="Could not resolve to a node"):
             await reply_to_comment(42, "PRRT_kwDObad", "test")
-
-
-# ---------------------------------------------------------------------------
-# Reviewer status detection (#46)
-# ---------------------------------------------------------------------------
-
-
-class TestLatestPushTimeFromCommits:
-    def test_returns_last_commit_date(self):
-        result = _latest_push_time_from_commits(SAMPLE_COMMITS_RESPONSE)
-        assert result is not None
-        assert result.year == 2026
-        assert result.month == 2
-        assert result.day == 6
-        assert result.hour == 12
-
-    def test_returns_none_for_empty_list(self):
-        result = _latest_push_time_from_commits([])
-        assert result is None
-
-
-class TestBuildReviewerStatuses:
-    def test_completed_when_review_after_push(self):
-        from datetime import UTC, datetime
-
-        from codereviewbuddy.models import CommentStatus, ReviewComment, ReviewThread
-
-        threads = [
-            ReviewThread(
-                thread_id="PRRT_1",
-                pr_number=42,
-                status=CommentStatus.UNRESOLVED,
-                reviewer="unblocked",
-                comments=[
-                    ReviewComment(
-                        author="unblocked[bot]",
-                        body="issue",
-                        created_at=datetime(2026, 2, 6, 14, 0, tzinfo=UTC),
-                    ),
-                ],
-            ),
-        ]
-        push_at = datetime(2026, 2, 6, 12, 0, tzinfo=UTC)
-
-        statuses = _build_reviewer_statuses(threads, push_at)
-        assert len(statuses) == 1
-        assert statuses[0].reviewer == "unblocked"
-        assert statuses[0].status == "completed"
-
-    def test_pending_when_push_after_review(self):
-        from datetime import UTC, datetime
-
-        from codereviewbuddy.models import CommentStatus, ReviewComment, ReviewThread
-
-        threads = [
-            ReviewThread(
-                thread_id="PRRT_1",
-                pr_number=42,
-                status=CommentStatus.UNRESOLVED,
-                reviewer="devin",
-                comments=[
-                    ReviewComment(
-                        author="devin-ai-integration[bot]",
-                        body="issue",
-                        created_at=datetime(2026, 2, 6, 10, 0, tzinfo=UTC),
-                    ),
-                ],
-            ),
-        ]
-        push_at = datetime(2026, 2, 6, 12, 0, tzinfo=UTC)
-
-        statuses = _build_reviewer_statuses(threads, push_at)
-        assert len(statuses) == 1
-        assert statuses[0].reviewer == "devin"
-        assert statuses[0].status == "pending"
-
-    def test_skips_unknown_reviewers(self):
-        from datetime import UTC, datetime
-
-        from codereviewbuddy.models import CommentStatus, ReviewComment, ReviewThread
-
-        threads = [
-            ReviewThread(
-                thread_id="IC_1",
-                pr_number=42,
-                status=CommentStatus.UNRESOLVED,
-                reviewer="codecov[bot]",
-                comments=[
-                    ReviewComment(
-                        author="codecov[bot]",
-                        body="coverage report",
-                        created_at=datetime(2026, 2, 6, 10, 0, tzinfo=UTC),
-                    ),
-                ],
-            ),
-        ]
-        push_at = datetime(2026, 2, 6, 12, 0, tzinfo=UTC)
-
-        statuses = _build_reviewer_statuses(threads, push_at)
-        assert statuses == []
-
-    def test_ignores_human_replies_in_ai_threads(self):
-        """Human replies in AI threads should not inflate last_review_at."""
-        from datetime import UTC, datetime
-
-        from codereviewbuddy.models import CommentStatus, ReviewComment, ReviewThread
-
-        threads = [
-            ReviewThread(
-                thread_id="PRRT_1",
-                pr_number=42,
-                status=CommentStatus.UNRESOLVED,
-                reviewer="unblocked",
-                comments=[
-                    ReviewComment(
-                        author="unblocked[bot]",
-                        body="issue found",
-                        created_at=datetime(2026, 2, 6, 10, 0, tzinfo=UTC),
-                    ),
-                    ReviewComment(
-                        author="humandev",
-                        body="Fixed in abc123",
-                        created_at=datetime(2026, 2, 6, 16, 0, tzinfo=UTC),
-                    ),
-                ],
-            ),
-        ]
-        push_at = datetime(2026, 2, 6, 12, 0, tzinfo=UTC)
-
-        statuses = _build_reviewer_statuses(threads, push_at)
-        assert len(statuses) == 1
-        assert statuses[0].reviewer == "unblocked"
-        # Should be pending: the bot's comment (10:00) is before push (12:00).
-        # The human reply (16:00) should NOT count as a reviewer comment.
-        assert statuses[0].status == "pending"
-
-    def test_empty_threads_returns_empty(self):
-        from datetime import UTC, datetime
-
-        statuses = _build_reviewer_statuses([], datetime(2026, 2, 6, 12, 0, tzinfo=UTC))
-        assert statuses == []
-
-    def test_no_push_time_assumes_completed(self):
-        from datetime import UTC, datetime
-
-        from codereviewbuddy.models import CommentStatus, ReviewComment, ReviewThread
-
-        threads = [
-            ReviewThread(
-                thread_id="PRRT_1",
-                pr_number=42,
-                status=CommentStatus.UNRESOLVED,
-                reviewer="unblocked",
-                comments=[
-                    ReviewComment(
-                        author="unblocked[bot]",
-                        body="issue",
-                        created_at=datetime(2026, 2, 6, 10, 0, tzinfo=UTC),
-                    ),
-                ],
-            ),
-        ]
-
-        statuses = _build_reviewer_statuses(threads, None)
-        assert len(statuses) == 1
-        assert statuses[0].status == "completed"

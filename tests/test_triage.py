@@ -26,12 +26,11 @@ from codereviewbuddy.tools.comments import (
 def _thread(
     thread_id: str = "PRRT_1",
     pr_number: int = 42,
-    reviewer: str = "devin",
+    reviewer: str = "ai-reviewer-a[bot]",
     body: str = "🔴 **Bug: Something is broken**\n\nDetails here.",
-    author: str = "devin-ai-integration[bot]",
+    author: str = "ai-reviewer-a[bot]",
     file: str = "src/main.py",
     line: int = 10,
-    is_stale: bool = False,
     is_pr_review: bool = False,
     extra_comments: list[ReviewComment] | None = None,
 ) -> ReviewThread:
@@ -52,7 +51,6 @@ def _thread(
         line=line,
         reviewer=reviewer,
         comments=comments,
-        is_stale=is_stale,
         is_pr_review=is_pr_review,
     )
 
@@ -63,10 +61,10 @@ def _thread(
 
 
 class TestExtractTitle:
-    def test_devin_bug_format(self):
+    def test_bug_format(self):
         assert _extract_title("🔴 **Bug: Missing pagination**\nDetails") == "Missing pagination"
 
-    def test_devin_info_format(self):
+    def test_info_format(self):
         assert _extract_title("📝 **Info: Consider refactoring**") == "Consider refactoring"
 
     def test_plain_bold(self):
@@ -311,11 +309,3 @@ class TestTriageReviewComments:
 
         result = await triage_review_comments([42], repo="o/r")
         assert len(result.items[0].snippet) == 200
-
-    async def test_stale_flag_preserved(self, mocker: MockerFixture):
-        """is_stale from the underlying thread should be passed through."""
-        stale = _thread(is_stale=True, body="📝 **Info: Old comment**")
-        self._mock_list(mocker, [stale])
-
-        result = await triage_review_comments([42], repo="o/r")
-        assert result.items[0].is_stale is True

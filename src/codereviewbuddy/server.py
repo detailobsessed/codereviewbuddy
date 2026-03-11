@@ -32,7 +32,6 @@ from codereviewbuddy.models import (
     ConfigInfo,
     CreateIssueResult,
     PRDescriptionReviewResult,
-    ResolveStaleResult,
     ReviewSummary,
     StackActivityResult,
     StackReviewStatusResult,
@@ -191,8 +190,8 @@ mcp = FastMCP(
     "codereviewbuddy",
     lifespan=check_gh_cli,
     instructions="""\
-AI code review buddy — fetch, resolve, and manage PR review comments
-across Unblocked, Devin, CodeRabbit, and Greptile with staleness detection.
+AI code review buddy — fetch, triage, and manage PR review comments
+from any AI reviewer that uses GitHub's PR review infrastructure.
 
 ## Stack discovery
 
@@ -214,72 +213,20 @@ Follow this exact sequence when reviewing or responding to AI review comments:
    warnings, then info. Never process in file order — severity order matters.
 4. **Fix** — for each `action: "fix"` item (🔴 bug, 🚩 flagged), implement the fix.
 5. **Reply** — call `reply_to_comment` for every bug and flagged thread you fixed,
-   explaining what you changed and the commit hash. **Never silently resolve bug (🔴)
-   or flagged (🚩) threads** — always reply first.
-6. **Resolve stale** — `resolve_stale_comments` to batch-resolve threads on changed files.
-7. **File issues** — for `action: "create_issue"` items, call `create_issue_from_comment`.
-8. **Re-review** — after pushing fixes, trigger re-reviews for manual-trigger reviewers
-   (see "Re-review triggers" section below).
-9. **Verify** — `summarize_review_status()` again to confirm all bugs are addressed.
+   explaining what you changed and the commit hash. **Never silently skip bug (🔴)
+   or flagged (🚩) threads** — always reply.
+6. **File issues** — for `action: "create_issue"` items, call `create_issue_from_comment`.
+7. **Verify** — `summarize_review_status()` again to confirm all bugs are addressed.
 
-For full thread details (all comments, reviewer statuses), fall back to
-`list_review_comments` for a specific PR — but prefer the triage workflow above.
+For full thread details, fall back to `list_review_comments` for a specific PR — but
+prefer the triage workflow above.
 
 ## Responding to review comments
 
 Always reply to bug (🔴) and flagged (🚩) level comments with `reply_to_comment`
 explaining what you fixed, the commit hash, and any regression test added. Do not
-silently push — reviewers need to see that their finding was acknowledged. For info
-(📝) and warning (🟡) comments, a reply is optional but appreciated when you made
-changes based on them.
-
-## Re-review triggers
-
-After pushing fixes, some reviewers need a manual trigger to start a new review.
-Post a PR comment using `gh pr comment <number> --repo <owner/repo> --body "<message>"`:
-
-| Reviewer   | Auto-reviews on push? | Trigger comment                   |
-|------------|----------------------|-----------------------------------|
-| Devin      | ✅ Yes                | —                                 |
-| CodeRabbit | ✅ Yes                | —                                 |
-| Unblocked  | ❌ No                 | `@unblocked please re-review`     |
-| Greptile   | ❌ No                 | `@greptileai review`              |
-
-Greptile does NOT re-review on force push despite documentation suggesting otherwise.
-
-## Staleness
-
-A comment is "stale" when the file it references has been modified in the latest push.
-Stale comments are safe to batch-resolve with `resolve_stale_comments` since the code
-they reviewed has changed.
-
-## Auto-resolving reviewers
-
-`resolve_stale_comments` automatically skips threads from reviewers that auto-resolve
-their own comments when they detect a fix (CodeRabbit). Only threads from reviewers
-that do NOT auto-resolve (e.g. Unblocked) are batch-resolved. The result includes a
-`skipped_count` field showing how many threads were left for the reviewer to handle.
-
-## Per-reviewer configuration
-
-Each reviewer adapter defines sensible defaults (e.g. Devin only allows resolving
-info-level threads, CodeRabbit blocks all resolution). Users can override these via
-`CRB_REVIEWERS` as a JSON string in the MCP client config env block:
-
-    "CRB_REVIEWERS": "{\"devin\": {\"enabled\": false}}"
-
-Call `show_config` to inspect the active configuration. Overridable fields per reviewer:
-
-- **`resolve_levels`**: Which severity levels you're allowed to resolve. If you try to
-  resolve a thread whose severity (🔴 bug, 🚩 flagged, 🟡 warning, 📝 info) exceeds
-  the allowed levels, the server will **block** the resolve and return an error.
-- **`auto_resolve_stale`**: Whether `resolve_stale_comments` touches this reviewer's
-  threads at all.
-- **`enabled`**: Whether this reviewer's threads appear in results.
-
-If `resolve_comment` or `resolve_stale_comments` returns a "blocked by config" error,
-do NOT retry — the config is intentional. Inform the user about the blocked thread
-and its severity level instead.
+silently push — always acknowledge findings. For info (📝) and warning (🟡) comments,
+a reply is optional but appreciated when you made changes based on them.
 
 ## Important: repo parameter
 
@@ -360,10 +307,6 @@ def _recovery_error(  # noqa: PLR0911
     if "graphql" in low:
         return f"{tool_name} failed: GitHub GraphQL error — {msg}. This may be a transient issue; retry once."
 
-    # Config-related
-    if "blocked by config" in low or "resolve_levels" in low:
-        return f"{tool_name} blocked by configuration: {msg}. Call show_config() to inspect active settings."
-
     # Generic fallback — still better than bare "Error: ..."
     parts = [f"{tool_name} failed: {msg}."]
     if pr_number:
@@ -390,14 +333,12 @@ async def list_review_comments(
 
     After fetching, always present a summary to the user:
     1. Group comments by file for readability.
-    2. Classify each by severity using the reviewer's indicators:
+    2. Classify each by severity using emoji markers:
        🔴 Bug/Critical — must fix before merge
        🚩 Flagged — likely needs a code change
        🟡 Warning — worth addressing but not blocking
        📝 Info — acknowledged, no action required
-    3. Mark stale threads (is_stale=true) — these are on files changed since
-       the review and can likely be resolved.
-    4. Show unresolved count and severity breakdown as a quick summary line.
+    3. Show unresolved count and severity breakdown as a quick summary line.
 
     Args:
         pr_number: The PR number to fetch comments for. Auto-detected from current branch if omitted.
@@ -405,7 +346,7 @@ async def list_review_comments(
         status: Filter by "resolved" or "unresolved". Returns all if not set.
 
     Returns:
-        List of review threads with thread_id, file, line, reviewer, status, is_stale, and comments.
+        List of review threads with thread_id, file, line, reviewer, status, and comments.
     """
     try:
         ctx = get_context()
@@ -433,8 +374,7 @@ async def list_stack_review_comments(
     Gives the agent a full picture of the review state before deciding what to fix.
 
     After fetching, present a per-PR summary: group by file, classify each
-    comment by severity (🔴 Bug, 🚩 Flagged, 🟡 Warning, 📝 Info), and
-    highlight stale threads that can likely be resolved.
+    comment by severity (🔴 Bug, 🚩 Flagged, 🟡 Warning, 📝 Info).
 
     Args:
         pr_numbers: List of PR numbers to fetch comments for.
@@ -456,66 +396,6 @@ async def list_stack_review_comments(
     except asyncio.CancelledError:
         logger.warning("list_stack_review_comments cancelled")
         return {pr: ReviewSummary(threads=[], error="Cancelled") for pr in pr_numbers}
-
-
-@mcp.tool(tags={"command"})
-async def resolve_comment(
-    thread_id: str,
-    pr_number: int | None = None,
-) -> str:
-    """Resolve a specific review thread by its ID.
-
-    For inline threads (PRRT_), uses the resolveReviewThread GraphQL mutation.
-    For PR-level reviews (PRR_), dismisses the review via dismissPullRequestReview.
-
-    Args:
-        pr_number: PR number. Not required for inline threads (PRRT_). Auto-detected
-            from the current branch for PR-level reviews (PRR_) if omitted.
-        thread_id: The GraphQL node ID (PRRT_... or PRR_...) to resolve/dismiss.
-    """
-    try:
-        ctx = get_context()
-        cwd = await _get_workspace_cwd(ctx)
-        pr_number = _resolve_thread_pr_number(thread_id, pr_number, cwd, has_repo=True)
-        return await comments.resolve_comment(pr_number, thread_id, cwd=cwd)
-    except Exception as exc:
-        logger.exception("resolve_comment failed for %s on PR #%s", thread_id, pr_number)
-        return _recovery_error(exc, tool_name="resolve_comment", pr_number=pr_number)
-
-
-@mcp.tool(tags={"command"})
-async def resolve_stale_comments(
-    pr_number: int | None = None,
-    repo: str | None = None,
-) -> ResolveStaleResult:
-    """Bulk-resolve all unresolved threads on files that changed since the review.
-
-    Compares each comment's file against the PR's current diff. If the file
-    has been modified, the comment is considered stale and gets resolved.
-
-    Args:
-        pr_number: PR number. Auto-detected from current branch if omitted.
-        repo: Repository in "owner/repo" format. Auto-detected if not provided.
-
-    Returns:
-        Dict with resolved_count and resolved_thread_ids.
-    """
-    try:
-        ctx = get_context()
-        cwd = await _get_workspace_cwd(ctx)
-        _check_auto_detect_prerequisites(cwd, has_pr=pr_number is not None, has_repo=repo is not None)
-        pr_number = _resolve_pr_number(pr_number, cwd=cwd)
-        return await comments.resolve_stale_comments(pr_number, repo=repo, cwd=cwd, ctx=ctx)
-    except Exception as exc:
-        logger.exception("resolve_stale_comments failed for PR #%s", pr_number)
-        return ResolveStaleResult(
-            resolved_count=0,
-            resolved_thread_ids=[],
-            error=_recovery_error(exc, tool_name="resolve_stale_comments", pr_number=pr_number, repo=repo),
-        )
-    except asyncio.CancelledError:
-        logger.warning("resolve_stale_comments cancelled for PR #%s", pr_number)
-        return ResolveStaleResult(resolved_count=0, resolved_thread_ids=[], error="Cancelled")
 
 
 @mcp.tool(tags={"command"})
@@ -638,16 +518,16 @@ async def summarize_review_status(
     using the same branch-chain walking as ``list_review_comments``.
 
     Present the result as a concise table: one row per PR with unresolved count,
-    severity breakdown (🔴 bugs, 🚩 flagged, 🟡 warnings, 📝 info), stale count,
-    and reviewer status. Highlight PRs that need immediate attention.
+    severity breakdown (🔴 bugs, 🚩 flagged, 🟡 warnings, 📝 info).
+    Highlight PRs that need immediate attention.
 
     Args:
         pr_numbers: PR numbers to summarize. Auto-discovers stack if omitted.
         repo: Repository in "owner/repo" format. Auto-detected if not provided.
 
     Returns:
-        Per-PR status with unresolved/resolved counts, severity breakdown
-        (bugs, flagged, warnings, info), staleness, and reviewer progress.
+        Per-PR status with unresolved/resolved counts and severity breakdown
+        (bugs, flagged, warnings, info).
     """
     try:
         ctx = get_context()
@@ -669,7 +549,7 @@ async def list_recent_unresolved(
 ) -> StackReviewStatusResult:
     """Scan recently merged PRs for unresolved review threads.
 
-    Reviewers like Greptile may post late comments on already-merged PRs.
+    Some bots may post late comments on already-merged PRs.
     Use this alongside ``summarize_review_status`` to catch feedback the
     current stack view misses.
 
@@ -804,21 +684,13 @@ async def diagnose_ci(
 def show_config() -> ConfigInfo:
     """Show the active codereviewbuddy configuration.
 
-    Returns the full loaded config including per-reviewer settings, resolve policies,
-    self-improvement config, and diagnostics. Configuration is loaded from CRB_*
-    environment variables at server startup.
+    Returns the full loaded config including self-improvement config and diagnostics.
+    Configuration is loaded from CRB_* environment variables at server startup.
     """
     config = get_config()
 
     # Build human-readable explanation
     parts: list[str] = []
-    reviewer_summaries = []
-    for name, rc in config.reviewers.items():
-        status = "enabled" if rc.enabled else "disabled"
-        levels = ", ".join(s.value for s in rc.resolve_levels)
-        auto_stale = "auto-resolve stale" if rc.auto_resolve_stale else "skip stale"
-        reviewer_summaries.append(f"{name}: {status}, resolve=[{levels}], {auto_stale}")
-    parts.append(f"{len(config.reviewers)} reviewer(s) configured: {'; '.join(reviewer_summaries)}.")
 
     if config.self_improvement.enabled and config.self_improvement.repo:
         parts.append(f"Self-improvement: enabled → {config.self_improvement.repo}.")
@@ -870,14 +742,9 @@ You are doing a full review pass on the current PR stack. Follow these steps in 
 5. **Create issues for followups** — for `action: "create_issue"` items:
    - Call `create_issue_from_comment` with an appropriate title and labels.
 
-6. **Resolve stale threads** — call `resolve_stale_comments` for each PR that had stale threads.
+6. **Verify descriptions** — call `review_pr_descriptions(pr_numbers)` and fix any missing elements.
 
-7. **Trigger re-reviews** — for manual-trigger reviewers, post a PR comment
-   (see "Re-review triggers" table in instructions).
-
-8. **Verify descriptions** — call `review_pr_descriptions(pr_numbers)` and fix any missing elements.
-
-9. **Final check** — call `summarize_review_status()` again to confirm all bugs are addressed.
+7. **Final check** — call `summarize_review_status()` again to confirm all bugs are addressed.
 """
 
 
@@ -900,10 +767,6 @@ Run through this checklist before considering the stack ready to merge:
 - [ ] PR descriptions are non-empty and not boilerplate (run `review_pr_descriptions`)
 - [ ] Commit messages follow conventional commits format
 
-## Review cycle
-- [ ] `resolve_stale_comments` was called for PRs with stale threads
-- [ ] Re-review triggered for manual-trigger reviewers (see instructions for trigger comments)
-
 ## Testing
 - [ ] New/changed code has test coverage
 - [ ] CI is green on all PRs in the stack
@@ -925,12 +788,9 @@ You are preparing to merge the current PR stack. Run these final checks:
 
 1. **Review status** — call `summarize_review_status()`.
    - Any unresolved bugs (🔴) or flagged (🚩) threads? → STOP, fix them first.
-   - Did you push fixes? → Trigger re-reviews for manual-trigger reviewers
-     (see "Re-review triggers" table in instructions).
-
 2. **Activity check** — call `stack_activity()`.
    - Is the stack `settled` (no activity for 10+ min after push+review)? Good.
-   - If not settled, reviewers may still be working. Consider waiting.
+   - If not settled, review bots may still be working. Consider waiting.
 
 3. **PR descriptions** — call `review_pr_descriptions(pr_numbers)`.
    - Every PR must have `Fixes #N` or `Closes #N` in the body.

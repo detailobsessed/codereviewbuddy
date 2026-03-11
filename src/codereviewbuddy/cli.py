@@ -97,7 +97,6 @@ _MASK_MIN_LENGTH = 4
 _TRUNCATE_LENGTH = 80
 
 _KNOWN_ENV_PREFIXES = frozenset({
-    "CRB_REVIEWERS",
     "CRB_PR_DESCRIPTIONS",
     "CRB_SELF_IMPROVEMENT",
     "CRB_DIAGNOSTICS",
@@ -135,18 +134,7 @@ def _print_config_summary(config: object) -> None:
     if not isinstance(config, Config):  # pragma: no cover
         return
 
-    print("  Reviewers:")
-    for name, rc in sorted(config.reviewers.items()):
-        status = "enabled" if rc.enabled else "DISABLED"
-        levels = ", ".join(s.value for s in rc.resolve_levels) or "none"
-        stale = "yes" if rc.auto_resolve_stale else "no"
-        reply = "required" if rc.require_reply_before_resolve else "not required"
-        print(f"    {name}: {status}")
-        print(f"      resolve_levels: [{levels}]")
-        print(f"      auto_resolve_stale: {stale}")
-        print(f"      reply_before_resolve: {reply}")
-
-    print(f"\n  PR descriptions: {'enabled' if config.pr_descriptions.enabled else 'DISABLED'}")
+    print(f"  PR descriptions: {'enabled' if config.pr_descriptions.enabled else 'DISABLED'}")
 
     si = config.self_improvement
     if si.enabled:

@@ -8,9 +8,8 @@ from typing import TYPE_CHECKING
 from fastmcp.utilities.async_utils import call_sync_fn_in_threadpool
 
 from codereviewbuddy import gh, github_api
-from codereviewbuddy.config import Severity, get_config
+from codereviewbuddy.config import Severity
 from codereviewbuddy.models import ActivityEvent, PRReviewStatusSummary, StackActivityResult, StackPR, StackReviewStatusResult
-from codereviewbuddy.reviewers import get_reviewer, identify_reviewer
 
 if TYPE_CHECKING:
     from typing import Any
@@ -179,7 +178,6 @@ query($owner: String!, $repo: String!, $pr: Int!, $cursor: String) {
         pageInfo { hasNextPage endCursor }
         nodes {
           isResolved
-          isOutdated
           comments(first: 1) {
             nodes {
               author { login }
@@ -196,12 +194,15 @@ query($owner: String!, $repo: String!, $pr: Int!, $cursor: String) {
 """
 
 
-def _classify_severity(reviewer_name: str, body: str) -> Severity:
-    """Classify a comment's severity using the reviewer adapter."""
-    adapter = get_reviewer(reviewer_name)
-    if adapter is None:
-        return Severity.INFO
-    return adapter.classify_severity(body)
+def _classify_severity(body: str) -> Severity:
+    """Classify comment severity using emoji markers."""
+    if "\U0001f534" in body:
+        return Severity.BUG
+    if "\U0001f6a9" in body:
+        return Severity.FLAGGED
+    if "\U0001f7e1" in body:
+        return Severity.WARNING
+    return Severity.INFO
 
 
 async def _paginate_summary_threads(
@@ -237,21 +238,17 @@ async def _paginate_summary_threads(
     return raw_threads, pr_data.get("title", ""), pr_data.get("url", "")
 
 
-def _first_comment_reviewer(node: dict[str, Any]) -> tuple[dict[str, Any], str] | None:
-    """Extract the first comment and reviewer name from a thread node.
+def _first_comment_author(node: dict[str, Any]) -> tuple[dict[str, Any], str] | None:
+    """Extract the first comment and author login from a thread node.
 
-    Returns None if the thread has no comments or the reviewer is disabled.
+    Returns None if the thread has no comments.
     """
     comments = node.get("comments", {}).get("nodes", [])
     if not comments:
         return None
     first = comments[0]
     author = (first.get("author") or {}).get("login", "unknown")
-    reviewer = identify_reviewer(author)
-    config = get_config()
-    if not config.get_reviewer(reviewer).enabled:
-        return None
-    return first, reviewer
+    return first, author
 
 
 _SEVERITY_TO_FIELD: dict[Severity, str] = {
@@ -276,31 +273,20 @@ def _count_thread_statuses(
     }
 
     for node in raw_threads:
-        parsed = _first_comment_reviewer(node)
+        parsed = _first_comment_author(node)
         if parsed is None:
             continue
-        first, reviewer = parsed
+        first, _author = parsed
 
         if node.get("isResolved", False):
             counts["resolved"] += 1
         else:
             counts["unresolved"] += 1
-            severity = _classify_severity(reviewer, first.get("body", ""))
+            severity = _classify_severity(first.get("body", ""))
             field = _SEVERITY_TO_FIELD.get(severity, "info_count")
             counts[field] += 1
 
     return counts
-
-
-def _count_stale_threads(raw_threads: list[dict[str, Any]]) -> int:
-    """Count unresolved + outdated threads from enabled reviewers."""
-    stale = 0
-    for node in raw_threads:
-        if node.get("isResolved") or not node.get("isOutdated"):
-            continue
-        if _first_comment_reviewer(node) is not None:
-            stale += 1
-    return stale
 
 
 async def _fetch_pr_summary(
@@ -312,13 +298,11 @@ async def _fetch_pr_summary(
     """Fetch lightweight review status for a single PR."""
     raw_threads, title, url = await _paginate_summary_threads(owner, repo, pr_number, cwd=cwd)
     counts = _count_thread_statuses(raw_threads)
-    stale = _count_stale_threads(raw_threads)
 
     return PRReviewStatusSummary(
         pr_number=pr_number,
         title=title,
         url=url,
-        stale=stale,
         **counts,
     )
 
@@ -341,9 +325,6 @@ def _build_status_hints(
         )
     else:
         next_steps.append(f"Call triage_review_comments(pr_numbers={pr_numbers}) to see actionable threads.")
-    total_stale = sum(s.stale for s in summaries)
-    if total_stale:
-        next_steps.append(f"{total_stale} stale thread(s) can be batch-resolved with resolve_stale_comments().")
     return next_steps
 
 
@@ -459,7 +440,7 @@ async def list_recent_unresolved(
 ) -> StackReviewStatusResult:
     """Scan recently merged PRs for unresolved review threads.
 
-    Reviewers like Greptile may post comments on already-merged PRs.
+    Some bots post comments on already-merged PRs.
     This tool surfaces those so agents don't miss late-arriving feedback.
 
     Args:

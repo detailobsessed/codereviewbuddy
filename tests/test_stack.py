@@ -139,11 +139,10 @@ SAMPLE_SUMMARY_GRAPHQL_RESPONSE = {
                     "nodes": [
                         {
                             "isResolved": False,
-                            "isOutdated": True,
                             "comments": {
                                 "nodes": [
                                     {
-                                        "author": {"login": "devin-ai-integration[bot]"},
+                                        "author": {"login": "ai-reviewer-a[bot]"},
                                         "body": "🔴 **Bug:** something broken",
                                         "path": "a.py",
                                         "createdAt": "2026-02-10T10:00:00Z",
@@ -153,11 +152,10 @@ SAMPLE_SUMMARY_GRAPHQL_RESPONSE = {
                         },
                         {
                             "isResolved": False,
-                            "isOutdated": True,
                             "comments": {
                                 "nodes": [
                                     {
-                                        "author": {"login": "devin-ai-integration[bot]"},
+                                        "author": {"login": "ai-reviewer-a[bot]"},
                                         "body": "🟡 Consider refactoring",
                                         "path": "b.py",
                                         "createdAt": "2026-02-10T10:00:00Z",
@@ -167,11 +165,10 @@ SAMPLE_SUMMARY_GRAPHQL_RESPONSE = {
                         },
                         {
                             "isResolved": True,
-                            "isOutdated": True,
                             "comments": {
                                 "nodes": [
                                     {
-                                        "author": {"login": "devin-ai-integration[bot]"},
+                                        "author": {"login": "ai-reviewer-a[bot]"},
                                         "body": "📝 Looks good",
                                         "path": "c.py",
                                         "createdAt": "2026-02-10T10:00:00Z",
@@ -188,20 +185,25 @@ SAMPLE_SUMMARY_GRAPHQL_RESPONSE = {
 
 
 class TestClassifySeverity:
-    def test_unknown_reviewer_returns_info(self):
+    def test_no_emoji_returns_info(self):
         from codereviewbuddy.config import Severity
 
-        assert _classify_severity("unknown", "anything") == Severity.INFO
+        assert _classify_severity("anything") == Severity.INFO
 
-    def test_devin_bug(self):
+    def test_red_circle_is_bug(self):
         from codereviewbuddy.config import Severity
 
-        assert _classify_severity("devin", "🔴 **Bug:** something broken") == Severity.BUG
+        assert _classify_severity("🔴 **Bug:** something broken") == Severity.BUG
 
-    def test_devin_warning(self):
+    def test_yellow_circle_is_warning(self):
         from codereviewbuddy.config import Severity
 
-        assert _classify_severity("devin", "🟡 Consider refactoring") == Severity.WARNING
+        assert _classify_severity("🟡 Consider refactoring") == Severity.WARNING
+
+    def test_flag_is_flagged(self):
+        from codereviewbuddy.config import Severity
+
+        assert _classify_severity("🚩 Potential issue") == Severity.FLAGGED
 
 
 class TestFetchPrSummary:
@@ -215,31 +217,6 @@ class TestFetchPrSummary:
         assert summary.resolved == 1
         assert summary.bugs == 1
         assert summary.warnings == 1
-
-    async def test_skips_disabled_reviewers(self, mocker: MockerFixture):
-        from codereviewbuddy.config import Config, ReviewerConfig, set_config
-
-        set_config(Config(reviewers={"devin": ReviewerConfig(enabled=False)}))
-        try:
-            mocker.patch(
-                "codereviewbuddy.tools.stack.github_api.graphql",
-                new_callable=AsyncMock,
-                return_value=SAMPLE_SUMMARY_GRAPHQL_RESPONSE,
-            )
-
-            summary = await _fetch_pr_summary("o", "r", 42)
-            assert summary.unresolved == 0
-            assert summary.resolved == 0
-        finally:
-            set_config(Config())
-
-    async def test_stale_count_excludes_resolved_threads(self, mocker: MockerFixture):
-        """Regression (#94): stale count must only include unresolved threads."""
-        mocker.patch("codereviewbuddy.tools.stack.github_api.graphql", new_callable=AsyncMock, return_value=SAMPLE_SUMMARY_GRAPHQL_RESPONSE)
-
-        summary = await _fetch_pr_summary("o", "r", 42)
-        # Sample data: all 3 threads have isOutdated=True, but only 2 are unresolved.
-        assert summary.stale == 2
 
 
 class TestSummarizeReviewStatus:

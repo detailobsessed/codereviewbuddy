@@ -11,7 +11,7 @@ if TYPE_CHECKING:
     from pytest_mock import MockerFixture
 
 from codereviewbuddy.gh import GhError
-from codereviewbuddy.tools.issues import create_issue_from_comment
+from codereviewbuddy.tools.issues import _parse_issue_number, create_issue_from_comment
 
 SAMPLE_THREAD_RESPONSE = {
     "data": {
@@ -22,7 +22,7 @@ SAMPLE_THREAD_RESPONSE = {
                         "body": "Consider refactoring this into a helper function.",
                         "path": "src/codereviewbuddy/tools/comments.py",
                         "line": 42,
-                        "author": {"login": "unblocked[bot]"},
+                        "author": {"login": "ai-reviewer-a[bot]"},
                         "url": "https://github.com/owner/repo/pull/10#discussion_r123",
                     }
                 ]
@@ -30,6 +30,20 @@ SAMPLE_THREAD_RESPONSE = {
         }
     },
 }
+
+
+class TestParseIssueNumber:
+    def test_valid_url(self):
+        assert _parse_issue_number("https://github.com/owner/repo/issues/42") == 42
+
+    def test_trailing_slash(self):
+        assert _parse_issue_number("https://github.com/owner/repo/issues/7/") == 7
+
+    def test_invalid_url_returns_zero(self):
+        assert _parse_issue_number("https://github.com/owner/repo/issues/not-a-number") == 0
+
+    def test_empty_string_returns_zero(self):
+        assert _parse_issue_number("") == 0
 
 
 class TestCreateIssueFromComment:
@@ -139,7 +153,7 @@ class TestCreateIssueFromComment:
         assert "PR #10" in body
         assert "src/codereviewbuddy/tools/comments.py" in body
         assert "line 42" in body
-        assert "unblocked[bot]" in body
+        assert "ai-reviewer-a[bot]" in body
         assert "Consider refactoring" in body
 
     async def test_comment_without_file_path(self, mocker: MockerFixture):
@@ -153,7 +167,7 @@ class TestCreateIssueFromComment:
                                 "body": "General improvement suggestion.",
                                 "path": None,
                                 "line": None,
-                                "author": {"login": "devin-ai-integration[bot]"},
+                                "author": {"login": "ai-reviewer-b[bot]"},
                                 "url": "https://github.com/owner/repo/pull/3#discussion_r789",
                             }
                         ]

@@ -260,11 +260,6 @@ class TestRecoveryError:
         assert "GraphQL error" in result
         assert "retry once" in result
 
-    def test_config_blocked(self):
-        result = _recovery_error(Exception("blocked by config: resolve_levels"), tool_name="test_tool")
-        assert "blocked by configuration" in result
-        assert "show_config()" in result
-
     def test_generic_fallback_with_pr(self):
         result = _recovery_error(Exception("something went wrong"), tool_name="test_tool", pr_number=99)
         assert "test_tool failed" in result

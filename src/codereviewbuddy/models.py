@@ -33,20 +33,9 @@ class ReviewThread(BaseModel):
     status: CommentStatus = Field(description="Whether the thread is resolved or not")
     file: str | None = Field(default=None, description="File path the comment is on")
     line: int | None = Field(default=None, description="Line number in the file")
-    reviewer: str = Field(description="Which reviewer posted this (e.g. unblocked, devin, coderabbit)")
+    reviewer: str = Field(description="GitHub login of the user or bot that posted the first comment")
     comments: list[ReviewComment] = Field(default_factory=list, description="Comments in this thread")
-    is_stale: bool = Field(default=False, description="Whether the commented lines changed since review")
     is_pr_review: bool = Field(default=False, description="True for PR-level reviews (PRR_ IDs) — not resolvable via resolveReviewThread")
-
-
-class ReviewerStatus(BaseModel):
-    """Status of a specific AI reviewer on a PR."""
-
-    reviewer: str = Field(description="Reviewer name (e.g. 'devin', 'unblocked')")
-    status: str = Field(description="'completed' (reviewed latest push) or 'pending' (push after last review)")
-    detail: str = Field(description="Human-readable explanation of the status")
-    last_review_at: datetime | None = Field(default=None, description="Timestamp of the reviewer's most recent comment/review")
-    last_push_at: datetime | None = Field(default=None, description="Timestamp of the latest commit on the PR")
 
 
 class StackPR(BaseModel):
@@ -59,10 +48,9 @@ class StackPR(BaseModel):
 
 
 class ReviewSummary(BaseModel):
-    """Review threads plus reviewer status for a PR."""
+    """Review threads plus stack info for a PR."""
 
     threads: list[ReviewThread] = Field(default_factory=list, description="All review threads on the PR")
-    reviewer_statuses: list[ReviewerStatus] = Field(default_factory=list, description="Per-reviewer status based on timestamp heuristic")
     stack: list[StackPR] = Field(default_factory=list, description="Other PRs in the same stack, discovered via branch chain")
     next_steps: list[str] = Field(default_factory=list, description="Suggested next actions based on the review state")
     message: str = Field(default="", description="Human-readable summary when results are empty or noteworthy")
@@ -81,7 +69,6 @@ class PRReviewStatusSummary(BaseModel):
     flagged: int = Field(default=0, description="Number of 🚩 flagged threads")
     warnings: int = Field(default=0, description="Number of 🟡 warning threads")
     info_count: int = Field(default=0, description="Number of 📝 info threads")
-    stale: int = Field(default=0, description="Number of unresolved stale threads (file changed after comment)")
 
 
 class StackReviewStatusResult(BaseModel):
@@ -90,17 +77,6 @@ class StackReviewStatusResult(BaseModel):
     prs: list[PRReviewStatusSummary] = Field(default_factory=list, description="Per-PR review status, bottom to top")
     total_unresolved: int = Field(default=0, description="Total unresolved threads across the stack")
     next_steps: list[str] = Field(default_factory=list, description="Suggested next actions based on the stack state")
-    error: str | None = Field(default=None, description="Error message if the request failed")
-
-
-class ResolveStaleResult(BaseModel):
-    """Result of bulk-resolving stale review threads."""
-
-    resolved_count: int = Field(description="Number of threads resolved")
-    resolved_thread_ids: list[str] = Field(default_factory=list, description="Thread IDs that were resolved")
-    skipped_count: int = Field(default=0, description="Threads skipped because the reviewer auto-resolves (e.g. Devin, CodeRabbit)")
-    blocked_count: int = Field(default=0, description="Threads blocked by resolve_levels config (severity too high)")
-    next_steps: list[str] = Field(default_factory=list, description="Suggested next actions after resolving")
     error: str | None = Field(default=None, description="Error message if the request failed")
 
 
@@ -144,10 +120,9 @@ class TriageItem(BaseModel):
     pr_number: int = Field(description="PR number this thread belongs to")
     file: str | None = Field(default=None, description="File path the comment is on")
     line: int | None = Field(default=None, description="Line number in the file")
-    reviewer: str = Field(description="Which reviewer posted this (e.g. devin, unblocked)")
+    reviewer: str = Field(description="GitHub login of the user or bot that posted this thread")
     severity: Literal["bug", "flagged", "warning", "info"] = Field(description="Classified severity: bug, flagged, warning, info")
     title: str = Field(default="", description="Short title extracted from the comment (first bold text)")
-    is_stale: bool = Field(default=False, description="Whether the commented file changed since the review")
     action: Literal["fix", "reply", "create_issue"] = Field(
         description="Suggested action: 'fix' (bug/flagged), 'reply' (info/warning), or 'create_issue' (followup without issue ref)"
     )
