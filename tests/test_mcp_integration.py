@@ -24,11 +24,10 @@ if TYPE_CHECKING:
 SAMPLE_THREAD_NODE = {
     "id": "PRRT_kwDOtest123",
     "isResolved": False,
-    "isOutdated": False,
     "comments": {
         "nodes": [
             {
-                "author": {"login": "unblocked[bot]"},
+                "author": {"login": "ai-reviewer-a[bot]"},
                 "body": "Consider adding error handling here.",
                 "createdAt": "2026-02-06T10:00:00Z",
                 "path": "src/codereviewbuddy/gh.py",
@@ -41,11 +40,10 @@ SAMPLE_THREAD_NODE = {
 SAMPLE_RESOLVED_THREAD = {
     "id": "PRRT_kwDOresolved",
     "isResolved": True,
-    "isOutdated": False,
     "comments": {
         "nodes": [
             {
-                "author": {"login": "devin-ai-integration[bot]"},
+                "author": {"login": "ai-reviewer-b[bot]"},
                 "body": "Looks good now.",
                 "createdAt": "2026-02-06T11:00:00Z",
                 "path": "main.py",
@@ -81,8 +79,6 @@ SAMPLE_COMMITS_RESPONSE = [
     },
 ]
 
-RESOLVE_SUCCESS = {"data": {"resolveReviewThread": {"thread": {"id": "PRRT_kwDOtest123", "isResolved": True}}}}
-
 REPLY_THREAD_QUERY_RESPONSE = {
     "data": {"node": {"comments": {"nodes": [{"databaseId": 12345}]}}},
 }
@@ -117,8 +113,6 @@ class TestToolRegistration:
         "list_stack_review_comments",
         "list_recent_unresolved",
         "stack_activity",
-        "resolve_comment",
-        "resolve_stale_comments",
         "reply_to_comment",
         "create_issue_from_comment",
         "review_pr_descriptions",
@@ -134,7 +128,7 @@ class TestToolRegistration:
 
     async def test_tool_count(self, client: Client):
         tools = await client.list_tools()
-        assert len(tools) == 13
+        assert len(tools) == 11
 
 
 class TestPromptRegistration:
@@ -181,32 +175,16 @@ class TestToolSchemas:
         # pr_number is optional (int | None) — not in required
         assert "pr_number" not in schema.get("required", [])
 
-    async def test_resolve_comment_schema(self, client: Client):
-        tools = await client.list_tools()
-        tool = next(t for t in tools if t.name == "resolve_comment")
-        schema = tool.inputSchema
-        assert "thread_id" in schema["properties"]
-        assert "pr_number" in schema["properties"]
-
     async def test_output_schemas_present(self, client: Client):
         """Verify that tools with typed return annotations expose output schemas."""
         tools = await client.list_tools()
         tools_by_name = {t.name: t for t in tools}
 
         # Tools returning Pydantic models should have outputSchema
-        for name in ("list_review_comments", "resolve_stale_comments"):
+        for name in ("list_review_comments",):
             tool = tools_by_name[name]
             assert tool.outputSchema is not None, f"{name} should have an outputSchema"
             assert tool.outputSchema.get("type") == "object", f"{name} outputSchema should be object type"
-
-    async def test_resolve_stale_output_schema_fields(self, client: Client):
-        """Verify resolve_stale_comments output schema contains expected fields."""
-        tools = await client.list_tools()
-        tool = next(t for t in tools if t.name == "resolve_stale_comments")
-        assert tool.outputSchema is not None
-        props = tool.outputSchema.get("properties", {})
-        assert "resolved_count" in props
-        assert "resolved_thread_ids" in props
 
 
 # ---------------------------------------------------------------------------
@@ -251,74 +229,6 @@ class TestListReviewCommentsMCP:
         assert not result.is_error
 
 
-class TestResolveCommentMCP:
-    async def test_success(self, client: Client, mocker: MockerFixture):
-        mocker.patch(
-            "codereviewbuddy.tools.comments._fetch_thread_detail",
-            return_value=("unblocked", "some comment", ["unblocked-ai[bot]", "ichoosetoaccept"]),
-        )
-        mocker.patch("codereviewbuddy.tools.comments.gh.graphql", return_value=RESOLVE_SUCCESS)
-
-        result = await client.call_tool("resolve_comment", {"pr_number": 42, "thread_id": "PRRT_kwDOtest123"})
-        assert not result.is_error
-
-    async def test_failure_returns_error_string(self, client: Client, mocker: MockerFixture):
-        fail_response = {"data": {"resolveReviewThread": {"thread": {"id": "PRRT_test", "isResolved": False}}}}
-        mocker.patch(
-            "codereviewbuddy.tools.comments._fetch_thread_detail",
-            return_value=("unblocked", "some comment", ["unblocked-ai[bot]", "ichoosetoaccept"]),
-        )
-        mocker.patch("codereviewbuddy.tools.comments.gh.graphql", return_value=fail_response)
-
-        result = await client.call_tool("resolve_comment", {"pr_number": 42, "thread_id": "PRRT_test"})
-        assert not result.is_error
-        assert "resolve_comment failed" in result.content[0].text  # type: ignore[unresolved-attribute]
-
-    async def test_blocked_by_config(self, client: Client, mocker: MockerFixture):
-        mocker.patch(
-            "codereviewbuddy.tools.comments._fetch_thread_detail",
-            return_value=("devin", "🔴 **Bug: something is broken**", ["devin-ai-integration[bot]", "ichoosetoaccept"]),
-        )
-
-        result = await client.call_tool("resolve_comment", {"pr_number": 42, "thread_id": "PRRT_test"})
-        # Config enforcement error is caught by server tool and returned as error string
-        assert not result.is_error
-        assert "Config blocks resolving" in result.content[0].text  # type: ignore[unresolved-attribute]
-
-
-class TestResolveStaleCommentsMCP:
-    async def test_resolves_stale_through_mcp(self, client: Client, mocker: MockerFixture):
-        stale_thread = {**SAMPLE_THREAD_NODE, "isOutdated": True}
-        stale_response = {
-            "data": {
-                "repository": {
-                    "pullRequest": {
-                        "title": "Test PR",
-                        "url": "https://github.com/owner/repo/pull/42",
-                        "reviewThreads": {
-                            "pageInfo": {"hasNextPage": False, "endCursor": None},
-                            "nodes": [stale_thread, SAMPLE_RESOLVED_THREAD],
-                        },
-                    }
-                }
-            },
-        }
-
-        graphql_responses = [
-            stale_response,
-            {"data": {"t0": {"thread": {"id": "PRRT_kwDOtest123", "isResolved": True}}}},
-        ]
-        mocker.patch("codereviewbuddy.tools.comments.gh.graphql", side_effect=graphql_responses)
-        mocker.patch(
-            "codereviewbuddy.tools.comments.gh.rest",
-            side_effect=[SAMPLE_COMMITS_RESPONSE, [], []],
-        )
-        mocker.patch("codereviewbuddy.tools.comments.gh.get_repo_info", return_value=("owner", "repo"))
-
-        result = await client.call_tool("resolve_stale_comments", {"pr_number": 42})
-        assert not result.is_error
-
-
 class TestReplyToCommentMCP:
     async def test_success(self, client: Client, mocker: MockerFixture):
         mocker.patch("codereviewbuddy.tools.comments.gh.graphql", return_value=REPLY_THREAD_QUERY_RESPONSE)
@@ -356,22 +266,21 @@ class TestShowConfigMCP:
         assert "config" in data
         assert "source" in data
         # Config should have the expected top-level keys
-        assert "reviewers" in data["config"]
         assert "self_improvement" in data["config"]
         assert "diagnostics" in data["config"]
 
     async def test_reflects_live_config(self, client: Client):
         """show_config returns the currently active config, not a stale snapshot."""
-        from codereviewbuddy.config import Config, ReviewerConfig, set_config
+        from codereviewbuddy.config import Config, PRDescriptionsConfig, set_config
 
-        custom = Config(reviewers={"devin": ReviewerConfig(enabled=False)})
+        custom = Config(pr_descriptions=PRDescriptionsConfig(enabled=False))
         set_config(custom)
         try:
             result = await client.call_tool("show_config", {})
             import json
 
             data = json.loads(result.content[0].text)  # type: ignore[unresolved-attribute]
-            assert data["config"]["reviewers"]["devin"]["enabled"] is False
+            assert data["config"]["pr_descriptions"]["enabled"] is False
         finally:
             set_config(Config())
 

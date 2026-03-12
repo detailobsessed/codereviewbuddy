@@ -1,7 +1,7 @@
 """Reproduce MCP server hang after rapid write tool calls (issue #65).
 
 The server becomes unresponsive after a sequence of rapid write operations
-(resolve_stale → reply → resolve → resolve). This test
+(list → reply → reply → reply). This test
 uses a mock server over stdio transport to isolate the transport-layer bug.
 
 Observability analysis (tool_calls.jsonl + io_tap.jsonl) confirmed the hang
@@ -22,13 +22,13 @@ from fastmcp.client.transports.stdio import PythonStdioTransport
 
 MOCK_SERVER = Path(__file__).parent / "helpers" / "mock_write_server.py"
 
-# The exact write sequence from issue #65 that triggers the hang in Windsurf
+# The write sequence from issue #65 that triggers the hang in Windsurf
 WRITE_SEQUENCE = [
     ("list_review_comments", {"pr_number": 42}),
-    ("resolve_stale_comments", {"pr_number": 42}),
     ("reply_to_comment", {"pr_number": 42, "thread_id": "PRRT_test1", "body": "Fixed"}),
-    ("resolve_comment", {"pr_number": 42, "thread_id": "PRRT_test1"}),
-    ("resolve_comment", {"pr_number": 42, "thread_id": "PRRT_test1"}),
+    ("reply_to_comment", {"pr_number": 42, "thread_id": "PRRT_test2", "body": "Fixed"}),
+    ("reply_to_comment", {"pr_number": 42, "thread_id": "PRRT_test3", "body": "Fixed"}),
+    ("reply_to_comment", {"pr_number": 42, "thread_id": "PRRT_test4", "body": "Fixed"}),
 ]
 
 
@@ -112,7 +112,7 @@ class TestStdioRapidWrites:
                 # Start a slow write and cancel it
                 with contextlib.suppress(TimeoutError):
                     await asyncio.wait_for(
-                        client.call_tool("resolve_stale_comments", {"pr_number": 42}),
+                        client.call_tool("reply_to_comment", {"pr_number": 42, "thread_id": "PRRT_test1", "body": "Fixed"}),
                         timeout=0.05,  # 50ms — too short, will cancel mid-flight
                     )
 

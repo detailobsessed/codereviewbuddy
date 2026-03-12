@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from pytest_mock import MockerFixture
@@ -24,14 +24,14 @@ class TestParseTimelineEvents:
             {
                 "event": "reviewed",
                 "submitted_at": "2026-02-13T10:30:00Z",
-                "user": {"login": "devin-ai-integration[bot]"},
+                "user": {"login": "ai-reviewer-a[bot]"},
                 "state": "CHANGES_REQUESTED",
             }
         ]
         events = _parse_timeline_events(raw, pr_number=42)
         assert len(events) == 1
         assert events[0].event_type == "review"
-        assert events[0].actor == "devin-ai-integration[bot]"
+        assert events[0].actor == "ai-reviewer-a[bot]"
         assert events[0].detail == "changes_requested"
         assert events[0].pr_number == 42
 
@@ -94,7 +94,7 @@ class TestParseTimelineEvents:
             {
                 "event": "reviewed",
                 "submitted_at": "2026-02-13T10:32:00Z",
-                "user": {"login": "devin"},
+                "user": {"login": "ai-reviewer-b"},
                 "state": "APPROVED",
             },
             {
@@ -120,7 +120,7 @@ def _make_timeline_events(event_type: str, minutes_ago: int, actor: str = "dev")
 
     base_time = datetime(2026, 2, 13, 11, 0, tzinfo=UTC)
     ts = base_time - timedelta(minutes=minutes_ago)
-    base = {"event": event_type, "created_at": ts.isoformat()}
+    base: dict[str, Any] = {"event": event_type, "created_at": ts.isoformat()}
     if event_type == "reviewed":
         base["submitted_at"] = ts.isoformat()
         base["user"] = {"login": actor}
@@ -145,7 +145,7 @@ class TestStackActivity:
     async def test_single_pr_events(self, mocker: MockerFixture):
         events = [
             _make_timeline_events("head_ref_force_pushed", minutes_ago=30),
-            _make_timeline_events("reviewed", minutes_ago=25, actor="devin"),
+            _make_timeline_events("reviewed", minutes_ago=25, actor="ai-reviewer-a"),
         ]
         self._mock_timeline(mocker, {42: events})
 
@@ -157,7 +157,7 @@ class TestStackActivity:
 
     async def test_multiple_prs_merged_and_sorted(self, mocker: MockerFixture):
         pr42_events = [_make_timeline_events("head_ref_force_pushed", minutes_ago=30)]
-        pr43_events = [_make_timeline_events("reviewed", minutes_ago=25, actor="devin")]
+        pr43_events = [_make_timeline_events("reviewed", minutes_ago=25, actor="ai-reviewer-a")]
         self._mock_timeline(mocker, {42: pr42_events, 43: pr43_events})
 
         result = await stack_activity(pr_numbers=[42, 43], repo="o/r")
@@ -171,7 +171,7 @@ class TestStackActivity:
         """Settled = push + review exist and >10 min since last activity."""
         events = [
             _make_timeline_events("head_ref_force_pushed", minutes_ago=30),
-            _make_timeline_events("reviewed", minutes_ago=25, actor="devin"),
+            _make_timeline_events("reviewed", minutes_ago=25, actor="ai-reviewer-a"),
         ]
         self._mock_timeline(mocker, {42: events})
 

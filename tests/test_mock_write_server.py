@@ -23,20 +23,6 @@ class TestMockWriteServerTools:
         data = json.loads(result)
         assert "threads" in data
 
-    async def test_resolve_stale_comments(self):
-        result = await mock_write_server.resolve_stale_comments(42)
-        data = json.loads(result)
-        assert data["resolved_count"] == 1
-
-    async def test_resolve_stale_comments_with_repo(self):
-        result = await mock_write_server.resolve_stale_comments(42, repo="owner/repo")
-        data = json.loads(result)
-        assert "resolved_thread_ids" in data
-
-    def test_resolve_comment(self):
-        result = mock_write_server.resolve_comment(42, "PRRT_test1")
-        assert "PRRT_test1" in result
-
     def test_reply_to_comment(self):
         result = mock_write_server.reply_to_comment(42, "PRRT_test1", "Fixed")
         assert "PRRT_test1" in result

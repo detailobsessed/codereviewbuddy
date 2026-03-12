@@ -34,8 +34,6 @@ def middleware(tmp_log_dir: Path) -> WriteOperationMiddleware:
 class TestWriteToolClassification:
     def test_write_tools_are_classified(self):
         expected = {
-            "resolve_comment",
-            "resolve_stale_comments",
             "reply_to_comment",
             "create_issue_from_comment",
         }

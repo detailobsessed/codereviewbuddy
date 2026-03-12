@@ -14,7 +14,6 @@ from codereviewbuddy.cli import (
 )
 
 _KNOWN = frozenset({
-    "CRB_REVIEWERS",
     "CRB_PR_DESCRIPTIONS",
     "CRB_SELF_IMPROVEMENT",
     "CRB_DIAGNOSTICS",
@@ -24,16 +23,16 @@ _KNOWN = frozenset({
 
 class TestIsKnownVar:
     def test_exact_match(self):
-        assert _is_known_var("CRB_REVIEWERS", _KNOWN) is True
+        assert _is_known_var("CRB_PR_DESCRIPTIONS", _KNOWN) is True
 
     def test_nested_match(self):
-        assert _is_known_var("CRB_REVIEWERS__DEVIN__ENABLED", _KNOWN) is True
+        assert _is_known_var("CRB_SELF_IMPROVEMENT__ENABLED", _KNOWN) is True
 
     def test_unknown(self):
         assert _is_known_var("CRB_TYPO", _KNOWN) is False
 
     def test_partial_prefix_not_matched(self):
-        assert _is_known_var("CRB_REVIEWER", _KNOWN) is False
+        assert _is_known_var("CRB_DIAGNOSTIC", _KNOWN) is False
 
 
 class TestMaskValue:
@@ -51,7 +50,7 @@ class TestMaskValue:
 
     def test_long_value_truncated(self):
         long_val = "x" * 100
-        result = _mask_value("CRB_REVIEWERS", long_val)
+        result = _mask_value("CRB_SELF_IMPROVEMENT", long_val)
         assert len(result) == 80
         assert result.endswith("...")
 

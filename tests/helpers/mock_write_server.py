@@ -22,22 +22,6 @@ async def list_review_comments(pr_number: int, repo: str | None = None, status: 
 
 
 @mcp.tool
-async def resolve_stale_comments(pr_number: int, repo: str | None = None) -> str:  # noqa: ARG001
-    """Simulate bulk-resolving stale comments (write operation, ~200ms of gh calls)."""
-    await asyncio.sleep(0.2)
-    return '{"resolved_count": 1, "resolved_thread_ids": ["PRRT_test1"]}'
-
-
-@mcp.tool
-def resolve_comment(pr_number: int, thread_id: str) -> str:  # noqa: ARG001
-    """Simulate resolving a single thread (sync write, ~100ms gh call)."""
-    import time
-
-    time.sleep(0.1)
-    return f"Resolved {thread_id}"
-
-
-@mcp.tool
 def reply_to_comment(pr_number: int, thread_id: str, body: str, repo: str | None = None) -> str:  # noqa: ARG001
     """Simulate replying to a thread (sync write, ~150ms of gh calls)."""
     import time

@@ -1,7 +1,7 @@
 """In-memory TTL cache for GitHub API responses.
 
 Avoids redundant API calls when multiple MCP tools fetch the same data
-within a short window (e.g. list_review_comments → resolve_stale_comments).
+within a short window (e.g. list_review_comments → triage_review_comments).
 
 - Queries are cached with a 30-second TTL
 - Mutations automatically clear the entire cache
