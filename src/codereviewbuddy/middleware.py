@@ -20,6 +20,8 @@ from typing import Any
 
 from fastmcp.server.middleware.middleware import CallNext, Middleware, MiddlewareContext
 
+from codereviewbuddy.log_rotation import _CHECK_EVERY_WRITES, rotate_if_needed
+
 logger = logging.getLogger(__name__)
 
 WRITE_TOOLS = frozenset({
@@ -32,7 +34,6 @@ RAPID_WRITE_WINDOW_SECONDS = 2.0
 
 LOG_DIR = Path.home() / ".codereviewbuddy"
 LOG_FILE = LOG_DIR / "tool_calls.jsonl"
-MAX_LOG_LINES = 1000
 # Unique sentinel to grep/remove all temporary diagnostics once issue #65 is resolved.
 ISSUE_65_TRACKING_TAG = "CRB-ISSUE-65-TRACKING"
 
@@ -95,17 +96,6 @@ class WriteOperationMiddleware(Middleware):
                 f.write(json.dumps(entry, default=str) + "\n")
         except OSError:
             logger.warning("Could not write to log file: %s", self._log_file)
-
-    def _truncate_log_if_needed(self) -> None:
-        """Keep only the last MAX_LOG_LINES entries."""
-        try:
-            if not self._log_file.exists():
-                return
-            lines = self._log_file.read_text(encoding="utf-8").splitlines()
-            if len(lines) > MAX_LOG_LINES:
-                self._log_file.write_text("\n".join(lines[-MAX_LOG_LINES:]) + "\n", encoding="utf-8")
-        except OSError:
-            pass
 
     def _check_rapid_writes(self, now: float) -> str | None:
         """Check if we're in a rapid write sequence. Returns warning message or None."""
@@ -275,5 +265,5 @@ class WriteOperationMiddleware(Middleware):
                 entry["cancelled"] = True
             self._append_log(entry)
             self._log_count += 1
-            if self._log_count % 100 == 0:
-                self._truncate_log_if_needed()
+            if self._log_count % _CHECK_EVERY_WRITES == 0:
+                rotate_if_needed(self._log_file)

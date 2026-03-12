@@ -27,6 +27,9 @@ import httpx
 
 from codereviewbuddy import cache
 from codereviewbuddy.gh import _GH_LOG_FILE, _ISSUE_65_TRACKING_TAG
+from codereviewbuddy.log_rotation import _CHECK_EVERY_WRITES, rotate_if_needed
+
+_httpx_log_write_count: int = 0
 
 logger = logging.getLogger(__name__)
 
@@ -148,10 +151,14 @@ def reset_token() -> None:
 
 def _log_httpx_call(entry: dict[str, Any]) -> None:
     """Append a JSON log entry to gh_calls.jsonl."""
+    global _httpx_log_write_count  # noqa: PLW0603
     try:
         _GH_LOG_FILE.parent.mkdir(parents=True, exist_ok=True)
         with _GH_LOG_FILE.open("a", encoding="utf-8") as f:
             f.write(json.dumps(entry, default=str) + "\n")
+        _httpx_log_write_count += 1
+        if _httpx_log_write_count % _CHECK_EVERY_WRITES == 0:
+            rotate_if_needed(_GH_LOG_FILE)
     except OSError:
         pass
 

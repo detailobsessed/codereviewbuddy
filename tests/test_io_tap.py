@@ -175,18 +175,20 @@ class TestLogEntry:
         assert entry["dir"] == "stdin"
         assert entry["direction"] == "stdin"
 
-    def test_rotation_keeps_last_entries(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    def test_rotation_triggers_on_write_count(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+        """rotate_if_needed should be called every _CHECK_EVERY_WRITES writes."""
         log_file = tmp_path / "tap.jsonl"
-        monkeypatch.setattr("codereviewbuddy.io_tap.MAX_IO_TAP_LOG_LINES", 3)
-        monkeypatch.setattr("codereviewbuddy.io_tap._ROTATE_EVERY_WRITES", 1)
-        monkeypatch.setattr("codereviewbuddy.io_tap._io_tap_log_state", {"write_count": 0})
+        monkeypatch.setattr("codereviewbuddy.io_tap._io_tap_write_count", 0)
+        monkeypatch.setattr("codereviewbuddy.io_tap._CHECK_EVERY_WRITES", 3)
 
-        for i in range(5):
+        calls: list[Path] = []
+        monkeypatch.setattr("codereviewbuddy.io_tap.rotate_if_needed", lambda p, **_kw: calls.append(p))
+
+        for i in range(6):
             _log_entry(log_file, "stdin", f"line-{i}".encode(), extra={"i": i})
 
-        lines = log_file.read_text(encoding="utf-8").splitlines()
-        assert len(lines) == 3
-        assert [json.loads(line)["i"] for line in lines] == [2, 3, 4]
+        assert len(calls) == 2  # triggered at write 3 and 6
+        assert all(c == log_file for c in calls)
 
 
 # ---------------------------------------------------------------------------
@@ -503,25 +505,22 @@ class TestInstallIoTap:
         assert sys.stdin is original_stdin
         assert sys.stdout is original_stdout
 
-    def test_install_truncates_existing_log(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
+    def test_install_calls_rotate_if_needed(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
         monkeypatch.setenv("CODEREVIEWBUDDY_IO_TAP", "1")
         log_file = tmp_path / "io_tap.jsonl"
+        log_file.write_text("existing\n", encoding="utf-8")
         monkeypatch.setattr("codereviewbuddy.io_tap.LOG_DIR", tmp_path)
         monkeypatch.setattr("codereviewbuddy.io_tap.LOG_FILE", log_file)
-        monkeypatch.setattr("codereviewbuddy.io_tap.MAX_IO_TAP_LOG_LINES", 3)
 
-        with log_file.open("w", encoding="utf-8") as f:
-            for i in range(5):
-                f.write(json.dumps({"i": i}) + "\n")
+        calls: list[Path] = []
+        monkeypatch.setattr("codereviewbuddy.io_tap.rotate_if_needed", lambda p, **_kw: calls.append(p))
 
         original_stdin = sys.stdin
         original_stdout = sys.stdout
         try:
             result = install_io_tap()
             assert result is True
-            lines = log_file.read_text(encoding="utf-8").splitlines()
-            assert len(lines) == 3
-            assert [json.loads(line)["i"] for line in lines] == [2, 3, 4]
+            assert calls == [log_file]
         finally:
             sys.stdin = original_stdin
             sys.stdout = original_stdout
