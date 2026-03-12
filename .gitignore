@@ -25,6 +25,9 @@
 /htmlcov/
 /site/
 
+# byterover (cloud sync via brv push/pull — no need to track in git)
+.brv/
+
 # cache
 .cache/
 .pytest_cache/

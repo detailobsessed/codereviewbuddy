@@ -329,7 +329,7 @@ async def list_review_comments(
     repo: str | None = None,
     status: Literal["resolved", "unresolved"] | None = None,
 ) -> ReviewSummary:
-    """List all review threads for a PR with reviewer identification and staleness.
+    """List all review threads for a PR with reviewer identification.
 
     After fetching, always present a summary to the user:
     1. Group comments by file for readability.
