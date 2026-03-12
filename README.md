@@ -13,7 +13,7 @@ An MCP server that helps your AI coding agent manage PR review comments from any
 
 ### Review comment management
 
-- **List review comments** — inline threads, PR-level reviews, and bot comments (codecov, netlify, vercel, etc.) with reviewer identification and staleness detection
+- **List review comments** — inline threads, PR-level reviews, and bot comments (codecov, netlify, vercel, etc.) with reviewer identification
 - **Stacked PR support** — `list_stack_review_comments` fetches comments across an entire PR stack in one call
 - **Reply to anything** — inline review threads (`PRRT_`), PR-level reviews (`PRR_`), and bot issue comments (`IC_`) all routed to the correct GitHub API
 
@@ -181,7 +181,7 @@ If your MCP client reports `No module named 'fastmcp.server.tasks.routing'`, the
 | ---- | ---- | ----------- |
 | `summarize_review_status` | query, discovery | Lightweight stack-wide overview with severity counts — start here |
 | `triage_review_comments` | query | Only actionable threads, pre-classified with severity and suggested actions |
-| `list_review_comments` | query | All review threads with reviewer ID, status, staleness, and auto-discovered stack |
+| `list_review_comments` | query | All review threads with reviewer ID, status, and auto-discovered stack |
 | `list_stack_review_comments` | query | Comments for multiple PRs in one call, grouped by PR number |
 | `reply_to_comment` | command | Reply to inline threads (`PRRT_`), PR-level reviews (`PRR_`), or bot comments (`IC_`) |
 | `create_issue_from_comment` | command | Create a GitHub issue from a review comment with labels and PR backlink |
