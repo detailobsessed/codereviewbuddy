@@ -39,6 +39,13 @@ def enforce_single_instance(pid_file: Path | None = None) -> Path:
         pid_file = _PID_DIR / f"server.{os.getppid()}.pid"
     pid_file.parent.mkdir(parents=True, exist_ok=True)
 
+    # Clean up stale PID files from dead processes (e.g. crashed servers)
+    from codereviewbuddy.log_rotation import cleanup_stale_pid_files  # noqa: PLC0415
+
+    removed = cleanup_stale_pid_files(pid_file.parent)
+    if removed:
+        logger.info("Cleaned up %d stale PID file(s)", removed)
+
     if pid_file.exists():
         _terminate_existing(pid_file)
 

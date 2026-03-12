@@ -19,6 +19,8 @@ import time
 from pathlib import Path
 from typing import Any
 
+from codereviewbuddy.log_rotation import _CHECK_EVERY_WRITES, rotate_if_needed
+
 _PID = os.getpid()
 
 logger = logging.getLogger(__name__)
@@ -26,28 +28,13 @@ logger = logging.getLogger(__name__)
 IO_TAP_ENV = "CODEREVIEWBUDDY_IO_TAP"
 LOG_DIR = Path.home() / ".codereviewbuddy"
 LOG_FILE = LOG_DIR / "io_tap.jsonl"
-MAX_IO_TAP_LOG_LINES = 10_000
-_ROTATE_EVERY_WRITES = 100
-_io_tap_log_state: dict[str, int] = {"write_count": 0}
+_io_tap_write_count: int = 0
 # Unique sentinel to grep/remove temporary diagnostics once issue #65 is resolved.
 ISSUE_65_TRACKING_TAG = "CRB-ISSUE-65-TRACKING"
 
 
 _JSONRPC_ID_RE = re.compile(r'"id"\s*:\s*(\d+|"[^"]*")')
 _JSONRPC_METHOD_RE = re.compile(r'"method"\s*:\s*"([^"]+)"')
-
-
-def _truncate_io_tap_log_if_needed(log_path: Path) -> None:
-    """Keep only the last N io_tap log entries."""
-    try:
-        if not log_path.exists():
-            return
-        lines = log_path.read_text(encoding="utf-8").splitlines()
-        if len(lines) <= MAX_IO_TAP_LOG_LINES:
-            return
-        log_path.write_text("\n".join(lines[-MAX_IO_TAP_LOG_LINES:]) + "\n", encoding="utf-8")
-    except OSError:
-        pass
 
 
 def _extract_jsonrpc_info(text: str) -> dict[str, str | int]:
@@ -130,9 +117,10 @@ def _log_entry(
             entry.update(extra)
         with log_path.open("a", encoding="utf-8") as f:
             f.write(json.dumps(entry) + "\n")
-        _io_tap_log_state["write_count"] += 1
-        if _io_tap_log_state["write_count"] % _ROTATE_EVERY_WRITES == 0:
-            _truncate_io_tap_log_if_needed(log_path)
+        global _io_tap_write_count  # noqa: PLW0603
+        _io_tap_write_count += 1
+        if _io_tap_write_count % _CHECK_EVERY_WRITES == 0:
+            rotate_if_needed(log_path)
     except Exception:
         logger.debug("Failed to write I/O tap entry", exc_info=True)
 
@@ -286,7 +274,7 @@ def install_io_tap() -> bool:
 
     try:
         LOG_DIR.mkdir(parents=True, exist_ok=True)
-        _truncate_io_tap_log_if_needed(LOG_FILE)
+        rotate_if_needed(LOG_FILE)
     except OSError:
         logger.warning("Failed to create I/O tap log directory: %s", LOG_DIR)
         return False

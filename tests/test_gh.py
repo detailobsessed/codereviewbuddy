@@ -9,6 +9,8 @@ from typing import TYPE_CHECKING
 import pytest
 
 if TYPE_CHECKING:
+    from pathlib import Path
+
     from pytest_mock import MockerFixture
 
 from codereviewbuddy import cache
@@ -247,22 +249,24 @@ class TestRunGhLogging:
         assert entry["error"] == "FileNotFoundError"
         assert entry["cmd"] == "auth status"
 
-    def test_log_rotation_keeps_last_entries(self, mocker: MockerFixture, tmp_path):
+    def test_log_rotation_triggers(self, mocker: MockerFixture, tmp_path: Path):
         from codereviewbuddy import gh as gh_module
 
         log_file = tmp_path / "gh_calls.jsonl"
         mocker.patch("codereviewbuddy.gh._GH_LOG_DIR", tmp_path)
         mocker.patch("codereviewbuddy.gh._GH_LOG_FILE", log_file)
-        mocker.patch("codereviewbuddy.gh._MAX_GH_LOG_LINES", 3)
-        mocker.patch("codereviewbuddy.gh._GH_ROTATE_EVERY_WRITES", 1)
-        mocker.patch("codereviewbuddy.gh._gh_log_state", {"write_count": 0})
 
-        for i in range(5):
+        rotate_mock = mocker.patch("codereviewbuddy.gh.rotate_if_needed")
+        # Reset write count so we can control the trigger
+        mocker.patch("codereviewbuddy.gh._gh_log_write_count", 0)
+
+        from codereviewbuddy.log_rotation import _CHECK_EVERY_WRITES
+
+        # Write exactly _CHECK_EVERY_WRITES entries
+        for i in range(_CHECK_EVERY_WRITES):
             gh_module._log_gh_call({"i": i})
 
-        lines = log_file.read_text(encoding="utf-8").splitlines()
-        assert len(lines) == 3
-        assert [json.loads(line)["i"] for line in lines] == [2, 3, 4]
+        rotate_mock.assert_called_once_with(log_file)
 
 
 class TestCheckAuth:

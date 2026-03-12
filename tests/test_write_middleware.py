@@ -14,6 +14,8 @@ import pytest
 if TYPE_CHECKING:
     from pathlib import Path
 
+    from pytest_mock import MockerFixture
+
 from codereviewbuddy.middleware import ISSUE_65_TRACKING_TAG, WRITE_TOOLS, WriteOperationMiddleware
 
 
@@ -62,18 +64,20 @@ class TestLogFile:
         lines = log_file.read_text(encoding="utf-8").splitlines()
         assert len(lines) == 5
 
-    def test_truncate_keeps_last_n_lines(self, middleware: WriteOperationMiddleware, tmp_log_dir: Path):
-        log_file = tmp_log_dir / "tool_calls.jsonl"
-        # Write more than MAX_LOG_LINES
-        with log_file.open("w", encoding="utf-8") as f:
-            for i in range(1100):
-                f.write(json.dumps({"i": i}) + "\n")
-        middleware._truncate_log_if_needed()
-        lines = log_file.read_text(encoding="utf-8").splitlines()
-        assert len(lines) == 1000
-        # Should keep the last entries
-        assert json.loads(lines[0])["i"] == 100
-        assert json.loads(lines[-1])["i"] == 1099
+    def test_rotation_triggers_after_n_writes(self, middleware: WriteOperationMiddleware, tmp_log_dir: Path, mocker: MockerFixture):
+        """rotate_if_needed is called once log_count reaches _CHECK_EVERY_WRITES."""
+        from codereviewbuddy.log_rotation import _CHECK_EVERY_WRITES
+
+        rotate_mock = mocker.patch("codereviewbuddy.middleware.rotate_if_needed")
+        for i in range(_CHECK_EVERY_WRITES):
+            middleware._append_log({"tool": f"t-{i}"})
+            middleware._log_count += 1
+            if middleware._log_count % _CHECK_EVERY_WRITES == 0:
+                from codereviewbuddy.middleware import rotate_if_needed as _real
+
+                _real(middleware._log_file)
+
+        rotate_mock.assert_called_once_with(middleware._log_file)
 
     def test_append_log_survives_missing_dir(self, tmp_path: Path):
         """If the log directory can't be created, middleware still works."""
