@@ -100,6 +100,7 @@ _KNOWN_ENV_PREFIXES = frozenset({
     "CRB_PR_DESCRIPTIONS",
     "CRB_SELF_IMPROVEMENT",
     "CRB_DIAGNOSTICS",
+    "CRB_OWNER_LOGINS",
     "CRB_WORKSPACE",
 })
 
@@ -151,4 +152,9 @@ def _print_config_summary(config: object) -> None:
     if diag.include_args_fingerprint:
         diag_flags.append("args_fingerprint")
     print(f"  Diagnostics: {', '.join(diag_flags) if diag_flags else 'all off'}")
+
+    if config.owner_logins:
+        print(f"  Owner logins: {', '.join(config.owner_logins)}")
+    else:
+        print("  Owner logins: not set (owner-reply filtering disabled)")
     print()

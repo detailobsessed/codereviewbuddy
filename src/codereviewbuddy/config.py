@@ -89,6 +89,10 @@ class Config(BaseModel):
         default_factory=DiagnosticsConfig,
         description="Diagnostic and debugging settings",
     )
+    owner_logins: list[str] = Field(
+        default_factory=list,
+        description="GitHub usernames considered 'ours' for triage filtering (JSON list in env, e.g. '[\"alice\",\"bob\"]')",
+    )
 
 
 def load_config() -> Config:
@@ -116,12 +120,14 @@ def load_config() -> Config:
         pr_descriptions: PRDescriptionsConfig = Field(default_factory=PRDescriptionsConfig)
         self_improvement: SelfImprovementConfig = Field(default_factory=SelfImprovementConfig)
         diagnostics: DiagnosticsConfig = Field(default_factory=DiagnosticsConfig)
+        owner_logins: list[str] = Field(default_factory=list)
 
     env = _EnvConfig()
     config = Config(
         pr_descriptions=env.pr_descriptions,
         self_improvement=env.self_improvement,
         diagnostics=env.diagnostics,
+        owner_logins=env.owner_logins,
     )
     logger.info("Config loaded from CRB_* env vars")
     return config

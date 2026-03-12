@@ -209,7 +209,7 @@ class TestTriageReviewComments:
         )
         self._mock_list(mocker, [replied])
 
-        result = await triage_review_comments([42], repo="o/r")
+        result = await triage_review_comments([42], repo="o/r", owner_logins=["ichoosetoaccept"])
         assert result.total == 0
 
     async def test_pr_review_excluded(self, mocker: MockerFixture):
@@ -229,7 +229,7 @@ class TestTriageReviewComments:
         )
         self._mock_list(mocker, [thread])
 
-        result = await triage_review_comments([42], repo="o/r")
+        result = await triage_review_comments([42], repo="o/r", owner_logins=["ichoosetoaccept"])
         assert result.total == 1
         assert result.needs_issue == 1
         assert result.items[0].action == "create_issue"
@@ -243,7 +243,7 @@ class TestTriageReviewComments:
         )
         self._mock_list(mocker, [thread])
 
-        result = await triage_review_comments([42], repo="o/r")
+        result = await triage_review_comments([42], repo="o/r", owner_logins=["ichoosetoaccept"])
         assert result.total == 0
 
     async def test_sorted_by_severity(self, mocker: MockerFixture):
@@ -293,13 +293,40 @@ class TestTriageReviewComments:
         )
         self._mock_list(mocker, [thread])
 
-        # With default owner — thread should appear (mybot isn't ichoosetoaccept)
+        # With no config and no param — no owner filtering, thread appears
         result = await triage_review_comments([42], repo="o/r")
         assert result.total == 1
 
         # With custom owner — thread should be excluded
         result = await triage_review_comments([42], repo="o/r", owner_logins=["mybot"])
         assert result.total == 0
+
+    async def test_owner_logins_from_config(self, mocker: MockerFixture):
+        """CRB_OWNER_LOGINS config should be used when owner_logins param is omitted."""
+        from codereviewbuddy.config import Config, set_config
+
+        thread = _thread(
+            extra_comments=[
+                ReviewComment(author="myagent", body="Fixed"),
+            ]
+        )
+        self._mock_list(mocker, [thread])
+
+        # Set config with owner_logins
+        set_config(Config(owner_logins=["myagent"]))
+        try:
+            result = await triage_review_comments([42], repo="o/r")
+            assert result.total == 0  # myagent reply detected as owner
+
+            # Explicit param overrides config
+            result = await triage_review_comments([42], repo="o/r", owner_logins=["someone_else"])
+            assert result.total == 1  # myagent isn't "someone_else"
+
+            # Explicit empty list disables filtering even when config has owners
+            result = await triage_review_comments([42], repo="o/r", owner_logins=[])
+            assert result.total == 1  # empty owners = no filtering
+        finally:
+            set_config(Config())  # Reset to defaults
 
     async def test_snippet_truncated(self, mocker: MockerFixture):
         """Snippet should be truncated to 200 chars."""
