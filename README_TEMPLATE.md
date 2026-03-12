@@ -13,7 +13,7 @@ Copy these into your `README.md` to show project status:
 [![documentation](https://img.shields.io/badge/docs-zensical-708FCC.svg?style=flat)](https://detailobsessed.github.io/codereviewbuddy/)
 [![pypi version](https://img.shields.io/pypi/v/codereviewbuddy.svg)](https://pypi.org/project/codereviewbuddy/)
 [![Python 3.14+](https://img.shields.io/badge/python-3.14+-blue.svg)](https://www.python.org/downloads/)
-[![codecov](https://codecov.io/gh/detailobsessed/codereviewbuddy/branch/main/graph/badge.svg)](https://codecov.io/gh/detailobsessed/codereviewbuddy)
+[![codecov](https://codecov.io/github/detailobsessed/codereviewbuddy/graph/badge.svg)](https://codecov.io/github/detailobsessed/codereviewbuddy)
 ```
 
 ## Installation

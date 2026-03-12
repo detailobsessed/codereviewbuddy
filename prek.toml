@@ -65,7 +65,7 @@ hooks = [{ id = "markdownlint", args = ["--fix", "--ignore", "CHANGELOG.md"], pr
 
 [[repos]]
 repo = "https://github.com/lycheeverse/lychee"
-rev = "nightly"  # prek autoupdate will fill this
+rev = "lychee-v0.23.0"  # prek autoupdate will fill this
 hooks = [{ id = "lychee", args = ["--config", ".lychee.toml"], priority = 1, types_or = ["markdown", "html", "rst", "yaml"] }]
 
 [[repos]]
