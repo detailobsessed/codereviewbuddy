@@ -42,6 +42,14 @@ class TestConfig:
         config = SelfImprovementConfig(enabled=False)
         assert not config.repo
 
+    def test_owner_logins_defaults_empty(self):
+        config = Config()
+        assert config.owner_logins == []
+
+    def test_owner_logins_explicit(self):
+        config = Config(owner_logins=["alice", "bob"])
+        assert config.owner_logins == ["alice", "bob"]
+
     def test_diagnostics_defaults(self):
         from codereviewbuddy.config import DiagnosticsConfig
 
@@ -98,6 +106,15 @@ class TestLoadConfigFromEnv:
         monkeypatch.setenv("CRB_PR_DESCRIPTIONS__ENABLED", "false")
         config = load_config()
         assert config.pr_descriptions.enabled is False
+
+    def test_owner_logins_from_env(self, monkeypatch: pytest.MonkeyPatch):
+        monkeypatch.setenv("CRB_OWNER_LOGINS", '["alice","bob"]')
+        config = load_config()
+        assert config.owner_logins == ["alice", "bob"]
+
+    def test_owner_logins_empty_by_default(self):
+        config = load_config()
+        assert config.owner_logins == []
 
     def test_unknown_env_vars_ignored(self, monkeypatch: pytest.MonkeyPatch):
         """CRB_ env vars for unknown fields should be silently ignored."""

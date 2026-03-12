@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING, Literal
 from fastmcp.utilities.async_utils import call_sync_fn_in_threadpool
 
 from codereviewbuddy import gh, github_api
+from codereviewbuddy.config import get_config
 from codereviewbuddy.models import (
     CommentStatus,
     ReviewComment,
@@ -621,14 +622,18 @@ async def triage_review_comments(
         pr_numbers: PR numbers to triage.
         repo: Repository in "owner/repo" format. Auto-detected if not provided.
         owner_logins: GitHub usernames considered "ours" (agent + human).
-            Defaults to ``["ichoosetoaccept"]`` if not provided.
+            Defaults to ``CRB_OWNER_LOGINS`` config value if not provided.
         cwd: Working directory for git operations.
         ctx: FastMCP context for progress reporting.
 
     Returns:
         TriageResult with only actionable items, sorted by severity.
     """
-    owners = frozenset(owner_logins or ["ichoosetoaccept"])
+    configured_owners = get_config().owner_logins
+    resolved = owner_logins if owner_logins is not None else configured_owners
+    if not resolved:
+        logger.warning("No owner_logins configured — owner-reply filtering is disabled. Set CRB_OWNER_LOGINS to enable.")
+    owners = frozenset(resolved)
     items: list[TriageItem] = []
     issue_items: list[TriageItem] = []
 

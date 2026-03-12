@@ -626,7 +626,7 @@ async def triage_review_comments(
         pr_numbers: PR numbers to triage (use stack from ``summarize_review_status``).
         repo: Repository in "owner/repo" format. Auto-detected if not provided.
         owner_logins: GitHub usernames considered "ours" (agent + human).
-            Defaults to ["ichoosetoaccept"]. Add your own username if needed.
+            Defaults to CRB_OWNER_LOGINS env var. Pass explicitly to override.
 
     Returns:
         TriageResult with actionable items sorted by severity (bugs first),
