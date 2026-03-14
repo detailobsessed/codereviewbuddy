@@ -16,7 +16,13 @@ if TYPE_CHECKING:
 
     from pytest_mock import MockerFixture
 
-from codereviewbuddy.middleware import ISSUE_65_TRACKING_TAG, WRITE_TOOLS, WriteOperationMiddleware
+from codereviewbuddy.middleware import (
+    ISSUE_65_TRACKING_TAG,
+    SESSION_WARN_EVERY_AFTER,
+    SESSION_WARN_THRESHOLDS,
+    WRITE_TOOLS,
+    WriteOperationMiddleware,
+)
 
 
 @pytest.fixture
@@ -279,3 +285,116 @@ class TestTwoPhaseLogging:
         assert entries[0]["phase"] == "started"
         assert entries[1]["phase"] == "completed"
         assert entries[1]["error"] is True
+
+
+class TestSessionCounter:
+    """Tests for session call counter and threshold warnings.
+
+    Verifies the ~50-call session limit hypothesis tracking.
+    """
+
+    async def test_session_call_count_in_entries(self, middleware: WriteOperationMiddleware, tmp_log_dir: Path):
+        """Every log entry should include session_call_count and session_start_ts."""
+        log_file = tmp_log_dir / "tool_calls.jsonl"
+
+        async def call_next(_ctx: Any) -> list[Any]:
+            await asyncio.sleep(0)
+            return []
+
+        for _ in range(3):
+            await middleware.on_call_tool(_make_context("list_review_comments"), call_next)  # type: ignore[arg-type]
+
+        entries = [json.loads(line) for line in log_file.read_text(encoding="utf-8").splitlines()]
+        # 3 calls x 2 phases = 6 entries
+        assert len(entries) == 6
+        for entry in entries:
+            assert "session_call_count" in entry
+            assert "session_start_ts" in entry
+
+        # session_call_count should match call_id and increment per call
+        started_entries = [e for e in entries if e["phase"] == "started"]
+        assert [e["session_call_count"] for e in started_entries] == [1, 2, 3]
+
+    async def test_session_start_ts_is_stable(self, middleware: WriteOperationMiddleware, tmp_log_dir: Path):
+        """session_start_ts should be identical across all entries in a session."""
+        log_file = tmp_log_dir / "tool_calls.jsonl"
+
+        async def call_next(_ctx: Any) -> list[Any]:
+            await asyncio.sleep(0)
+            return []
+
+        for _ in range(3):
+            await middleware.on_call_tool(_make_context("list_review_comments"), call_next)  # type: ignore[arg-type]
+
+        entries = [json.loads(line) for line in log_file.read_text(encoding="utf-8").splitlines()]
+        session_ts_values = {e["session_start_ts"] for e in entries}
+        assert len(session_ts_values) == 1, f"Expected 1 unique session_start_ts, got {session_ts_values}"
+
+    async def test_no_warning_below_threshold(self, tmp_log_dir: Path):
+        """No session threshold warning when call count is below the first threshold."""
+        mw = WriteOperationMiddleware(log_dir=tmp_log_dir)
+        first_threshold = min(SESSION_WARN_THRESHOLDS)
+
+        async def call_next(_ctx: Any) -> list[Any]:
+            await asyncio.sleep(0)
+            return []
+
+        for _ in range(first_threshold - 1):
+            await mw.on_call_tool(_make_context("list_review_comments"), call_next)  # type: ignore[arg-type]
+
+        log_file = tmp_log_dir / "tool_calls.jsonl"
+        entries = [json.loads(line) for line in log_file.read_text(encoding="utf-8").splitlines()]
+        assert all(e.get("warning") is None for e in entries)
+
+    async def test_warning_at_threshold(self, tmp_log_dir: Path):
+        """A warning should appear when call count hits a threshold milestone."""
+        mw = WriteOperationMiddleware(log_dir=tmp_log_dir)
+        first_threshold = min(SESSION_WARN_THRESHOLDS)
+
+        async def call_next(_ctx: Any) -> list[Any]:
+            await asyncio.sleep(0)
+            return []
+
+        for _ in range(first_threshold):
+            await mw.on_call_tool(_make_context("list_review_comments"), call_next)  # type: ignore[arg-type]
+
+        log_file = tmp_log_dir / "tool_calls.jsonl"
+        entries = [json.loads(line) for line in log_file.read_text(encoding="utf-8").splitlines()]
+        # The started entry at the threshold call should have a warning
+        threshold_started = [e for e in entries if e["phase"] == "started" and e["session_call_count"] == first_threshold]
+        assert len(threshold_started) == 1
+        assert "~50-call" in threshold_started[0]["warning"]
+        assert f"reached {first_threshold}" in threshold_started[0]["warning"]
+
+    async def test_warning_every_call_after_ceiling(self, tmp_log_dir: Path):
+        """After SESSION_WARN_EVERY_AFTER, every call should warn."""
+        mw = WriteOperationMiddleware(log_dir=tmp_log_dir)
+
+        async def call_next(_ctx: Any) -> list[Any]:
+            await asyncio.sleep(0)
+            return []
+
+        # Drive up to SESSION_WARN_EVERY_AFTER + 3
+        target = SESSION_WARN_EVERY_AFTER + 3
+        for _ in range(target):
+            await mw.on_call_tool(_make_context("list_review_comments"), call_next)  # type: ignore[arg-type]
+
+        log_file = tmp_log_dir / "tool_calls.jsonl"
+        entries = [json.loads(line) for line in log_file.read_text(encoding="utf-8").splitlines()]
+        # Every started entry after the ceiling should have a warning
+        post_ceiling = [e for e in entries if e["phase"] == "started" and e["session_call_count"] > SESSION_WARN_EVERY_AFTER]
+        assert len(post_ceiling) == 3
+        assert all("~50-call" in e["warning"] for e in post_ceiling)
+
+    def test_check_session_threshold_returns_none_for_normal_counts(self, middleware: WriteOperationMiddleware):
+        """Counts not in thresholds and not past ceiling should return None."""
+        assert middleware._check_session_threshold(1) is None
+        assert middleware._check_session_threshold(10) is None
+        assert middleware._check_session_threshold(29) is None
+
+    def test_check_session_threshold_returns_warning_at_milestones(self, middleware: WriteOperationMiddleware):
+        """Each threshold milestone should produce a warning."""
+        for threshold in sorted(SESSION_WARN_THRESHOLDS):
+            result = middleware._check_session_threshold(threshold)
+            assert result is not None, f"Expected warning at {threshold}"
+            assert f"reached {threshold}" in result
