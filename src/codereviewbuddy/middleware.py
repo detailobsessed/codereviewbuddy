@@ -32,6 +32,11 @@ WRITE_TOOLS = frozenset({
 RAPID_WRITE_THRESHOLD = 4
 RAPID_WRITE_WINDOW_SECONDS = 2.0
 
+# Session call count thresholds for the ~50-call limit hypothesis.
+# Emit warnings at these milestones to help verify the claim.
+SESSION_WARN_THRESHOLDS = frozenset({30, 35, 40, 45})
+SESSION_WARN_EVERY_AFTER = 45
+
 LOG_DIR = Path.home() / ".codereviewbuddy"
 LOG_FILE = LOG_DIR / "tool_calls.jsonl"
 # Unique sentinel to grep/remove all temporary diagnostics once issue #65 is resolved.
@@ -68,6 +73,8 @@ class WriteOperationMiddleware(Middleware):
         self._recent_writes: deque[float] = deque()
         self._log_count = 0
         self._call_id = 0
+        self._session_start_ts = time.strftime("%Y-%m-%dT%H:%M:%S%z")
+        self._session_start_mono = time.monotonic()
         self._ensure_log_dir()
 
     def configure_diagnostics(
@@ -112,6 +119,17 @@ class WriteOperationMiddleware(Middleware):
                 f"Rapid write sequence detected ({len(self._recent_writes)} writes "
                 f"in {window:.1f}s) — this pattern is known to trigger client-side "
                 f"transport hangs (see issue #65)"
+            )
+        return None
+
+    def _check_session_threshold(self, call_count: int) -> str | None:
+        """Emit a warning when the session call count approaches the ~50-call danger zone."""
+        session_elapsed = time.monotonic() - self._session_start_mono
+        if call_count in SESSION_WARN_THRESHOLDS or (call_count > SESSION_WARN_EVERY_AFTER):
+            return (
+                f"Session call count reached {call_count} "
+                f"(session uptime {session_elapsed:.0f}s) — "
+                f"approaching known ~50-call client-side limit (see issue #65)"
             )
         return None
 
@@ -184,9 +202,18 @@ class WriteOperationMiddleware(Middleware):
         # entry for the same call_id = hung call.
         self._call_id += 1
         call_id = self._call_id
+
+        # Session call count threshold warning
+        session_warning = self._check_session_threshold(call_id)
+        if session_warning:
+            logger.warning(session_warning)
+            warning = f"{warning}; {session_warning}" if warning else session_warning
+
         started_entry: dict[str, Any] = {
             "ts": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
             "call_id": call_id,
+            "session_call_count": call_id,
+            "session_start_ts": self._session_start_ts,
             "phase": "started",
             "tool": tool_name,
             "write": is_write,
@@ -247,6 +274,8 @@ class WriteOperationMiddleware(Middleware):
             entry: dict[str, Any] = {
                 "ts": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
                 "call_id": call_id,
+                "session_call_count": call_id,
+                "session_start_ts": self._session_start_ts,
                 "phase": "completed",
                 "tool": tool_name,
                 "write": is_write,
