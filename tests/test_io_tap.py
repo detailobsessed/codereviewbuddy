@@ -23,6 +23,19 @@ from codereviewbuddy.io_tap import (
     install_io_tap,
 )
 
+
+class _FakeTextStream(io.StringIO):
+    """StringIO with a writable .buffer attribute for testing _TappedStream."""
+
+    def __init__(self, text: str = "", buffer_data: bytes = b"") -> None:
+        super().__init__(text)
+        self._buffer = io.BytesIO(buffer_data)
+
+    @property
+    def buffer(self) -> io.BytesIO:
+        return self._buffer
+
+
 # ---------------------------------------------------------------------------
 # _log_entry
 # ---------------------------------------------------------------------------
@@ -326,9 +339,7 @@ class TestTappedStream:
 
     def test_readline_logs_text(self, tmp_path: Path):
         log_file = tmp_path / "tap.jsonl"
-        inner = io.StringIO("hello\nworld\n")
-        # StringIO has no .buffer, so give it one
-        inner.buffer = io.BytesIO(b"hello\nworld\n")  # type: ignore[attr-defined]
+        inner = _FakeTextStream("hello\nworld\n", b"hello\nworld\n")
         stream = _TappedStream(inner, "stdin", log_file)
         result = stream.readline()
         assert result == "hello\n"
@@ -336,8 +347,7 @@ class TestTappedStream:
 
     def test_readline_empty_no_log(self, tmp_path: Path):
         log_file = tmp_path / "tap.jsonl"
-        inner = io.StringIO("")
-        inner.buffer = io.BytesIO(b"")  # type: ignore[attr-defined]
+        inner = _FakeTextStream("", b"")
         stream = _TappedStream(inner, "stdin", log_file)
         result = stream.readline()
         assert isinstance(result, str)
@@ -346,8 +356,7 @@ class TestTappedStream:
 
     def test_read_logs_text(self, tmp_path: Path):
         log_file = tmp_path / "tap.jsonl"
-        inner = io.StringIO("content")
-        inner.buffer = io.BytesIO(b"content")  # type: ignore[attr-defined]
+        inner = _FakeTextStream("content", b"content")
         stream = _TappedStream(inner, "stdin", log_file)
         result = stream.read()
         assert result == "content"
@@ -355,8 +364,7 @@ class TestTappedStream:
 
     def test_read_empty_no_log(self, tmp_path: Path):
         log_file = tmp_path / "tap.jsonl"
-        inner = io.StringIO("")
-        inner.buffer = io.BytesIO(b"")  # type: ignore[attr-defined]
+        inner = _FakeTextStream("", b"")
         stream = _TappedStream(inner, "stdin", log_file)
         result = stream.read()
         assert isinstance(result, str)
@@ -365,8 +373,7 @@ class TestTappedStream:
 
     def test_write_logs_two_phases(self, tmp_path: Path):
         log_file = tmp_path / "tap.jsonl"
-        inner = io.StringIO()
-        inner.buffer = io.BytesIO()  # type: ignore[attr-defined]
+        inner = _FakeTextStream()
         stream = _TappedStream(inner, "stdout", log_file)
         result = stream.write("output")
         assert result == 6
@@ -378,8 +385,7 @@ class TestTappedStream:
 
     def test_write_empty_no_log(self, tmp_path: Path):
         log_file = tmp_path / "tap.jsonl"
-        inner = io.StringIO()
-        inner.buffer = io.BytesIO()  # type: ignore[attr-defined]
+        inner = _FakeTextStream()
         stream = _TappedStream(inner, "stdout", log_file)
         stream.write("")
         assert not log_file.exists()

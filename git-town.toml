@@ -27,7 +27,7 @@ strategy = "api"
 [sync]
 auto-sync = true
 detached = false
-feature-strategy = "compress"
+feature-strategy = "rebase"
 perennial-strategy = "ff-only"
 prototype-strategy = "merge"
 push-branches = true

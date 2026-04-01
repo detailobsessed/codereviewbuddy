@@ -37,6 +37,19 @@ _JSONRPC_ID_RE = re.compile(r'"id"\s*:\s*(\d+|"[^"]*")')
 _JSONRPC_METHOD_RE = re.compile(r'"method"\s*:\s*"([^"]+)"')
 
 
+def _classify_envelope(payload: dict[str, Any]) -> str | None:
+    """Classify a JSON-RPC payload as request, notification, or response."""
+    has_method = "method" in payload
+    has_id = "id" in payload
+    if has_method and has_id:
+        return "request"
+    if has_method:
+        return "notification"
+    if "result" in payload or "error" in payload:
+        return "response"
+    return None
+
+
 def _extract_jsonrpc_info(text: str) -> dict[str, str | int]:
     """Extract JSON-RPC id and method from a line for correlation."""
     info: dict[str, str | int] = {}
@@ -56,16 +69,9 @@ def _extract_jsonrpc_info(text: str) -> dict[str, str | int]:
     if not isinstance(payload, dict):
         return info
 
-    has_method = "method" in payload
-    has_id = "id" in payload
-    has_result_or_error = "result" in payload or "error" in payload
-
-    if has_method and has_id:
-        info["rpc_envelope"] = "request"
-    elif has_method and not has_id:
-        info["rpc_envelope"] = "notification"
-    elif has_result_or_error:
-        info["rpc_envelope"] = "response"
+    envelope = _classify_envelope(payload)
+    if envelope:
+        info["rpc_envelope"] = envelope
 
     error_obj = payload.get("error")
     if isinstance(error_obj, dict) and isinstance(error_obj.get("code"), int):
