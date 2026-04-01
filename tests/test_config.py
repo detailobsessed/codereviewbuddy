@@ -54,6 +54,11 @@ class TestConfig:
 class TestLoadConfigFromEnv:
     """Tests for load_config() reading CRB_* environment variables."""
 
+    @pytest.fixture(autouse=True)
+    def _isolate_from_dotenv(self, monkeypatch: pytest.MonkeyPatch, tmp_path):
+        """Prevent a local .env file from contaminating config tests."""
+        monkeypatch.chdir(tmp_path)
+
     def test_self_improvement_from_env(self, monkeypatch: pytest.MonkeyPatch):
         monkeypatch.setenv("CRB_SELF_IMPROVEMENT__ENABLED", "true")
         monkeypatch.setenv("CRB_SELF_IMPROVEMENT__REPO", "owner/myrepo")

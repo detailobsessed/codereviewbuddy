@@ -1,10 +1,11 @@
 """Configuration system.
 
-All configuration is via ``CRB_*`` environment variables, set in MCP client config.
+All configuration is via ``CRB_*`` environment variables or a ``.env`` file.
 Zero-config still works — all settings have sensible defaults.
 
 Uses ``pydantic-settings`` ``BaseSettings`` (same pattern as FastMCP's own settings)
 so env vars are read automatically with the ``CRB_`` prefix and ``__`` nesting.
+A ``.env`` file in the working directory is also loaded; explicit env vars take priority.
 """
 
 from __future__ import annotations
@@ -89,6 +90,8 @@ def load_config() -> Config:
             env_prefix="CRB_",
             env_nested_delimiter="__",
             extra="ignore",
+            env_file=".env",  # CWD-relative: intentional for local dev convenience (ISM-154)
+            env_file_encoding="utf-8",
         )
 
         pr_descriptions: PRDescriptionsConfig = Field(default_factory=PRDescriptionsConfig)
