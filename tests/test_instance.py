@@ -4,13 +4,16 @@ from __future__ import annotations
 
 import os
 import signal
-from typing import TYPE_CHECKING
+from pathlib import Path
 from unittest.mock import patch
 
-if TYPE_CHECKING:
-    from pathlib import Path
-
-from codereviewbuddy._instance import _PID_DIR, _remove_pid_file, _terminate_existing, enforce_single_instance
+from codereviewbuddy._instance import (
+    _PID_DIR,
+    _cleanup_stale_pid_files,
+    _remove_pid_file,
+    _terminate_existing,
+    enforce_single_instance,
+)
 
 
 class TestEnforceSingleInstance:
@@ -111,3 +114,43 @@ class TestRemovePidFile:
     def test_missing_file_is_noop(self, tmp_path: Path) -> None:
         pid_file = tmp_path / "missing.pid"
         _remove_pid_file(pid_file)
+
+    def test_oserror_is_suppressed(self, tmp_path: Path) -> None:
+        pid_file = tmp_path / "server.pid"
+        pid_file.write_text(str(os.getpid()), encoding="utf-8")
+        with patch.object(Path, "unlink", side_effect=OSError("permission denied")):
+            _remove_pid_file(pid_file)
+
+
+class TestCleanupStalePidFiles:
+    def test_removes_stale_pid(self, tmp_path: Path) -> None:
+        pid_file = tmp_path / "server.99999.pid"
+        pid_file.write_text("99999", encoding="utf-8")
+        removed = _cleanup_stale_pid_files(tmp_path)
+        assert removed == 1
+        assert not pid_file.exists()
+
+    def test_keeps_running_pid(self, tmp_path: Path) -> None:
+        pid_file = tmp_path / f"server.{os.getpid()}.pid"
+        pid_file.write_text(str(os.getpid()), encoding="utf-8")
+        removed = _cleanup_stale_pid_files(tmp_path)
+        assert removed == 0
+        assert pid_file.exists()
+
+    def test_handles_invalid_pid_content(self, tmp_path: Path) -> None:
+        pid_file = tmp_path / "server.bad.pid"
+        pid_file.write_text("not-a-number", encoding="utf-8")
+        removed = _cleanup_stale_pid_files(tmp_path)
+        assert removed == 1
+        assert not pid_file.exists()
+
+    def test_ignores_non_pid_files(self, tmp_path: Path) -> None:
+        other_file = tmp_path / "config.toml"
+        other_file.write_text("data", encoding="utf-8")
+        removed = _cleanup_stale_pid_files(tmp_path)
+        assert removed == 0
+        assert other_file.exists()
+
+    def test_empty_directory(self, tmp_path: Path) -> None:
+        removed = _cleanup_stale_pid_files(tmp_path)
+        assert removed == 0

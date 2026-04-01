@@ -80,7 +80,6 @@ class TestMain:
     def test_run_server(self, mocker: MockerFixture):
         mocker.patch("sys.argv", ["codereviewbuddy"])
         mock_run = mocker.patch("codereviewbuddy.server.mcp.run")
-        mocker.patch("codereviewbuddy.io_tap.install_io_tap", return_value=False)
         from codereviewbuddy.cli import serve
 
         serve()

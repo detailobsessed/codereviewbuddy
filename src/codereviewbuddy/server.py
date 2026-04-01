@@ -26,7 +26,6 @@ from pydantic import Field
 
 from codereviewbuddy import gh
 from codereviewbuddy.config import get_config, load_config, set_config
-from codereviewbuddy.middleware import WriteOperationMiddleware
 from codereviewbuddy.models import (
     CIDiagnosisResult,
     ConfigInfo,
@@ -46,7 +45,6 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 _FASTMCP_TASK_ROUTING_MODULE = "fastmcp.server.tasks.routing"
-write_operation_middleware = WriteOperationMiddleware()
 
 
 _WORKSPACE_HELP = (
@@ -175,11 +173,6 @@ async def check_gh_cli(server: FastMCP) -> AsyncIterator[dict[str, object] | Non
     check_prerequisites()
     config = load_config()
     set_config(config)
-    write_operation_middleware.configure_diagnostics(
-        heartbeat_enabled=config.diagnostics.tool_call_heartbeat,
-        heartbeat_interval_ms=config.diagnostics.heartbeat_interval_ms,
-        include_args_fingerprint=config.diagnostics.include_args_fingerprint,
-    )
     try:
         yield {}
     finally:
@@ -320,7 +313,6 @@ mcp.add_middleware(ErrorHandlingMiddleware(include_traceback=True, transform_err
 mcp.add_middleware(TimingMiddleware())
 mcp.add_middleware(LoggingMiddleware(include_payloads=True, max_payload_length=500))
 mcp.add_middleware(PingMiddleware(interval_ms=30_000))
-mcp.add_middleware(write_operation_middleware)
 
 
 @mcp.tool(tags={"query"})
@@ -684,7 +676,7 @@ async def diagnose_ci(
 def show_config() -> ConfigInfo:
     """Show the active codereviewbuddy configuration.
 
-    Returns the full loaded config including self-improvement config and diagnostics.
+    Returns the full loaded config including PR description and self-improvement settings.
     Configuration is loaded from CRB_* environment variables at server startup.
     """
     config = get_config()

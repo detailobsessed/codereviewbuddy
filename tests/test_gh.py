@@ -9,8 +9,6 @@ from typing import TYPE_CHECKING
 import pytest
 
 if TYPE_CHECKING:
-    from pathlib import Path
-
     from pytest_mock import MockerFixture
 
 from codereviewbuddy import cache
@@ -18,7 +16,6 @@ from codereviewbuddy.gh import (
     GhError,
     GhNotAuthenticatedError,
     GhNotFoundError,
-    _summarize_cmd,
     check_auth,
     get_current_pr_number,
     get_repo_info,
@@ -37,7 +34,6 @@ def _patch_run(
 ):
     """Patch subprocess.run and return the mock."""
     result = subprocess.CompletedProcess(args=[], returncode=returncode, stdout=stdout, stderr=stderr)
-    mocker.patch("codereviewbuddy.gh._log_gh_call")
     return mocker.patch("codereviewbuddy.gh.subprocess.run", return_value=result)
 
 
@@ -201,72 +197,12 @@ class TestRest:
         assert result == [{"sha": "a"}, {"sha": "b"}]
 
 
-class TestSummarizeCmd:
-    def test_api_graphql(self):
-        assert _summarize_cmd(("api", "graphql", "-f", "query=...")) == "api graphql"
+class TestGitRootForCwd:
+    def test_returns_none_when_git_not_found(self, mocker: MockerFixture):
+        from codereviewbuddy.gh import _git_root_for_cwd
 
-    def test_pr_comment(self):
-        assert _summarize_cmd(("pr", "comment", "42", "--repo", "o/r")) == "pr comment 42"
-
-    def test_empty(self):
-        assert _summarize_cmd(()) == "unknown"
-
-    def test_flag_first(self):
-        assert _summarize_cmd(("-f", "query=...")) == "unknown"
-
-
-class TestRunGhLogging:
-    def test_success_logs_call(self, mocker: MockerFixture):
-        result = subprocess.CompletedProcess(args=[], returncode=0, stdout="ok", stderr="")
-        mocker.patch("codereviewbuddy.gh.subprocess.run", return_value=result)
-        log_mock = mocker.patch("codereviewbuddy.gh._log_gh_call")
-        run_gh("api", "graphql", "-f", "query=test")
-        log_mock.assert_called_once()
-        entry = log_mock.call_args[0][0]
-        assert entry["cmd"] == "api graphql"
-        assert entry["exit_code"] == 0
-        assert entry["stdout_bytes"] == 2
-        assert entry["duration_ms"] >= 0
-        assert "ts" in entry
-        assert "ts_end" in entry
-
-    def test_failure_logs_stderr(self, mocker: MockerFixture):
-        result = subprocess.CompletedProcess(args=[], returncode=1, stdout="", stderr="rate limit exceeded")
-        mocker.patch("codereviewbuddy.gh.subprocess.run", return_value=result)
-        log_mock = mocker.patch("codereviewbuddy.gh._log_gh_call")
-        with pytest.raises(GhError):
-            run_gh("api", "graphql")
-        entry = log_mock.call_args[0][0]
-        assert entry["exit_code"] == 1
-        assert entry["stderr"] == "rate limit exceeded"
-
-    def test_not_found_logs_error(self, mocker: MockerFixture):
-        mocker.patch("codereviewbuddy.gh.subprocess.run", side_effect=FileNotFoundError)
-        log_mock = mocker.patch("codereviewbuddy.gh._log_gh_call")
-        with pytest.raises(GhNotFoundError):
-            run_gh("auth", "status")
-        entry = log_mock.call_args[0][0]
-        assert entry["error"] == "FileNotFoundError"
-        assert entry["cmd"] == "auth status"
-
-    def test_log_rotation_triggers(self, mocker: MockerFixture, tmp_path: Path):
-        from codereviewbuddy import gh as gh_module
-
-        log_file = tmp_path / "gh_calls.jsonl"
-        mocker.patch("codereviewbuddy.gh._GH_LOG_DIR", tmp_path)
-        mocker.patch("codereviewbuddy.gh._GH_LOG_FILE", log_file)
-
-        rotate_mock = mocker.patch("codereviewbuddy.gh.rotate_if_needed")
-        # Reset write count so we can control the trigger
-        mocker.patch("codereviewbuddy.gh._gh_log_write_count", 0)
-
-        from codereviewbuddy.log_rotation import _CHECK_EVERY_WRITES
-
-        # Write exactly _CHECK_EVERY_WRITES entries
-        for i in range(_CHECK_EVERY_WRITES):
-            gh_module._log_gh_call({"i": i})
-
-        rotate_mock.assert_called_once_with(log_file)
+        mocker.patch("shutil.which", return_value=None)
+        assert _git_root_for_cwd("/some/path") is None
 
 
 class TestCheckAuth:

@@ -376,21 +376,6 @@ class TestDownloadBytes:
 # ---------------------------------------------------------------------------
 
 
-class TestLogHttpxCall:
-    """Verify _log_httpx_call observability helper."""
-
-    def test_os_error_is_swallowed(self, monkeypatch, tmp_path):
-        from codereviewbuddy import github_api
-
-        # Make the parent an existing file so mkdir raises OSError
-        fake_parent = tmp_path / "not_a_dir"
-        fake_parent.write_text("", encoding="utf-8")
-        monkeypatch.setattr(github_api, "_GH_LOG_FILE", fake_parent / "gh_calls.jsonl")
-
-        # Must not raise
-        github_api._log_httpx_call({"kind": "httpx", "duration_ms": 1})
-
-
 class TestTimeouts:
     """Verify that a stalled GitHub API never hangs indefinitely.
 

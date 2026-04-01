@@ -267,7 +267,6 @@ class TestShowConfigMCP:
         assert "source" in data
         # Config should have the expected top-level keys
         assert "self_improvement" in data["config"]
-        assert "diagnostics" in data["config"]
 
     async def test_reflects_live_config(self, client: Client):
         """show_config returns the currently active config, not a stale snapshot."""
@@ -297,4 +296,64 @@ class TestReviewPRDescriptionsMCP:
             },
         )
         result = await client.call_tool("review_pr_descriptions", {"pr_numbers": [42]})
+        assert not result.is_error
+
+
+class TestSummarizeReviewStatusMCP:
+    async def test_returns_status(self, client: Client, mocker: MockerFixture):
+        from codereviewbuddy.models import StackReviewStatusResult
+
+        mocker.patch(
+            "codereviewbuddy.tools.stack.summarize_review_status",
+            return_value=StackReviewStatusResult(),
+        )
+        result = await client.call_tool("summarize_review_status", {"pr_numbers": [42]})
+        assert not result.is_error
+
+
+class TestTriageReviewCommentsMCP:
+    async def test_returns_triage(self, client: Client, mocker: MockerFixture):
+        from codereviewbuddy.models import TriageResult
+
+        mocker.patch(
+            "codereviewbuddy.tools.comments.triage_review_comments",
+            return_value=TriageResult(items=[], needs_fix=0, needs_reply=0, needs_issue=0),
+        )
+        result = await client.call_tool("triage_review_comments", {"pr_numbers": [42]})
+        assert not result.is_error
+
+
+class TestDiagnoseCIMCP:
+    async def test_returns_diagnosis(self, client: Client, mocker: MockerFixture):
+        from codereviewbuddy.models import CIDiagnosisResult
+
+        mocker.patch(
+            "codereviewbuddy.tools.ci.diagnose_ci",
+            return_value=CIDiagnosisResult(),
+        )
+        result = await client.call_tool("diagnose_ci", {"pr_number": 42})
+        assert not result.is_error
+
+
+class TestStackActivityMCP:
+    async def test_returns_activity(self, client: Client, mocker: MockerFixture):
+        from codereviewbuddy.models import StackActivityResult
+
+        mocker.patch(
+            "codereviewbuddy.tools.stack.stack_activity",
+            return_value=StackActivityResult(events=[]),
+        )
+        result = await client.call_tool("stack_activity", {"pr_numbers": [42]})
+        assert not result.is_error
+
+
+class TestListRecentUnresolvedMCP:
+    async def test_returns_results(self, client: Client, mocker: MockerFixture):
+        from codereviewbuddy.models import StackReviewStatusResult
+
+        mocker.patch(
+            "codereviewbuddy.tools.stack.list_recent_unresolved",
+            return_value=StackReviewStatusResult(),
+        )
+        result = await client.call_tool("list_recent_unresolved", {"repo": "owner/repo"})
         assert not result.is_error

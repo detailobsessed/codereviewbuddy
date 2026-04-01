@@ -30,6 +30,29 @@ _PID_DIR = Path.home() / ".codereviewbuddy"
 _SIGTERM_WAIT_SECS = 0.5
 
 
+def _cleanup_stale_pid_files(pid_dir: Path) -> int:
+    """Remove PID files for processes that are no longer running."""
+    removed = 0
+    try:
+        for path in pid_dir.glob("server.*.pid"):
+            try:
+                pid = int(path.read_text(encoding="utf-8").strip())
+                os.kill(pid, 0)  # Check if process exists
+            except ValueError, ProcessLookupError:
+                path.unlink(missing_ok=True)
+                removed += 1
+            except PermissionError:
+                pass  # Process exists but we can't signal it
+            except OSError:
+                path.unlink(missing_ok=True)
+                removed += 1
+    except OSError:
+        pass
+    if removed:
+        logger.info("Cleaned up %d stale PID file(s)", removed)
+    return removed
+
+
 def enforce_single_instance(pid_file: Path | None = None) -> Path:
     """Terminate any existing server process for this parent and claim the PID file.
 
@@ -39,12 +62,7 @@ def enforce_single_instance(pid_file: Path | None = None) -> Path:
         pid_file = _PID_DIR / f"server.{os.getppid()}.pid"
     pid_file.parent.mkdir(parents=True, exist_ok=True)
 
-    # Clean up stale PID files from dead processes (e.g. crashed servers)
-    from codereviewbuddy.log_rotation import cleanup_stale_pid_files  # noqa: PLC0415
-
-    removed = cleanup_stale_pid_files(pid_file.parent)
-    if removed:
-        logger.info("Cleaned up %d stale PID file(s)", removed)
+    _cleanup_stale_pid_files(pid_file.parent)
 
     if pid_file.exists():
         _terminate_existing(pid_file)

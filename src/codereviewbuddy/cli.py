@@ -21,10 +21,8 @@ app.command(install_app)
 @app.default
 def serve() -> None:
     """Run the codereviewbuddy MCP server (default command)."""
-    from codereviewbuddy.io_tap import install_io_tap  # noqa: PLC0415
     from codereviewbuddy.server import mcp  # noqa: PLC0415
 
-    install_io_tap()
     mcp.run()
 
 
@@ -99,7 +97,6 @@ _TRUNCATE_LENGTH = 80
 _KNOWN_ENV_PREFIXES = frozenset({
     "CRB_PR_DESCRIPTIONS",
     "CRB_SELF_IMPROVEMENT",
-    "CRB_DIAGNOSTICS",
     "CRB_OWNER_LOGINS",
     "CRB_WORKSPACE",
 })
@@ -142,16 +139,6 @@ def _print_config_summary(config: object) -> None:
         print(f"  Self-improvement: enabled → {si.repo}")
     else:
         print("  Self-improvement: disabled")
-
-    diag = config.diagnostics
-    diag_flags = []
-    if diag.io_tap:
-        diag_flags.append("io_tap")
-    if diag.tool_call_heartbeat:
-        diag_flags.append(f"heartbeat({diag.heartbeat_interval_ms}ms)")
-    if diag.include_args_fingerprint:
-        diag_flags.append("args_fingerprint")
-    print(f"  Diagnostics: {', '.join(diag_flags) if diag_flags else 'all off'}")
 
     if config.owner_logins:
         print(f"  Owner logins: {', '.join(config.owner_logins)}")

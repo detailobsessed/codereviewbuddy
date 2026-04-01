@@ -51,27 +51,6 @@ class SelfImprovementConfig(BaseModel):
         return self
 
 
-class DiagnosticsConfig(BaseModel):
-    """Configuration for diagnostic and debugging features."""
-
-    model_config = ConfigDict(extra="ignore")
-
-    io_tap: bool = Field(default=False, description="Enable stdin/stdout logging for transport debugging (#65)")
-    tool_call_heartbeat: bool = Field(
-        default=False,
-        description="Emit periodic in-flight heartbeat entries while tool calls are pending",
-    )
-    heartbeat_interval_ms: int = Field(
-        default=5000,
-        ge=100,
-        description="Heartbeat interval in milliseconds for in-flight tool calls",
-    )
-    include_args_fingerprint: bool = Field(
-        default=True,
-        description="Include argument payload fingerprint and size metadata in tool call logs",
-    )
-
-
 class Config(BaseModel):
     """Top-level codereviewbuddy configuration."""
 
@@ -84,10 +63,6 @@ class Config(BaseModel):
     self_improvement: SelfImprovementConfig = Field(
         default_factory=SelfImprovementConfig,
         description="Agent self-improvement feedback loop settings",
-    )
-    diagnostics: DiagnosticsConfig = Field(
-        default_factory=DiagnosticsConfig,
-        description="Diagnostic and debugging settings",
     )
     owner_logins: list[str] = Field(
         default_factory=list,
@@ -105,7 +80,6 @@ def load_config() -> Config:
 
         CRB_SELF_IMPROVEMENT__ENABLED = true
         CRB_SELF_IMPROVEMENT__REPO = owner / repo
-        CRB_DIAGNOSTICS__IO_TAP = true
     """
 
     class _EnvConfig(BaseSettings):
@@ -119,14 +93,12 @@ def load_config() -> Config:
 
         pr_descriptions: PRDescriptionsConfig = Field(default_factory=PRDescriptionsConfig)
         self_improvement: SelfImprovementConfig = Field(default_factory=SelfImprovementConfig)
-        diagnostics: DiagnosticsConfig = Field(default_factory=DiagnosticsConfig)
         owner_logins: list[str] = Field(default_factory=list)
 
     env = _EnvConfig()
     config = Config(
         pr_descriptions=env.pr_descriptions,
         self_improvement=env.self_improvement,
-        diagnostics=env.diagnostics,
         owner_logins=env.owner_logins,
     )
     logger.info("Config loaded from CRB_* env vars")
