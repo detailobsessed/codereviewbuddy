@@ -25,6 +25,12 @@ from codereviewbuddy.middleware import (
 )
 
 
+async def _noop_call_next(_ctx: Any) -> list[Any]:
+    """Default no-op call_next for tests."""
+    await asyncio.sleep(0)
+    return []
+
+
 @pytest.fixture
 def tmp_log_dir(tmp_path: Path) -> Path:
     """Provide a temporary log directory."""
@@ -161,7 +167,7 @@ class TestTwoPhaseLogging:
             await asyncio.sleep(0)
             return []
 
-        await middleware.on_call_tool(_make_context("list_review_comments"), call_next)  # type: ignore[arg-type]
+        await middleware.on_call_tool(_make_context("list_review_comments"), call_next)
 
         # During the call, there should have been exactly 1 entry: the started one
         assert len(entries_during_call) == 1
@@ -190,9 +196,7 @@ class TestTwoPhaseLogging:
             await asyncio.sleep(999)  # simulate hang
             return []  # never reached
 
-        task = asyncio.create_task(
-            middleware.on_call_tool(_make_context("list_review_comments"), call_next_hangs)  # type: ignore[arg-type]
-        )
+        task = asyncio.create_task(middleware.on_call_tool(_make_context("list_review_comments"), call_next_hangs))
 
         # Wait for the call to be in-flight
         await asyncio.wait_for(hung.wait(), timeout=2.0)
@@ -213,11 +217,11 @@ class TestTwoPhaseLogging:
         """Verify the completed entry includes duration_ms."""
         log_file = tmp_log_dir / "tool_calls.jsonl"
 
-        async def call_next(_ctx: Any) -> list[Any]:
+        async def call_next_slow(_ctx: Any) -> list[Any]:
             await asyncio.sleep(0.01)
             return []
 
-        await middleware.on_call_tool(_make_context("resolve_comment"), call_next)  # type: ignore[arg-type]
+        await middleware.on_call_tool(_make_context("resolve_comment"), call_next_slow)
 
         entries = [json.loads(line) for line in log_file.read_text(encoding="utf-8").splitlines()]
         completed = [e for e in entries if e["phase"] == "completed"]
@@ -232,11 +236,7 @@ class TestTwoPhaseLogging:
         log_file = tmp_log_dir / "tool_calls.jsonl"
         args = {"repo": "detailobsessed/surfmon", "pr_number": 23}
 
-        async def call_next(_ctx: Any) -> list[Any]:
-            await asyncio.sleep(0)
-            return []
-
-        await middleware.on_call_tool(_make_context("list_review_comments", args), call_next)  # type: ignore[arg-type]
+        await middleware.on_call_tool(_make_context("list_review_comments", args), _noop_call_next)
 
         entries = [json.loads(line) for line in log_file.read_text(encoding="utf-8").splitlines()]
         started = next(e for e in entries if e["phase"] == "started")
@@ -259,7 +259,7 @@ class TestTwoPhaseLogging:
             await asyncio.sleep(0.16)
             return []
 
-        await middleware.on_call_tool(_make_context("list_review_comments"), call_next_hangs)  # type: ignore[arg-type]
+        await middleware.on_call_tool(_make_context("list_review_comments"), call_next_hangs)
         await asyncio.wait_for(hung.wait(), timeout=1.0)
 
         entries = [json.loads(line) for line in log_file.read_text(encoding="utf-8").splitlines()]
@@ -278,7 +278,7 @@ class TestTwoPhaseLogging:
             raise RuntimeError(message)
 
         with pytest.raises(RuntimeError):
-            await middleware.on_call_tool(_make_context("resolve_comment"), call_next_raises)  # type: ignore[arg-type]
+            await middleware.on_call_tool(_make_context("resolve_comment"), call_next_raises)
 
         entries = [json.loads(line) for line in log_file.read_text(encoding="utf-8").splitlines()]
         assert len(entries) == 2
@@ -297,12 +297,8 @@ class TestSessionCounter:
         """Every log entry should include session_call_count and session_start_ts."""
         log_file = tmp_log_dir / "tool_calls.jsonl"
 
-        async def call_next(_ctx: Any) -> list[Any]:
-            await asyncio.sleep(0)
-            return []
-
         for _ in range(3):
-            await middleware.on_call_tool(_make_context("list_review_comments"), call_next)  # type: ignore[arg-type]
+            await middleware.on_call_tool(_make_context("list_review_comments"), _noop_call_next)
 
         entries = [json.loads(line) for line in log_file.read_text(encoding="utf-8").splitlines()]
         # 3 calls x 2 phases = 6 entries
@@ -319,12 +315,8 @@ class TestSessionCounter:
         """session_start_ts should be identical across all entries in a session."""
         log_file = tmp_log_dir / "tool_calls.jsonl"
 
-        async def call_next(_ctx: Any) -> list[Any]:
-            await asyncio.sleep(0)
-            return []
-
         for _ in range(3):
-            await middleware.on_call_tool(_make_context("list_review_comments"), call_next)  # type: ignore[arg-type]
+            await middleware.on_call_tool(_make_context("list_review_comments"), _noop_call_next)
 
         entries = [json.loads(line) for line in log_file.read_text(encoding="utf-8").splitlines()]
         session_ts_values = {e["session_start_ts"] for e in entries}
@@ -335,12 +327,8 @@ class TestSessionCounter:
         mw = WriteOperationMiddleware(log_dir=tmp_log_dir)
         first_threshold = min(SESSION_WARN_THRESHOLDS)
 
-        async def call_next(_ctx: Any) -> list[Any]:
-            await asyncio.sleep(0)
-            return []
-
         for _ in range(first_threshold - 1):
-            await mw.on_call_tool(_make_context("list_review_comments"), call_next)  # type: ignore[arg-type]
+            await mw.on_call_tool(_make_context("list_review_comments"), _noop_call_next)
 
         log_file = tmp_log_dir / "tool_calls.jsonl"
         entries = [json.loads(line) for line in log_file.read_text(encoding="utf-8").splitlines()]
@@ -351,12 +339,8 @@ class TestSessionCounter:
         mw = WriteOperationMiddleware(log_dir=tmp_log_dir)
         first_threshold = min(SESSION_WARN_THRESHOLDS)
 
-        async def call_next(_ctx: Any) -> list[Any]:
-            await asyncio.sleep(0)
-            return []
-
         for _ in range(first_threshold):
-            await mw.on_call_tool(_make_context("list_review_comments"), call_next)  # type: ignore[arg-type]
+            await mw.on_call_tool(_make_context("list_review_comments"), _noop_call_next)
 
         log_file = tmp_log_dir / "tool_calls.jsonl"
         entries = [json.loads(line) for line in log_file.read_text(encoding="utf-8").splitlines()]
@@ -370,14 +354,10 @@ class TestSessionCounter:
         """After SESSION_WARN_EVERY_AFTER, every call should warn."""
         mw = WriteOperationMiddleware(log_dir=tmp_log_dir)
 
-        async def call_next(_ctx: Any) -> list[Any]:
-            await asyncio.sleep(0)
-            return []
-
         # Drive up to SESSION_WARN_EVERY_AFTER + 3
         target = SESSION_WARN_EVERY_AFTER + 3
         for _ in range(target):
-            await mw.on_call_tool(_make_context("list_review_comments"), call_next)  # type: ignore[arg-type]
+            await mw.on_call_tool(_make_context("list_review_comments"), _noop_call_next)
 
         log_file = tmp_log_dir / "tool_calls.jsonl"
         entries = [json.loads(line) for line in log_file.read_text(encoding="utf-8").splitlines()]

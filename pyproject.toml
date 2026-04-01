@@ -1,5 +1,5 @@
 [build-system]
-requires = ["uv_build<0.11"]
+requires = ["uv_build<0.12"]
 build-backend = "uv_build"
 
 [project]
@@ -25,7 +25,7 @@ classifiers = [
     "Typing :: Typed",
 ]
 dependencies = [
-    "fastmcp>=3.0.0",
+    "fastmcp>=3.2.0",
     "httpx>=0.28",
     "pydantic-settings>=2.0",
 ]
@@ -202,6 +202,9 @@ markers = [
 ]
 filterwarnings = [
     "error",
+    # FastMCP internally uses asyncio.iscoroutinefunction, deprecated in Python 3.14.
+    # Suppress until fixed upstream (affects tool dispatch and prompt rendering).
+    "ignore:'asyncio.iscoroutinefunction':DeprecationWarning",
 ]
 
 [tool.coverage.run]
@@ -221,6 +224,22 @@ output = "htmlcov/coverage.json"
 [tool.ty.environment]
 python-version = "3.14"
 python = ".venv"
+
+[[tool.ty.overrides]]
+include = ["tests/test_write_middleware.py"]
+
+[tool.ty.overrides.rules]
+# Test helpers pass async functions as CallNext protocol args — ty can't
+# structurally match Coroutine to Awaitable through Protocol yet.
+invalid-argument-type = "ignore"
+
+[[tool.ty.overrides]]
+include = ["tests/test_mcp_integration.py"]
+
+[tool.ty.overrides.rules]
+# FastMCP ToolResult content union type — .text access on TextContent
+# requires narrowing that ty doesn't infer from the test context.
+unresolved-attribute = "ignore"
 
 [tool.poe.tasks]
 # Setup

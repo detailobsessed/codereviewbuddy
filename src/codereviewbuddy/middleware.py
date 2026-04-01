@@ -166,7 +166,27 @@ class WriteOperationMiddleware(Middleware):
                 "tracking_tag": ISSUE_65_TRACKING_TAG,
             })
 
-    async def on_call_tool(  # noqa: PLR0912, PLR0914, PLR0915
+    def _compute_args_metadata(self, arguments: Any) -> tuple[int | None, str | None]:
+        """Compute size and optional fingerprint for tool call arguments."""
+        serialized = self._serialize_args(arguments)
+        if serialized is None:
+            return None, None
+        size = len(serialized)
+        fingerprint = hashlib.sha256(serialized).hexdigest() if self._include_args_fingerprint else None
+        return size, fingerprint
+
+    def _base_entry(self, call_fields: dict[str, Any], warning: str | None) -> dict[str, Any]:
+        """Build the common fields shared by started/completed log entries."""
+        return {
+            "ts": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
+            "session_call_count": call_fields["call_id"],
+            "session_start_ts": self._session_start_ts,
+            "warning": warning,
+            "tracking_tag": ISSUE_65_TRACKING_TAG,
+            **call_fields,
+        }
+
+    async def on_call_tool(  # noqa: C901, PLR0912, PLR0914, PLR0915
         self,
         context: MiddlewareContext,
         call_next: CallNext,
@@ -181,14 +201,10 @@ class WriteOperationMiddleware(Middleware):
         start_mono = time.monotonic()
         warning = None
         heartbeat_task: asyncio.Task[None] | None = None
-        args_size_bytes: int | None = None
-        args_fingerprint: str | None = None
 
-        serialized_args = self._serialize_args(getattr(context.message, "arguments", None))
-        if serialized_args is not None:
-            args_size_bytes = len(serialized_args)
-            if self._include_args_fingerprint:
-                args_fingerprint = hashlib.sha256(serialized_args).hexdigest()
+        args_size_bytes, args_fingerprint = self._compute_args_metadata(
+            getattr(context.message, "arguments", None),
+        )
 
         # Check for rapid writes before the call
         if is_write:
@@ -209,20 +225,18 @@ class WriteOperationMiddleware(Middleware):
             logger.warning(session_warning)
             warning = f"{warning}; {session_warning}" if warning else session_warning
 
-        started_entry: dict[str, Any] = {
-            "ts": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
+        call_fields = {
             "call_id": call_id,
-            "session_call_count": call_id,
-            "session_start_ts": self._session_start_ts,
-            "phase": "started",
             "tool": tool_name,
             "write": is_write,
             "call_type": call_type,
             "task_id": task_id,
+        }
+        started_entry = {
+            **self._base_entry(call_fields, warning),
+            "phase": "started",
             "mono": start_mono,
             "mono_start": start_mono,
-            "warning": warning,
-            "tracking_tag": ISSUE_65_TRACKING_TAG,
         }
         if args_size_bytes is not None:
             started_entry["args_size_bytes"] = args_size_bytes
@@ -271,28 +285,19 @@ class WriteOperationMiddleware(Middleware):
 
             duration_ms = (time.perf_counter() - start) * 1000
             end_mono = time.monotonic()
-            entry: dict[str, Any] = {
-                "ts": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
-                "call_id": call_id,
-                "session_call_count": call_id,
-                "session_start_ts": self._session_start_ts,
+            completed_entry = {
+                **self._base_entry(call_fields, warning),
                 "phase": "completed",
-                "tool": tool_name,
-                "write": is_write,
-                "call_type": call_type,
-                "task_id": task_id,
                 "duration_ms": round(duration_ms),
                 "elapsed_ms_precise": round(duration_ms, 3),
                 "mono": end_mono,
                 "mono_end": end_mono,
-                "warning": warning,
-                "tracking_tag": ISSUE_65_TRACKING_TAG,
             }
             if error:
-                entry["error"] = True
+                completed_entry["error"] = True
             if cancelled:
-                entry["cancelled"] = True
-            self._append_log(entry)
+                completed_entry["cancelled"] = True
+            self._append_log(completed_entry)
             self._log_count += 1
             if self._log_count % _CHECK_EVERY_WRITES == 0:
                 rotate_if_needed(self._log_file)

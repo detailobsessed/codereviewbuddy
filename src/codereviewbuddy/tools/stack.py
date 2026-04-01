@@ -514,6 +514,28 @@ async def _fetch_timeline(
     return result if isinstance(result, list) else []
 
 
+def _extract_actor(raw: dict[str, Any]) -> str:
+    """Extract the actor login from a timeline event."""
+    for key in ("user", "actor", "author"):
+        if raw.get(key):
+            return raw[key].get("login", "")
+    committer = raw.get("committer")
+    if committer:
+        return committer.get("login", committer.get("name", ""))
+    return ""
+
+
+def _extract_detail(mapped: str, raw: dict[str, Any]) -> str:
+    """Extract event-specific detail from a timeline event."""
+    if mapped == "review":
+        return raw.get("state", "").lower()
+    if mapped in {"labeled", "unlabeled"}:
+        return raw.get("label", {}).get("name", "")
+    if mapped == "commit":
+        return (raw.get("message") or "")[:80]
+    return ""
+
+
 def _parse_timeline_events(
     raw_events: list[dict[str, Any]],
     pr_number: int,
@@ -538,40 +560,44 @@ def _parse_timeline_events(
         except ValueError, AttributeError:
             continue
 
-        # Extract actor
-        actor = ""
-        if raw.get("user"):
-            actor = raw["user"].get("login", "")
-        elif raw.get("actor"):
-            actor = raw["actor"].get("login", "")
-        elif raw.get("author"):
-            actor = raw["author"].get("login", "")
-        elif raw.get("committer"):
-            actor = raw["committer"].get("login", raw["committer"].get("name", ""))
-
-        # Extract detail
-        detail = ""
-        if mapped == "review":
-            detail = raw.get("state", "").lower()
-        elif mapped in {"labeled", "unlabeled"}:
-            detail = raw.get("label", {}).get("name", "")
-        elif mapped == "commit":
-            detail = (raw.get("message") or "")[:80]
-
         events.append(
             ActivityEvent(
                 time=ts,
                 pr_number=pr_number,
                 event_type=mapped,
-                actor=actor,
-                detail=detail,
+                actor=_extract_actor(raw),
+                detail=_extract_detail(mapped, raw),
             )
         )
 
     return events
 
 
-async def stack_activity(  # noqa: PLR0914
+async def _resolve_pr_numbers(
+    full_repo: str,
+    repo_explicit: bool,
+    cwd: str | None,
+    ctx: Context | None,
+) -> list[int] | StackActivityResult:
+    """Auto-discover stack PR numbers, returning error result on repo mismatch."""
+    if repo_explicit:
+        try:
+            cwd_owner, cwd_repo = await call_sync_fn_in_threadpool(gh.get_repo_info, cwd=cwd)
+            cwd_full = f"{cwd_owner}/{cwd_repo}"
+        except gh.GhError:
+            cwd_full = None
+        if cwd_full is None or cwd_full.lower() != full_repo.lower():
+            return StackActivityResult(
+                error=f"Auto-discovery unavailable: working directory is {cwd_full or 'unknown'}, "
+                f"but target repo is {full_repo}. Pass pr_numbers explicitly.",
+            )
+
+    current_pr = await call_sync_fn_in_threadpool(gh.get_current_pr_number, cwd=cwd)
+    stack_prs = await discover_stack(current_pr, repo=full_repo, cwd=cwd, ctx=ctx)
+    return [p.pr_number for p in stack_prs]
+
+
+async def stack_activity(
     pr_numbers: list[int] | None = None,
     repo: str | None = None,
     cwd: str | None = None,
@@ -602,22 +628,10 @@ async def stack_activity(  # noqa: PLR0914
 
     # Auto-discover stack if needed
     if pr_numbers is None:
-        # Guard: verify explicit repo matches cwd repo before auto-discovery (#115)
-        if repo:
-            try:
-                cwd_owner, cwd_repo = await call_sync_fn_in_threadpool(gh.get_repo_info, cwd=cwd)
-                cwd_full = f"{cwd_owner}/{cwd_repo}"
-            except gh.GhError:
-                cwd_full = None
-            if cwd_full is None or cwd_full.lower() != full_repo.lower():
-                return StackActivityResult(
-                    error=f"Auto-discovery unavailable: working directory is {cwd_full or 'unknown'}, "
-                    f"but target repo is {full_repo}. Pass pr_numbers explicitly.",
-                )
-
-        current_pr = await call_sync_fn_in_threadpool(gh.get_current_pr_number, cwd=cwd)
-        stack_prs = await discover_stack(current_pr, repo=full_repo, cwd=cwd, ctx=ctx)
-        pr_numbers = [p.pr_number for p in stack_prs]
+        resolved = await _resolve_pr_numbers(full_repo, repo_explicit=bool(repo), cwd=cwd, ctx=ctx)
+        if isinstance(resolved, StackActivityResult):
+            return resolved
+        pr_numbers = resolved
 
     if not pr_numbers:
         return StackActivityResult(error="No PRs to fetch activity for")
