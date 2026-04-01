@@ -60,7 +60,7 @@ ci = [
 ]
 dev = []
 local = [
-    "prek>=0.3.1",
+    "prek>=0.3.8",
     "pytest-testmon>=2.2",
 ]
 docs = [
@@ -124,6 +124,9 @@ select = [
     # Error messages
     "EM",   # flake8-errmsg — variables in exception constructors (better tracebacks)
 
+    # Complexity
+    "C9",   # mccabe — cyclomatic complexity (max-complexity = 10)
+
     # Pylint — uses default thresholds; do not inflate to hide violations
     "PLC",  # pylint conventions
     "PLE",  # pylint errors
@@ -169,6 +172,9 @@ ignore = [
     "PLR0913",    # Test factories with many defaulted kwargs are idiomatic
     "PLR0917",    # (same — positional arg count)
 ]
+
+[tool.ruff.lint.mccabe]
+max-complexity = 10
 
 [tool.ruff.lint.pylint]
 # All values are pylint defaults — do not inflate to hide violations.
