@@ -50,40 +50,6 @@ class TestConfig:
         config = Config(owner_logins=["alice", "bob"])
         assert config.owner_logins == ["alice", "bob"]
 
-    def test_diagnostics_defaults(self):
-        from codereviewbuddy.config import DiagnosticsConfig
-
-        config = DiagnosticsConfig()
-        assert config.io_tap is False
-        assert config.tool_call_heartbeat is False
-        assert config.heartbeat_interval_ms == 5000
-        assert config.include_args_fingerprint is True
-
-    def test_diagnostics_enabled(self):
-        from codereviewbuddy.config import DiagnosticsConfig
-
-        config = DiagnosticsConfig(
-            io_tap=True,
-            tool_call_heartbeat=True,
-            heartbeat_interval_ms=750,
-            include_args_fingerprint=False,
-        )
-        assert config.io_tap is True
-        assert config.tool_call_heartbeat is True
-        assert config.heartbeat_interval_ms == 750
-        assert config.include_args_fingerprint is False
-
-    def test_diagnostics_from_env(self, monkeypatch: pytest.MonkeyPatch):
-        monkeypatch.setenv("CRB_DIAGNOSTICS__IO_TAP", "true")
-        monkeypatch.setenv("CRB_DIAGNOSTICS__TOOL_CALL_HEARTBEAT", "true")
-        monkeypatch.setenv("CRB_DIAGNOSTICS__HEARTBEAT_INTERVAL_MS", "1200")
-        monkeypatch.setenv("CRB_DIAGNOSTICS__INCLUDE_ARGS_FINGERPRINT", "false")
-        config = load_config()
-        assert config.diagnostics.io_tap is True
-        assert config.diagnostics.tool_call_heartbeat is True
-        assert config.diagnostics.heartbeat_interval_ms == 1200
-        assert config.diagnostics.include_args_fingerprint is False
-
 
 class TestLoadConfigFromEnv:
     """Tests for load_config() reading CRB_* environment variables."""
@@ -94,13 +60,6 @@ class TestLoadConfigFromEnv:
         config = load_config()
         assert config.self_improvement.enabled is True
         assert config.self_improvement.repo == "owner/myrepo"
-
-    def test_diagnostics_from_env(self, monkeypatch: pytest.MonkeyPatch):
-        monkeypatch.setenv("CRB_DIAGNOSTICS__IO_TAP", "true")
-        monkeypatch.setenv("CRB_DIAGNOSTICS__HEARTBEAT_INTERVAL_MS", "750")
-        config = load_config()
-        assert config.diagnostics.io_tap is True
-        assert config.diagnostics.heartbeat_interval_ms == 750
 
     def test_pr_descriptions_disabled(self, monkeypatch: pytest.MonkeyPatch):
         monkeypatch.setenv("CRB_PR_DESCRIPTIONS__ENABLED", "false")

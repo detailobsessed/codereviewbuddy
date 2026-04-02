@@ -128,11 +128,7 @@ If you prefer manual setup, add the following to your MCP client's config JSON:
 
         // Self-improvement: agents file issues when they hit server gaps
         // "CRB_SELF_IMPROVEMENT__ENABLED": "true",
-        // "CRB_SELF_IMPROVEMENT__REPO": "your-org/codereviewbuddy",
-
-        // Diagnostics (off by default)
-        // "CRB_DIAGNOSTICS__IO_TAP": "true",
-        // "CRB_DIAGNOSTICS__TOOL_CALL_HEARTBEAT": "true"
+        // "CRB_SELF_IMPROVEMENT__REPO": "your-org/codereviewbuddy"
       }
     }
   }
@@ -156,11 +152,7 @@ For local development, use `uv run --directory` to run the server from your chec
       "env": {
         // Same CRB_* env vars as above, plus dev-specific settings:
         "CRB_SELF_IMPROVEMENT__ENABLED": "true",
-        "CRB_SELF_IMPROVEMENT__REPO": "detailobsessed/codereviewbuddy",
-        "CRB_DIAGNOSTICS__IO_TAP": "true",
-        "CRB_DIAGNOSTICS__TOOL_CALL_HEARTBEAT": "true",
-        "CRB_DIAGNOSTICS__HEARTBEAT_INTERVAL_MS": "5000",
-        "CRB_DIAGNOSTICS__INCLUDE_ARGS_FINGERPRINT": "true"
+        "CRB_SELF_IMPROVEMENT__REPO": "detailobsessed/codereviewbuddy"
       }
     }
   }
@@ -202,10 +194,6 @@ codereviewbuddy works **zero-config** with sensible defaults. All configuration 
 | `CRB_PR_DESCRIPTIONS__ENABLED` | bool | `true` | Whether `review_pr_descriptions` tool is available |
 | `CRB_SELF_IMPROVEMENT__ENABLED` | bool | `false` | Agents file issues when they encounter server gaps |
 | `CRB_SELF_IMPROVEMENT__REPO` | string | `""` | Repository to file issues against (e.g. `owner/repo`) |
-| `CRB_DIAGNOSTICS__IO_TAP` | bool | `false` | Log stdin/stdout for transport debugging |
-| `CRB_DIAGNOSTICS__TOOL_CALL_HEARTBEAT` | bool | `false` | Emit heartbeat entries for long-running tool calls |
-| `CRB_DIAGNOSTICS__HEARTBEAT_INTERVAL_MS` | int | `5000` | Heartbeat cadence in milliseconds |
-| `CRB_DIAGNOSTICS__INCLUDE_ARGS_FINGERPRINT` | bool | `true` | Log args hash/size in tool call logs |
 
 ### Severity levels
 

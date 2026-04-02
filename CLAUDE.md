@@ -43,7 +43,6 @@ uv run pytest tests/test_comments.py::test_function_name -v
 - `models.py` — Pydantic response models with `message` and `next_steps` fields for agent guidance
 - `gh.py` — Primary GitHub access: wraps `gh` CLI subprocess for GraphQL/REST calls
 - `github_api.py` — Fallback httpx-based GitHub API client using PAT tokens
-- `middleware.py` — WriteOperationMiddleware for tool call interception
 - `cli.py` — CLI with subcommands: `serve`, `install`, `check-env`
 
 **Tool modules** (`src/codereviewbuddy/tools/`):

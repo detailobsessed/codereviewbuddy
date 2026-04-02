@@ -226,14 +226,6 @@ python-version = "3.14"
 python = ".venv"
 
 [[tool.ty.overrides]]
-include = ["tests/test_write_middleware.py"]
-
-[tool.ty.overrides.rules]
-# Test helpers pass async functions as CallNext protocol args — ty can't
-# structurally match Coroutine to Awaitable through Protocol yet.
-invalid-argument-type = "ignore"
-
-[[tool.ty.overrides]]
 include = ["tests/test_mcp_integration.py"]
 
 [tool.ty.overrides.rules]

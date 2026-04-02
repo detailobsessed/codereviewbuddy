@@ -16,7 +16,7 @@ from codereviewbuddy.cli import (
 _KNOWN = frozenset({
     "CRB_PR_DESCRIPTIONS",
     "CRB_SELF_IMPROVEMENT",
-    "CRB_DIAGNOSTICS",
+    "CRB_OWNER_LOGINS",
     "CRB_WORKSPACE",
 })
 
@@ -79,3 +79,35 @@ class TestCheckEnv:
         check_env()
         captured = capsys.readouterr()
         assert "gh CLI error" in captured.out
+
+    def test_shows_self_improvement_enabled(self, mocker: MockerFixture, capsys):
+        from codereviewbuddy.config import Config, SelfImprovementConfig
+
+        mocker.patch(
+            "codereviewbuddy.config.load_config",
+            return_value=Config(self_improvement=SelfImprovementConfig(enabled=True, repo="owner/repo")),
+        )
+        mocker.patch("codereviewbuddy.gh.check_auth", return_value="testuser")
+        check_env()
+        captured = capsys.readouterr()
+        assert "Self-improvement: enabled" in captured.out
+
+    def test_shows_owner_logins(self, mocker: MockerFixture, capsys):
+        from codereviewbuddy.config import Config
+
+        mocker.patch(
+            "codereviewbuddy.config.load_config",
+            return_value=Config(owner_logins=["alice", "bob"]),
+        )
+        mocker.patch("codereviewbuddy.gh.check_auth", return_value="testuser")
+        check_env()
+        captured = capsys.readouterr()
+        assert "alice" in captured.out
+        assert "bob" in captured.out
+
+    def test_config_load_error(self, mocker: MockerFixture, capsys):
+        mocker.patch("codereviewbuddy.config.load_config", side_effect=ValueError("bad config"))
+        with __import__("pytest").raises(SystemExit):
+            check_env()
+        captured = capsys.readouterr()
+        assert "Configuration error" in captured.out
