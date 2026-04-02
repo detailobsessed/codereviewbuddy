@@ -5,6 +5,8 @@ from __future__ import annotations
 import json
 from typing import TYPE_CHECKING
 
+import pytest
+
 if TYPE_CHECKING:
     from pytest_mock import MockerFixture
 
@@ -14,6 +16,7 @@ from codereviewbuddy.tools.ci import (
     _extract_error_lines,
     _is_error_line,
     _is_noise,
+    check_ci_status,
     diagnose_ci,
 )
 
@@ -291,3 +294,75 @@ class TestExtractErrorLinesEdgeCases:
         )
         lines = _extract_error_lines(log)
         assert "---" in lines
+
+
+# ---------------------------------------------------------------------------
+# check_ci_status tests
+# ---------------------------------------------------------------------------
+
+_CHECKS_ALL_PASS = json.dumps([
+    {"name": "quality", "state": "SUCCESS", "bucket": "pass", "workflow": "ci"},
+    {"name": "tests (ubuntu)", "state": "SUCCESS", "bucket": "pass", "workflow": "ci"},
+    {"name": "Devin Review", "state": "SUCCESS", "bucket": "pass", "workflow": ""},
+])
+
+_CHECKS_ONE_FAILURE = json.dumps([
+    {"name": "quality", "state": "SUCCESS", "bucket": "pass", "workflow": "ci"},
+    {"name": "tests (ubuntu)", "state": "FAILURE", "bucket": "fail", "workflow": "ci"},
+    {"name": "prek", "state": "SUCCESS", "bucket": "pass", "workflow": "ci"},
+])
+
+_CHECKS_PENDING = json.dumps([
+    {"name": "quality", "state": "SUCCESS", "bucket": "pass", "workflow": "ci"},
+    {"name": "tests (ubuntu)", "state": "PENDING", "bucket": "pending", "workflow": "ci"},
+])
+
+
+class TestCheckCiStatus:
+    def test_all_passing(self, mocker: MockerFixture):
+        _mock_gh(mocker, [_CHECKS_ALL_PASS])
+        result = check_ci_status(pr_number=42)
+        assert result.overall == "pass"
+        assert result.total == 3
+        assert result.passed == 3
+        assert result.failed == 0
+        assert result.pending == 0
+        assert result.error is None
+        assert any("green" in s.lower() or "safe" in s.lower() for s in result.next_steps)
+
+    def test_one_failure(self, mocker: MockerFixture):
+        _mock_gh(mocker, [_CHECKS_ONE_FAILURE])
+        result = check_ci_status(pr_number=42)
+        assert result.overall == "fail"
+        assert result.passed == 2
+        assert result.failed == 1
+        assert any("diagnose_ci" in s for s in result.next_steps)
+
+    def test_pending(self, mocker: MockerFixture):
+        _mock_gh(mocker, [_CHECKS_PENDING])
+        result = check_ci_status(pr_number=42)
+        assert result.overall == "pending"
+        assert result.passed == 1
+        assert result.pending == 1
+        assert any("wait" in s.lower() for s in result.next_steps)
+
+    def test_no_checks(self, mocker: MockerFixture):
+        _mock_gh(mocker, ["[]"])
+        result = check_ci_status(pr_number=42)
+        assert result.overall == "none"
+        assert result.total == 0
+        assert result.next_steps
+        assert any("no ci checks" in s.lower() for s in result.next_steps)
+        assert result.error is None
+
+    def test_gh_error(self, mocker: MockerFixture):
+        mocker.patch("codereviewbuddy.tools.ci.gh.run_gh", side_effect=GhError("not found"))
+        with pytest.raises(GhError):
+            check_ci_status(pr_number=999)
+
+    def test_repo_passed(self, mocker: MockerFixture):
+        mock = mocker.patch("codereviewbuddy.tools.ci.gh.run_gh", return_value=_CHECKS_ALL_PASS)
+        check_ci_status(pr_number=42, repo="org/repo")
+        args = mock.call_args[0]
+        assert "--repo" in args
+        assert "org/repo" in args

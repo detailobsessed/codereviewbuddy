@@ -28,6 +28,7 @@ from codereviewbuddy import gh
 from codereviewbuddy.config import get_config, load_config, set_config
 from codereviewbuddy.models import (
     CIDiagnosisResult,
+    CIStatusResult,
     ConfigInfo,
     CreateIssueResult,
     PRDescriptionReviewResult,
@@ -681,6 +682,41 @@ async def diagnose_ci(
         return CIDiagnosisResult(error="Cancelled")
 
 
+@mcp.tool(tags={"query"})
+async def check_ci_status(
+    pr_number: int | None = None,
+    repo: str | None = None,
+) -> CIStatusResult:
+    """Check whether CI is passing for a PR.
+
+    Returns a simple pass/fail/pending verdict with per-check breakdown.
+    Much lighter than ``diagnose_ci`` — use this to verify CI is green
+    before merging, and fall back to ``diagnose_ci`` only when it fails.
+
+    Args:
+        pr_number: PR number to check. Auto-detected from current branch if omitted.
+        repo: Repository in "owner/repo" format. Auto-detected if not provided.
+
+    Returns:
+        Overall CI status with counts and per-check breakdown.
+    """
+    try:
+        ctx = get_context()
+        cwd = await _get_workspace_cwd(ctx)
+        _check_auto_detect_prerequisites(cwd, has_pr=pr_number is not None, has_repo=repo is not None)
+        pr_number = _resolve_pr_number(pr_number, cwd=cwd)
+        return await call_sync_fn_in_threadpool(ci.check_ci_status, pr_number=pr_number, repo=repo, cwd=cwd)
+    except Exception as exc:
+        logger.exception("check_ci_status failed")
+        return CIStatusResult(
+            overall="error",
+            error=_recovery_error(exc, tool_name="check_ci_status", pr_number=pr_number, repo=repo),
+        )
+    except asyncio.CancelledError:
+        logger.warning("check_ci_status cancelled")
+        return CIStatusResult(overall="error", error="Cancelled")
+
+
 @mcp.tool(tags={"discovery"})
 def show_config() -> ConfigInfo:
     """Show the active codereviewbuddy configuration.
@@ -797,7 +833,12 @@ You are preparing to merge the current PR stack. Run these final checks:
    - Every PR must have `Fixes #N` or `Closes #N` in the body.
    - No empty or boilerplate descriptions.
 
-4. **Report** — summarize the stack state:
+4. **CI status** — call `check_ci_status()` for each PR in the stack.
+   - All green? Good.
+   - Pending? Wait for completion, then re-check.
+   - Failed? Call `diagnose_ci()` and fix before merging.
+
+5. **Report** — summarize the stack state:
    - Total PRs, total unresolved threads, severity breakdown.
    - Whether it's safe to merge or what still needs attention.
 

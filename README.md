@@ -178,6 +178,7 @@ If your MCP client reports `No module named 'fastmcp.server.tasks.routing'`, the
 | `reply_to_comment` | command | Reply to inline threads (`PRRT_`), PR-level reviews (`PRR_`), or bot comments (`IC_`) |
 | `create_issue_from_comment` | command | Create a GitHub issue from a review comment with labels and PR backlink |
 | `diagnose_ci` | query | Diagnose CI failures — finds the failed run, jobs, steps, and error lines in one call |
+| `check_ci_status` | query | Lightweight CI pass/fail/pending check for a PR — use before merging |
 | `stack_activity` | query | Chronological activity feed across a PR stack with a `settled` flag |
 | `list_recent_unresolved` | query | Scan recently merged PRs for unresolved review threads |
 | `review_pr_descriptions` | query | Analyze PR descriptions for quality issues (empty body, boilerplate, missing linked issues) |

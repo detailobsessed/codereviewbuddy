@@ -185,6 +185,30 @@ class CIDiagnosisResult(BaseModel):
     error: str | None = Field(default=None, description="Error message if diagnosis itself failed")
 
 
+class CICheckStatus(BaseModel):
+    """Status of a single CI check (e.g. a job or external status check)."""
+
+    name: str = Field(description="Check name (e.g. 'quality', 'tests (ubuntu, 3.14, highest)')")
+    status: str = Field(description="Normalized status: 'pass', 'fail', or 'pending'")
+    workflow: str = Field(default="", description="Workflow name (e.g. 'ci', 'release') — empty for external checks")
+
+
+class CIStatusResult(BaseModel):
+    """Lightweight CI status for a PR — pass/fail/pending with per-check breakdown."""
+
+    overall: str = Field(
+        default="pass",
+        description="Worst status across all checks: 'pass', 'fail', 'pending', 'none' (no checks), or 'error'",
+    )
+    checks: list[CICheckStatus] = Field(default_factory=list, description="Per-check status breakdown")
+    total: int = Field(default=0, description="Total number of checks")
+    passed: int = Field(default=0, description="Number of passing checks")
+    failed: int = Field(default=0, description="Number of failed checks")
+    pending: int = Field(default=0, description="Number of pending checks")
+    next_steps: list[str] = Field(default_factory=list, description="Suggested next actions based on CI status")
+    error: str | None = Field(default=None, description="Error message if the status check itself failed")
+
+
 class ConfigInfo(BaseModel):
     """Active codereviewbuddy configuration with metadata."""
 
