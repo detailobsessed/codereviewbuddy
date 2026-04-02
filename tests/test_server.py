@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from typing import TYPE_CHECKING
 
 import pytest
@@ -17,6 +18,9 @@ from codereviewbuddy.server import (
     _resolve_pr_number,
     check_fastmcp_runtime,
     check_prerequisites,
+    create_issue_from_comment,
+    diagnose_ci,
+    reply_to_comment,
 )
 
 
@@ -285,3 +289,29 @@ class TestRecoveryError:
     def test_403_triggers_rate_limit(self):
         result = _recovery_error(Exception("HTTP 403 Forbidden"), tool_name="test_tool")
         assert "rate limit" in result
+
+
+class TestCancellationHandlers:
+    """Ensure all tool handlers return a clean error on asyncio.CancelledError."""
+
+    @pytest.fixture(autouse=True)
+    def _patch_context(self, mocker: MockerFixture):
+        ctx = mocker.MagicMock()
+        mocker.patch("codereviewbuddy.server.get_context", return_value=ctx)
+        mocker.patch("codereviewbuddy.server._get_workspace_cwd", return_value="/tmp")  # noqa: S108
+
+    async def test_reply_to_comment_cancelled(self, mocker: MockerFixture):
+        mocker.patch("codereviewbuddy.server.comments.reply_to_comment", side_effect=asyncio.CancelledError)
+        result = await reply_to_comment(thread_id="PRRT_abc", body="test", pr_number=1)
+        assert result == "Cancelled"
+
+    async def test_create_issue_from_comment_cancelled(self, mocker: MockerFixture):
+        mocker.patch("codereviewbuddy.server.issues.create_issue_from_comment", side_effect=asyncio.CancelledError)
+        result = await create_issue_from_comment(thread_id="PRRT_abc", title="test", pr_number=1)
+        assert result.error == "Cancelled"
+        assert result.issue_number == 0
+
+    async def test_diagnose_ci_cancelled(self, mocker: MockerFixture):
+        mocker.patch("codereviewbuddy.server.call_sync_fn_in_threadpool", side_effect=asyncio.CancelledError)
+        result = await diagnose_ci(pr_number=1)
+        assert result.error == "Cancelled"

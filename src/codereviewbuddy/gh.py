@@ -16,6 +16,8 @@ from codereviewbuddy import cache
 
 logger = logging.getLogger(__name__)
 
+_GH_SUBPROCESS_TIMEOUT_SECS = 60
+
 
 def _git_root_for_cwd(cwd: str) -> str | None:
     """Return the git repository root for ``cwd``, or ``None`` if not inside a repo."""
@@ -29,6 +31,7 @@ def _git_root_for_cwd(cwd: str) -> str | None:
             capture_output=True,
             text=True,
             check=False,
+            timeout=10,
         )
         if result.returncode == 0:
             return result.stdout.strip()
@@ -86,9 +89,13 @@ def run_gh(*args: str, cwd: str | None = None) -> str:
             text=True,
             check=False,
             cwd=cwd,
+            timeout=_GH_SUBPROCESS_TIMEOUT_SECS,
         )
     except FileNotFoundError:
         raise GhNotFoundError from None
+    except subprocess.TimeoutExpired:
+        msg = f"gh command timed out after {_GH_SUBPROCESS_TIMEOUT_SECS}s: {' '.join(cmd)}"
+        raise GhError(msg) from None
 
     if result.returncode != 0:
         logger.debug("gh stderr: %s", result.stderr)

@@ -61,6 +61,14 @@ class TestRunGh:
         run_gh("repo", "view", cwd="/tmp")  # noqa: S108
         assert mock.call_args[1]["cwd"] == "/tmp"  # noqa: S108
 
+    def test_timeout_raises_gh_error(self, mocker: MockerFixture):
+        mocker.patch(
+            "codereviewbuddy.gh.subprocess.run",
+            side_effect=subprocess.TimeoutExpired(cmd=["gh", "api"], timeout=60),
+        )
+        with pytest.raises(GhError, match="timed out"):
+            run_gh("api", "graphql")
+
 
 class TestGraphql:
     def setup_method(self):
