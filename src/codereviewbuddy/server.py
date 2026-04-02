@@ -418,6 +418,9 @@ async def reply_to_comment(
     except Exception as exc:
         logger.exception("reply_to_comment failed for %s on PR #%s", thread_id, pr_number)
         return _recovery_error(exc, tool_name="reply_to_comment", pr_number=pr_number, repo=repo)
+    except asyncio.CancelledError:
+        logger.warning("reply_to_comment cancelled for %s on PR #%s", thread_id, pr_number)
+        return "Cancelled"
 
 
 @mcp.tool(tags={"command"})
@@ -464,6 +467,9 @@ async def create_issue_from_comment(
             title=title,
             error=_recovery_error(exc, tool_name="create_issue_from_comment", pr_number=pr_number, repo=repo),
         )
+    except asyncio.CancelledError:
+        logger.warning("create_issue_from_comment cancelled for %s on PR #%s", thread_id, pr_number)
+        return CreateIssueResult(issue_number=0, issue_url="", title=title, error="Cancelled")
 
 
 @mcp.tool(tags={"query"})
@@ -670,6 +676,9 @@ async def diagnose_ci(
     except Exception as exc:
         logger.exception("diagnose_ci failed")
         return CIDiagnosisResult(error=_recovery_error(exc, tool_name="diagnose_ci", pr_number=pr_number, repo=repo))
+    except asyncio.CancelledError:
+        logger.warning("diagnose_ci cancelled")
+        return CIDiagnosisResult(error="Cancelled")
 
 
 @mcp.tool(tags={"discovery"})
