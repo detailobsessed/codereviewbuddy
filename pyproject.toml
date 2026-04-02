@@ -28,6 +28,7 @@ dependencies = [
     "fastmcp>=3.2.0",
     "httpx>=0.28",
     "pydantic-settings>=2.0",
+    "python-dotenv>=1.0",
 ]
 
 [project.scripts]

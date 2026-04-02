@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import sys
+from pathlib import Path
 
 import cyclopts
 
@@ -42,9 +43,15 @@ def check_env() -> None:
     # 1. Collect all CRB_* env vars
     crb_vars = {k: v for k, v in sorted(os.environ.items()) if k.startswith("CRB_")}
 
+    # Check for .env file
+    has_dotenv_vars = _report_dotenv_vars(known_prefixes)
+
     if not crb_vars:
-        print("\nNo CRB_* environment variables set.")
-        print("Using all defaults (zero-config mode).")
+        if has_dotenv_vars:
+            print("\nNo CRB_* environment variables set (values from .env will be used).")
+        else:
+            print("\nNo CRB_* environment variables set.")
+            print("Using all defaults (zero-config mode).")
     else:
         print(f"\nFound {len(crb_vars)} CRB_* variable(s):\n")
         for key, value in crb_vars.items():
@@ -85,6 +92,26 @@ def check_env() -> None:
         print(f"  ❌ gh CLI error: {exc}")
 
     print()
+
+
+def _report_dotenv_vars(known_prefixes: frozenset[str]) -> bool:
+    """Print CRB_* variables found in a local .env file, if any. Returns True if found."""
+    env_file = Path(".env")
+    if not env_file.is_file():
+        return False
+    from dotenv import dotenv_values  # noqa: PLC0415
+
+    all_vars = dotenv_values(env_file)
+    env_crb = sorted(k for k in all_vars if k.startswith("CRB_"))
+    if not env_crb:
+        return False
+    unknown = [k for k in env_crb if not _is_known_var(k, known_prefixes)]
+    print(f"\n  .env file found with {len(env_crb)} CRB_* variable(s): {', '.join(env_crb)}")
+    if unknown:
+        for k in unknown:
+            print(f"    ⚠️  {k} — UNRECOGNIZED (possible typo)")
+    print("  (These are loaded by pydantic-settings; explicit env vars take priority)")
+    return True
 
 
 # ---------------------------------------------------------------------------

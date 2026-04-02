@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+import pytest
+
 if TYPE_CHECKING:
     from pytest_mock import MockerFixture
 
@@ -56,6 +58,11 @@ class TestMaskValue:
 
 
 class TestCheckEnv:
+    @pytest.fixture(autouse=True)
+    def _isolate_from_dotenv(self, monkeypatch: pytest.MonkeyPatch, tmp_path):
+        """Prevent a local .env file from affecting check-env tests."""
+        monkeypatch.chdir(tmp_path)
+
     def test_runs_without_error(self, mocker: MockerFixture, capsys):
         """check_env should run and print output without crashing."""
         mocker.patch("codereviewbuddy.gh.check_auth", return_value="testuser")
