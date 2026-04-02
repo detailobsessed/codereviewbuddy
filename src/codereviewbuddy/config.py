@@ -13,7 +13,7 @@ from __future__ import annotations
 import logging
 from enum import StrEnum
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 logger = logging.getLogger(__name__)
@@ -41,15 +41,7 @@ class SelfImprovementConfig(BaseModel):
 
     model_config = ConfigDict(extra="ignore")
 
-    enabled: bool = Field(default=False, description="Whether agents should file issues for server gaps they encounter")
-    repo: str = Field(default="", description="Repository to file issues against (e.g. 'owner/codereviewbuddy')")
-
-    @model_validator(mode="after")
-    def _validate_repo_when_enabled(self) -> SelfImprovementConfig:
-        if self.enabled and not self.repo.strip():
-            msg = "[self_improvement] enabled=true requires a non-empty 'repo' field"
-            raise ValueError(msg)
-        return self
+    enabled: bool = Field(default=False, description="Whether agents should report server gaps they encounter")
 
 
 class Config(BaseModel):
@@ -80,7 +72,6 @@ def load_config() -> Config:
     Examples::
 
         CRB_SELF_IMPROVEMENT__ENABLED = true
-        CRB_SELF_IMPROVEMENT__REPO = owner / repo
     """
 
     class _EnvConfig(BaseSettings):

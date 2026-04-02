@@ -165,7 +165,7 @@ def _resolve_thread_pr_number(
 
 
 @lifespan
-async def check_gh_cli(server: FastMCP) -> AsyncIterator[dict[str, object] | None]:  # noqa: ARG001, RUF029
+async def check_gh_cli(server: FastMCP) -> AsyncIterator[dict[str, object] | None]:  # noqa: RUF029
     """Verify gh CLI is installed and authenticated on server startup."""
     from codereviewbuddy._instance import _remove_pid_file, enforce_single_instance  # noqa: PLC0415
 
@@ -174,16 +174,15 @@ async def check_gh_cli(server: FastMCP) -> AsyncIterator[dict[str, object] | Non
     check_prerequisites()
     config = load_config()
     set_config(config)
+    if config.self_improvement.enabled:
+        server.instructions = _BASE_INSTRUCTIONS + _SELF_IMPROVEMENT_INSTRUCTIONS
     try:
         yield {}
     finally:
         _remove_pid_file(pid_file)
 
 
-mcp = FastMCP(
-    "codereviewbuddy",
-    lifespan=check_gh_cli,
-    instructions="""\
+_BASE_INSTRUCTIONS = """\
 AI code review buddy — fetch, triage, and manage PR review comments
 from any AI reviewer that uses GitHub's PR review infrastructure.
 
@@ -227,9 +226,6 @@ a reply is optional but appreciated when you made changes based on them.
 All review tools auto-detect the repository from the current workspace (via
 MCP roots sent by your client, or `CRB_WORKSPACE` env var as fallback).
 The `repo` parameter on each tool is only needed when auto-detection fails.
-**Never use the self-improvement repo
-(`CRB_SELF_IMPROVEMENT__REPO`) for review operations** — that repo is exclusively
-for filing issues about this MCP server itself, not for reviewing PRs.
 
 ## Tracking useful suggestions
 
@@ -237,23 +233,21 @@ When review comments contain genuinely useful improvement suggestions (not bugs 
 fixed in the PR), use `create_issue_from_comment` to create a GitHub issue. Use labels
 to classify: type labels (bug, enhancement, documentation) and priority labels (P0-P3).
 Don't file issues for nitpicks or things already being addressed.
+"""
 
-## Self-improvement (server bug reports only)
+_SELF_IMPROVEMENT_INSTRUCTIONS = """
+## Self-improvement
 
-If you encounter errors, missing capabilities, or find yourself repeatedly working
-around a limitation of this MCP server, create a GitHub issue describing:
-- What you were trying to do
-- What went wrong or what's missing
-- A proposed solution if you have one
+As you use this MCP server, keep track of any errors, missing capabilities,
+or limitations you work around. When you have something worth reporting,
+ask the user if you should file a Linear issue to track the problem or
+improvement idea.
+"""
 
-Use `gh issue create` to file the issue against the repo in `CRB_SELF_IMPROVEMENT__REPO`.
-Label it `agent-reported` plus any relevant type/priority labels. **This is only for
-issues with the MCP server itself — never use this repo for PR review operations.**
-
-This only applies when `CRB_SELF_IMPROVEMENT__ENABLED=true` and `CRB_SELF_IMPROVEMENT__REPO`
-is set. Call `show_config` to check settings before filing.
-
-""",
+mcp = FastMCP(
+    "codereviewbuddy",
+    lifespan=check_gh_cli,
+    instructions=_BASE_INSTRUCTIONS,
 )
 
 
@@ -729,8 +723,8 @@ def show_config() -> ConfigInfo:
     # Build human-readable explanation
     parts: list[str] = []
 
-    if config.self_improvement.enabled and config.self_improvement.repo:
-        parts.append(f"Self-improvement: enabled → {config.self_improvement.repo}.")
+    if config.self_improvement.enabled:
+        parts.append("Self-improvement: enabled.")
     else:
         parts.append("Self-improvement: disabled.")
 
