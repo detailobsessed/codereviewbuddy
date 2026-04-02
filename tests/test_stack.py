@@ -12,7 +12,6 @@ if TYPE_CHECKING:
 from codereviewbuddy.models import StackPR
 from codereviewbuddy.tools.stack import (
     _build_stack,
-    _classify_severity,
     _fetch_merged_prs,
     _fetch_pr_summary,
     discover_stack,
@@ -126,7 +125,7 @@ class TestDiscoverStack:
         assert len(stack) == 3
 
 
-# -- _classify_severity tests -------------------------------------------------
+# -- summarize_review_status tests --------------------------------------------
 
 SAMPLE_SUMMARY_GRAPHQL_RESPONSE = {
     "data": {
@@ -184,30 +183,8 @@ SAMPLE_SUMMARY_GRAPHQL_RESPONSE = {
 }
 
 
-class TestClassifySeverity:
-    def test_no_emoji_returns_info(self):
-        from codereviewbuddy.config import Severity
-
-        assert _classify_severity("anything") == Severity.INFO
-
-    def test_red_circle_is_bug(self):
-        from codereviewbuddy.config import Severity
-
-        assert _classify_severity("🔴 **Bug:** something broken") == Severity.BUG
-
-    def test_yellow_circle_is_warning(self):
-        from codereviewbuddy.config import Severity
-
-        assert _classify_severity("🟡 Consider refactoring") == Severity.WARNING
-
-    def test_flag_is_flagged(self):
-        from codereviewbuddy.config import Severity
-
-        assert _classify_severity("🚩 Potential issue") == Severity.FLAGGED
-
-
 class TestFetchPrSummary:
-    async def test_counts_severity(self, mocker: MockerFixture):
+    async def test_counts_threads(self, mocker: MockerFixture):
         mocker.patch("codereviewbuddy.tools.stack.github_api.graphql", new_callable=AsyncMock, return_value=SAMPLE_SUMMARY_GRAPHQL_RESPONSE)
 
         summary = await _fetch_pr_summary("o", "r", 42)
@@ -215,8 +192,6 @@ class TestFetchPrSummary:
         assert summary.title == "feat: test"
         assert summary.unresolved == 2
         assert summary.resolved == 1
-        assert summary.bugs == 1
-        assert summary.warnings == 1
 
 
 class TestSummarizeReviewStatus:

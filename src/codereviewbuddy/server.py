@@ -30,14 +30,13 @@ from codereviewbuddy.models import (
     CIDiagnosisResult,
     CIStatusResult,
     ConfigInfo,
-    CreateIssueResult,
     PRDescriptionReviewResult,
     ReviewSummary,
     StackActivityResult,
     StackReviewStatusResult,
     TriageResult,
 )
-from codereviewbuddy.tools import ci, comments, descriptions, issues, stack
+from codereviewbuddy.tools import ci, comments, descriptions, stack
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
@@ -196,30 +195,23 @@ discovered PR numbers to get full thread details across the stack.
 
 ## Review workflow — step by step
 
-Follow this exact sequence when reviewing or responding to AI review comments:
+Follow this sequence when reviewing or responding to AI review comments:
 
 1. **Summarize** — `summarize_review_status()` (omit `pr_numbers` → auto-discover stack).
-   Check which PRs have unresolved threads and their severity breakdown.
+   Check which PRs have unresolved threads.
 2. **Triage** — `triage_review_comments(pr_numbers)` with the discovered PR numbers.
-   Returns only actionable threads, pre-classified by severity with a suggested action.
-3. **Process by severity** — work through findings **bugs first**, then flagged, then
-   warnings, then info. Never process in file order — severity order matters.
-4. **Fix** — for each `action: "fix"` item (🔴 bug, 🚩 flagged), implement the fix.
-5. **Reply** — call `reply_to_comment` for every bug and flagged thread you fixed,
-   explaining what you changed and the commit hash. **Never silently skip bug (🔴)
-   or flagged (🚩) threads** — always reply.
-6. **File issues** — for `action: "create_issue"` items, call `create_issue_from_comment`.
-7. **Verify** — `summarize_review_status()` again to confirm all bugs are addressed.
+   Returns only unresolved threads that still need attention.
+3. **Read and act** — read each thread's snippet and full context. Fix what needs
+   fixing, then reply with `reply_to_comment` explaining the change and commit hash.
+4. **Verify** — `summarize_review_status()` again to confirm all threads are addressed.
 
 For full thread details, fall back to `list_review_comments` for a specific PR — but
 prefer the triage workflow above.
 
 ## Responding to review comments
 
-Always reply to bug (🔴) and flagged (🚩) level comments with `reply_to_comment`
-explaining what you fixed, the commit hash, and any regression test added. Do not
-silently push — always acknowledge findings. For info (📝) and warning (🟡) comments,
-a reply is optional but appreciated when you made changes based on them.
+Always reply to review comments with `reply_to_comment` explaining what you fixed
+and the commit hash. Do not silently push — always acknowledge findings.
 
 ## Important: repo parameter
 
@@ -229,10 +221,9 @@ The `repo` parameter on each tool is only needed when auto-detection fails.
 
 ## Tracking useful suggestions
 
-When review comments contain genuinely useful improvement suggestions (not bugs being
-fixed in the PR), use `create_issue_from_comment` to create a GitHub issue. Use labels
-to classify: type labels (bug, enhancement, documentation) and priority labels (P0-P3).
-Don't file issues for nitpicks or things already being addressed.
+When review comments contain genuinely useful improvement suggestions that aren't
+being addressed in the current PR, ask the user if they'd like to file an issue
+to track the suggestion.
 """
 
 _SELF_IMPROVEMENT_INSTRUCTIONS = """
@@ -318,14 +309,9 @@ async def list_review_comments(
 ) -> ReviewSummary:
     """List all review threads for a PR with reviewer identification.
 
-    After fetching, always present a summary to the user:
+    After fetching, present a summary to the user:
     1. Group comments by file for readability.
-    2. Classify each by severity using emoji markers:
-       🔴 Bug/Critical — must fix before merge
-       🚩 Flagged — likely needs a code change
-       🟡 Warning — worth addressing but not blocking
-       📝 Info — acknowledged, no action required
-    3. Show unresolved count and severity breakdown as a quick summary line.
+    2. Show unresolved count as a quick summary line.
 
     Args:
         pr_number: The PR number to fetch comments for. Auto-detected from current branch if omitted.
@@ -360,8 +346,7 @@ async def list_stack_review_comments(
     Collapses N tool calls into 1 for the common stacked-PR review workflow.
     Gives the agent a full picture of the review state before deciding what to fix.
 
-    After fetching, present a per-PR summary: group by file, classify each
-    comment by severity (🔴 Bug, 🚩 Flagged, 🟡 Warning, 📝 Info).
+    After fetching, present a per-PR summary grouped by file.
 
     Args:
         pr_numbers: List of PR numbers to fetch comments for.
@@ -418,55 +403,6 @@ async def reply_to_comment(
         return "Cancelled"
 
 
-@mcp.tool(tags={"command"})
-async def create_issue_from_comment(
-    thread_id: str,
-    title: str,
-    pr_number: int | None = None,
-    labels: list[str] | None = None,
-    repo: str | None = None,
-) -> CreateIssueResult:
-    """Create a GitHub issue from a noteworthy review comment.
-
-    Use this to track genuinely useful improvement suggestions from AI reviewers
-    that aren't bugs being fixed in the current PR.
-
-    Args:
-        pr_number: PR number the comment belongs to. Auto-detected from current branch if omitted.
-        thread_id: The GraphQL node ID (PRRT_...) of the review thread.
-        title: Issue title summarizing the suggestion.
-        labels: Optional labels (e.g. ["enhancement", "P2"]). Use repo labels for type and priority.
-        repo: Repository in "owner/repo" format. Auto-detected if not provided.
-
-    Returns:
-        Created issue number, URL, and title.
-    """
-    try:
-        ctx = get_context()
-        cwd = await _get_workspace_cwd(ctx)
-        _check_auto_detect_prerequisites(cwd, has_pr=pr_number is not None, has_repo=repo is not None)
-        pr_number = _resolve_pr_number(pr_number, cwd=cwd)
-        return await issues.create_issue_from_comment(
-            pr_number,
-            thread_id,
-            title,
-            labels=labels,
-            repo=repo,
-            cwd=cwd,
-        )
-    except Exception as exc:
-        logger.exception("create_issue_from_comment failed for %s on PR #%s", thread_id, pr_number)
-        return CreateIssueResult(
-            issue_number=0,
-            issue_url="",
-            title=title,
-            error=_recovery_error(exc, tool_name="create_issue_from_comment", pr_number=pr_number, repo=repo),
-        )
-    except asyncio.CancelledError:
-        logger.warning("create_issue_from_comment cancelled for %s on PR #%s", thread_id, pr_number)
-        return CreateIssueResult(issue_number=0, issue_url="", title=title, error="Cancelled")
-
-
 @mcp.tool(tags={"query"})
 async def review_pr_descriptions(
     pr_numbers: list[int],
@@ -502,7 +438,7 @@ async def summarize_review_status(
     pr_numbers: list[int] | None = None,
     repo: str | None = None,
 ) -> StackReviewStatusResult:
-    """Get a lightweight stack-wide review status overview with severity counts.
+    """Get a lightweight stack-wide review status overview.
 
     Much fewer tokens than full thread data — use this to quickly scan which PRs
     need attention before diving into details with ``list_review_comments``.
@@ -510,17 +446,12 @@ async def summarize_review_status(
     When ``pr_numbers`` is omitted, auto-discovers the stack from the current branch
     using the same branch-chain walking as ``list_review_comments``.
 
-    Present the result as a concise table: one row per PR with unresolved count,
-    severity breakdown (🔴 bugs, 🚩 flagged, 🟡 warnings, 📝 info).
-    Highlight PRs that need immediate attention.
-
     Args:
         pr_numbers: PR numbers to summarize. Auto-discovers stack if omitted.
         repo: Repository in "owner/repo" format. Auto-detected if not provided.
 
     Returns:
-        Per-PR status with unresolved/resolved counts and severity breakdown
-        (bugs, flagged, warnings, info).
+        Per-PR status with unresolved/resolved counts.
     """
     try:
         ctx = get_context()
@@ -553,7 +484,7 @@ async def list_recent_unresolved(
         limit: How many recently merged PRs to scan (default 10, max 50).
 
     Returns:
-        Per-PR status with severity counts — same format as ``summarize_review_status``.
+        Per-PR status with unresolved/resolved counts — same format as ``summarize_review_status``.
     """
     try:
         ctx = get_context()
@@ -607,13 +538,9 @@ async def triage_review_comments(
     repo: str | None = None,
     owner_logins: list[str] | None = None,
 ) -> TriageResult:
-    """Show only review threads that need agent action — no noise, no full bodies.
+    """Show only unresolved review threads that need attention — no noise, no full bodies.
 
     Filters out PR-level reviews, already-replied threads, and resolved threads.
-    Pre-classifies severity and suggests an action for each thread.
-
-    Also flags "noted for followup" replies that forgot to include a GH issue
-    reference — these need a ``create_issue_from_comment`` call.
 
     Args:
         pr_numbers: PR numbers to triage (use stack from ``summarize_review_status``).
@@ -622,8 +549,7 @@ async def triage_review_comments(
             Defaults to CRB_OWNER_LOGINS env var. Pass explicitly to override.
 
     Returns:
-        TriageResult with actionable items sorted by severity (bugs first),
-        plus counts of items needing fixes, replies, or issue creation.
+        TriageResult with unresolved threads needing action.
     """
     try:
         ctx = get_context()
@@ -759,23 +685,16 @@ You are doing a full review pass on the current PR stack. Follow these steps in 
    Note which PRs have unresolved threads.
 
 2. **Triage** — call `triage_review_comments(pr_numbers)` with the discovered PR numbers.
-   This gives you only actionable threads, pre-classified by severity.
+   This gives you only unresolved threads that need attention.
 
-3. **Fix bugs first** — for each `action: "fix"` item (🔴 bug, 🚩 flagged):
-   - Read the thread snippet and file/line.
-   - Implement the fix.
-   - Reply with `reply_to_comment` explaining what you fixed and the commit hash.
+3. **Fix and reply** — for each thread:
+   - Read the snippet and file/line context.
+   - If a code fix is needed, implement it.
+   - Reply with `reply_to_comment` explaining what you did and the commit hash.
 
-4. **Reply to warnings/info** — for `action: "reply"` items:
-   - If you made changes based on the comment, reply explaining what changed.
-   - If the comment is not actionable, reply explaining why (don't ignore it).
+4. **Verify descriptions** — call `review_pr_descriptions(pr_numbers)` and fix any missing elements.
 
-5. **Create issues for followups** — for `action: "create_issue"` items:
-   - Call `create_issue_from_comment` with an appropriate title and labels.
-
-6. **Verify descriptions** — call `review_pr_descriptions(pr_numbers)` and fix any missing elements.
-
-7. **Final check** — call `summarize_review_status()` again to confirm all bugs are addressed.
+5. **Final check** — call `summarize_review_status()` again to confirm all threads are addressed.
 """
 
 
@@ -789,9 +708,7 @@ def pr_review_checklist() -> str:
 Run through this checklist before considering the stack ready to merge:
 
 ## Code quality
-- [ ] All 🔴 bug and 🚩 flagged threads are resolved (fixed + replied)
-- [ ] All 🟡 warning threads have been replied to (even if no code change)
-- [ ] No `action: "create_issue"` items left without a GitHub issue filed
+- [ ] All unresolved review threads are addressed (fixed + replied)
 
 ## PR hygiene
 - [ ] Every PR body has `Fixes #N` or `Closes #N` linking the issue it solves
@@ -818,7 +735,7 @@ def ship_stack() -> str:
 You are preparing to merge the current PR stack. Run these final checks:
 
 1. **Review status** — call `summarize_review_status()`.
-   - Any unresolved bugs (🔴) or flagged (🚩) threads? → STOP, fix them first.
+   - Any unresolved threads? → STOP, fix them first.
 2. **Activity check** — call `stack_activity()`.
    - Is the stack `settled` (no activity for 10+ min after push+review)? Good.
    - If not settled, review bots may still be working. Consider waiting.
@@ -833,7 +750,7 @@ You are preparing to merge the current PR stack. Run these final checks:
    - Failed? Call `diagnose_ci()` and fix before merging.
 
 5. **Report** — summarize the stack state:
-   - Total PRs, total unresolved threads, severity breakdown.
+   - Total PRs, total unresolved threads.
    - Whether it's safe to merge or what still needs attention.
 
 If everything is green, tell the user the stack is ready to merge.

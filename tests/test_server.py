@@ -18,7 +18,6 @@ from codereviewbuddy.server import (
     _resolve_pr_number,
     check_fastmcp_runtime,
     check_prerequisites,
-    create_issue_from_comment,
     diagnose_ci,
     reply_to_comment,
 )
@@ -304,12 +303,6 @@ class TestCancellationHandlers:
         mocker.patch("codereviewbuddy.server.comments.reply_to_comment", side_effect=asyncio.CancelledError)
         result = await reply_to_comment(thread_id="PRRT_abc", body="test", pr_number=1)
         assert result == "Cancelled"
-
-    async def test_create_issue_from_comment_cancelled(self, mocker: MockerFixture):
-        mocker.patch("codereviewbuddy.server.issues.create_issue_from_comment", side_effect=asyncio.CancelledError)
-        result = await create_issue_from_comment(thread_id="PRRT_abc", title="test", pr_number=1)
-        assert result.error == "Cancelled"
-        assert result.issue_number == 0
 
     async def test_diagnose_ci_cancelled(self, mocker: MockerFixture):
         mocker.patch("codereviewbuddy.server.call_sync_fn_in_threadpool", side_effect=asyncio.CancelledError)

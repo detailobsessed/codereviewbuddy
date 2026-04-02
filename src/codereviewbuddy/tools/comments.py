@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 import re
-from typing import TYPE_CHECKING, Literal
+from typing import TYPE_CHECKING
 
 from fastmcp.utilities.async_utils import call_sync_fn_in_threadpool
 
@@ -522,10 +522,6 @@ async def _reply_to_pr_comment(  # noqa: PLR0913, PLR0917
 # ---------------------------------------------------------------------------
 
 _BOLD_TITLE_RE = re.compile(r"\*\*(?:Bug|Info|Warning|Flagged)?:?\s*(.+?)\*\*", re.IGNORECASE)
-_ISSUE_REF_RE = re.compile(r"#\d+")
-_FOLLOWUP_KEYWORDS = re.compile(r"noted for followup|tracked for later|will address later|followup", re.IGNORECASE)
-
-_SEVERITY_ORDER = {"bug": 0, "flagged": 1, "warning": 2, "info": 3}
 
 
 def _extract_title(body: str) -> str:
@@ -539,44 +535,17 @@ def _has_owner_reply(thread: ReviewThread, owner_logins: frozenset[str]) -> bool
     return any(c.author in owner_logins for c in thread.comments)
 
 
-def _has_followup_without_issue(thread: ReviewThread, owner_logins: frozenset[str]) -> bool:
-    """Check if the owner replied with a 'noted for followup' but no issue reference anywhere in the thread."""
-    owner_comments = [c for c in thread.comments if c.author in owner_logins]
-    has_followup = any(_FOLLOWUP_KEYWORDS.search(c.body) for c in owner_comments)
-    if not has_followup:
-        return False
-    has_issue_ref = any(_ISSUE_REF_RE.search(c.body) for c in owner_comments)
-    return not has_issue_ref
-
-
-def _classify_action(severity: str) -> Literal["fix", "reply"]:
-    """Map severity to suggested action."""
-    if severity in {"bug", "flagged"}:
-        return "fix"
-    return "reply"
-
-
-def _thread_to_triage_item(
-    thread: ReviewThread,
-    action: Literal["fix", "reply", "create_issue"] = "reply",
-) -> TriageItem:
-    """Convert a ReviewThread into a TriageItem with severity classification."""
-    from codereviewbuddy.tools.stack import _classify_severity  # noqa: PLC0415
-
+def _thread_to_triage_item(thread: ReviewThread) -> TriageItem:
+    """Convert a ReviewThread into a compact TriageItem."""
     first = thread.comments[0] if thread.comments else None
     body = first.body if first else ""
-    severity = _classify_severity(body).value
-    if action != "create_issue":
-        action = _classify_action(severity)
     return TriageItem(
         thread_id=thread.thread_id,
         pr_number=thread.pr_number,
         file=thread.file,
         line=thread.line,
         reviewer=thread.reviewer,
-        severity=severity,
         title=_extract_title(body),
-        action=action,
         snippet=body[:200],
         comment_url=first.url if first else "",
     )
@@ -584,23 +553,12 @@ def _thread_to_triage_item(
 
 def _build_triage_hints(
     all_items: list[TriageItem],
-    needs_fix: int,
-    needs_reply: int,
-    needs_issue: int,
 ) -> tuple[list[str], str]:
     """Build next_steps and message for a TriageResult."""
-    next_steps: list[str] = []
-    message = ""
     if not all_items:
-        message = "No actionable threads — all threads have owner replies or are resolved."
-    else:
-        if needs_fix:
-            next_steps.append(f"Fix the {needs_fix} bug/flagged item(s) first, then call reply_to_comment() for each explaining the fix.")
-        if needs_reply:
-            next_steps.append(f"Reply to the {needs_reply} info/warning thread(s) with reply_to_comment().")
-        if needs_issue:
-            next_steps.append(f"Call create_issue_from_comment() for the {needs_issue} followup(s) missing a GitHub issue reference.")
-    return next_steps, message
+        return [], "No actionable threads — all threads have owner replies or are resolved."
+    n = len(all_items)
+    return [f"Read the {n} unresolved thread(s), fix what needs fixing, and reply with reply_to_comment()."], ""
 
 
 async def triage_review_comments(
@@ -610,13 +568,11 @@ async def triage_review_comments(
     cwd: str | None = None,
     ctx: Context | None = None,
 ) -> TriageResult:
-    """Return only threads that need agent action — no noise, no full bodies.
+    """Return only unresolved threads that need attention — no noise, no full bodies.
 
     Filters:
     - Unresolved inline threads only (excludes PR-level reviews).
     - Excludes threads that already have an owner reply.
-    - Pre-classifies severity using emoji markers.
-    - Flags 'noted for followup' replies that don't reference a GH issue.
 
     Args:
         pr_numbers: PR numbers to triage.
@@ -627,7 +583,7 @@ async def triage_review_comments(
         ctx: FastMCP context for progress reporting.
 
     Returns:
-        TriageResult with only actionable items, sorted by severity.
+        TriageResult with unresolved threads needing action.
     """
     configured_owners = get_config().owner_logins
     resolved = owner_logins if owner_logins is not None else configured_owners
@@ -635,7 +591,6 @@ async def triage_review_comments(
         logger.warning("No owner_logins configured — owner-reply filtering is disabled. Set CRB_OWNER_LOGINS to enable.")
     owners = frozenset(resolved)
     items: list[TriageItem] = []
-    issue_items: list[TriageItem] = []
 
     if repo:
         owner, repo_name = github_api.parse_repo(repo)
@@ -650,39 +605,20 @@ async def triage_review_comments(
         threads = await _collect_inline_threads_only(owner, repo_name, pr_number, status="unresolved", cwd=cwd, ctx=ctx)
 
         for thread in threads:
-            # Skip PR-level reviews — they're summary wrappers, not actionable
             if thread.is_pr_review:
                 continue
-
-            # Check for "noted for followup" without issue ref (even if owner already replied)
-            if _has_followup_without_issue(thread, owners):
-                issue_items.append(_thread_to_triage_item(thread, action="create_issue"))
-                continue
-
-            # Skip threads that already have an owner reply
             if _has_owner_reply(thread, owners):
                 continue
-
             items.append(_thread_to_triage_item(thread))
 
     if ctx and total:
         await ctx.report_progress(total, total)
 
-    # Sort all items by severity (bugs first)
-    all_items = items + issue_items
-    all_items.sort(key=lambda x: _SEVERITY_ORDER.get(x.severity, 99))
-    needs_fix = sum(1 for item in all_items if item.action == "fix")
-    needs_reply = sum(1 for item in all_items if item.action == "reply")
-    needs_issue = len(issue_items)
-
-    next_steps, message = _build_triage_hints(all_items, needs_fix, needs_reply, needs_issue)
+    next_steps, message = _build_triage_hints(items)
 
     return TriageResult(
-        items=all_items,
-        needs_fix=needs_fix,
-        needs_reply=needs_reply,
-        needs_issue=needs_issue,
-        total=len(all_items),
+        items=items,
+        total=len(items),
         next_steps=next_steps,
         message=message,
     )

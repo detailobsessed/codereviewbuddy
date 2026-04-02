@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from datetime import datetime  # noqa: TC003 - Pydantic needs this at runtime
 from enum import StrEnum
-from typing import Literal
 
 from pydantic import BaseModel, Field
 
@@ -65,10 +64,6 @@ class PRReviewStatusSummary(BaseModel):
     url: str = Field(description="PR URL")
     unresolved: int = Field(default=0, description="Number of unresolved threads")
     resolved: int = Field(default=0, description="Number of resolved threads")
-    bugs: int = Field(default=0, description="Number of 🔴 bug-level threads")
-    flagged: int = Field(default=0, description="Number of 🚩 flagged threads")
-    warnings: int = Field(default=0, description="Number of 🟡 warning threads")
-    info_count: int = Field(default=0, description="Number of 📝 info threads")
 
 
 class StackReviewStatusResult(BaseModel):
@@ -103,16 +98,6 @@ class PRDescriptionReviewResult(BaseModel):
     error: str | None = Field(default=None, description="Error message if the request failed")
 
 
-class CreateIssueResult(BaseModel):
-    """Result of creating a GitHub issue from a review comment."""
-
-    issue_number: int = Field(default=0, description="Created issue number")
-    issue_url: str = Field(default="", description="URL of the created issue")
-    title: str = Field(default="", description="Issue title")
-    next_steps: list[str] = Field(default_factory=list, description="Suggested next actions after creating the issue")
-    error: str | None = Field(default=None, description="Error message if the request failed")
-
-
 class TriageItem(BaseModel):
     """A single review thread that needs agent action."""
 
@@ -121,11 +106,7 @@ class TriageItem(BaseModel):
     file: str | None = Field(default=None, description="File path the comment is on")
     line: int | None = Field(default=None, description="Line number in the file")
     reviewer: str = Field(description="GitHub login of the user or bot that posted this thread")
-    severity: Literal["bug", "flagged", "warning", "info"] = Field(description="Classified severity: bug, flagged, warning, info")
     title: str = Field(default="", description="Short title extracted from the comment (first bold text)")
-    action: Literal["fix", "reply", "create_issue"] = Field(
-        description="Suggested action: 'fix' (bug/flagged), 'reply' (info/warning), or 'create_issue' (followup without issue ref)"
-    )
     snippet: str = Field(default="", description="First 200 chars of the comment body for context")
     comment_url: str = Field(default="", description="Direct URL to the comment on GitHub for user navigation")
 
@@ -153,10 +134,7 @@ class StackActivityResult(BaseModel):
 class TriageResult(BaseModel):
     """Triage result for one or more PRs — only threads needing agent action."""
 
-    items: list[TriageItem] = Field(default_factory=list, description="Threads needing action, ordered by severity (bugs first)")
-    needs_fix: int = Field(default=0, description="Count of threads that need a code fix (bug/flagged)")
-    needs_reply: int = Field(default=0, description="Count of threads that need a reply (info/warning)")
-    needs_issue: int = Field(default=0, description="Count of 'noted for followup' replies missing a GH issue reference")
+    items: list[TriageItem] = Field(default_factory=list, description="Unresolved threads needing action")
     total: int = Field(default=0, description="Total actionable threads")
     next_steps: list[str] = Field(default_factory=list, description="Suggested next actions based on triage results")
     message: str = Field(default="", description="Human-readable summary when results are empty or noteworthy")

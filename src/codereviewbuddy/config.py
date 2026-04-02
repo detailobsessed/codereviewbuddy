@@ -11,21 +11,11 @@ A ``.env`` file in the working directory is also loaded; explicit env vars take 
 from __future__ import annotations
 
 import logging
-from enum import StrEnum
 
 from pydantic import BaseModel, ConfigDict, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 logger = logging.getLogger(__name__)
-
-
-class Severity(StrEnum):
-    """Comment severity levels, ordered from least to most critical."""
-
-    INFO = "info"
-    WARNING = "warning"
-    FLAGGED = "flagged"
-    BUG = "bug"
 
 
 class PRDescriptionsConfig(BaseModel):

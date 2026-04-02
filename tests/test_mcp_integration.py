@@ -115,7 +115,6 @@ class TestToolRegistration:
         "list_recent_unresolved",
         "stack_activity",
         "reply_to_comment",
-        "create_issue_from_comment",
         "review_pr_descriptions",
         "show_config",
         "summarize_review_status",
@@ -129,7 +128,7 @@ class TestToolRegistration:
 
     async def test_tool_count(self, client: Client):
         tools = await client.list_tools()
-        assert len(tools) == 12
+        assert len(tools) == 11
 
 
 class TestPromptRegistration:
@@ -318,7 +317,7 @@ class TestTriageReviewCommentsMCP:
 
         mocker.patch(
             "codereviewbuddy.tools.comments.triage_review_comments",
-            return_value=TriageResult(items=[], needs_fix=0, needs_reply=0, needs_issue=0),
+            return_value=TriageResult(items=[]),
         )
         result = await client.call_tool("triage_review_comments", {"pr_numbers": [42]})
         assert not result.is_error

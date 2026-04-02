@@ -19,7 +19,7 @@ An MCP server that helps your AI coding agent manage PR review comments from any
 
 ### Triage & CI diagnosis
 
-- **Triage review comments** — `triage_review_comments` filters to only actionable threads, pre-classifies severity, suggests fix/reply/create_issue actions, and includes direct GitHub URLs for each comment
+- **Triage review comments** — `triage_review_comments` filters to only actionable threads, suggests fix/reply actions, and includes direct GitHub URLs for each comment
 - **Diagnose CI failures** — `diagnose_ci` collapses 3-5 sequential `gh` commands into one call: finds the failed run, identifies failed jobs/steps, and extracts actionable error lines
 - **Stack activity feed** — `stack_activity` shows a chronological timeline of pushes, reviews, labels, merges across all PRs in a stack with a `settled` flag for deciding when to proceed
 - **Scan merged PRs** — `list_recent_unresolved` catches late review comments on already-merged PRs
@@ -168,12 +168,11 @@ If your MCP client reports `No module named 'fastmcp.server.tasks.routing'`, the
 
 | Tool | Tags | Description |
 | ---- | ---- | ----------- |
-| `summarize_review_status` | query, discovery | Lightweight stack-wide overview with severity counts — start here |
-| `triage_review_comments` | query | Only actionable threads, pre-classified with severity and suggested actions |
+| `summarize_review_status` | query, discovery | Lightweight stack-wide overview — start here |
+| `triage_review_comments` | query | Only actionable threads with suggested actions |
 | `list_review_comments` | query | All review threads with reviewer ID, status, and auto-discovered stack |
 | `list_stack_review_comments` | query | Comments for multiple PRs in one call, grouped by PR number |
 | `reply_to_comment` | command | Reply to inline threads (`PRRT_`), PR-level reviews (`PRR_`), or bot comments (`IC_`) |
-| `create_issue_from_comment` | command | Create a GitHub issue from a review comment with labels and PR backlink |
 | `diagnose_ci` | query | Diagnose CI failures — finds the failed run, jobs, steps, and error lines in one call |
 | `check_ci_status` | query | Lightweight CI pass/fail/pending check for a PR — use before merging |
 | `stack_activity` | query | Chronological activity feed across a PR stack with a `settled` flag |
@@ -192,18 +191,6 @@ codereviewbuddy works **zero-config** with sensible defaults. All configuration 
 | `CRB_PR_DESCRIPTIONS__ENABLED` | bool | `true` | Whether `review_pr_descriptions` tool is available |
 | `CRB_SELF_IMPROVEMENT__ENABLED` | bool | `false` | Agents suggest Linear issues when they encounter server gaps |
 
-### Severity levels
-
-Severity is classified from emoji markers in comment bodies:
-
-| Emoji | Level | Meaning |
-| ----- | ----- | ------- |
-| 🔴 | `bug` | Critical issue, must fix before merge |
-| 🚩 | `flagged` | Likely needs a code change |
-| 🟡 | `warning` | Worth addressing but not blocking |
-| 📝 | `info` | Informational, no action required |
-| *(none)* | `info` | Default when no marker is present |
-
 ## Typical workflow
 
 ```
@@ -211,8 +198,7 @@ Severity is classified from emoji markers in comment bodies:
 2. triage_review_comments(pr_numbers=[42, 43])   # Only actionable threads with suggested actions
 3. # Fix bugs flagged by triage, then:
 4. reply_to_comment(42, thread_id, "Fixed in ...")  # Reply explaining the fix
-5. create_issue_from_comment(thread_id, "Improve X")  # Track followups as issues
-6. diagnose_ci(pr_number=42)                     # If CI fails, diagnose in one call
+5. diagnose_ci(pr_number=42)                     # If CI fails, diagnose in one call
 ```
 
 Each tool response includes `next_steps` hints guiding the agent to the right follow-up call. For stacked PRs, all query tools auto-discover the stack when `pr_numbers` is omitted.
@@ -248,7 +234,7 @@ The server is built on [FastMCP v3](https://github.com/jlowin/fastmcp) with a cl
 
 - **`server.py`** — FastMCP server with tool registration, middleware, instructions, and recovery-guided error handling
 - **`config.py`** — Configuration (`CRB_*` env vars via pydantic-settings)
-- **`tools/`** — Tool implementations (`comments.py`, `stack.py`, `ci.py`, `descriptions.py`, `issues.py`)
+- **`tools/`** — Tool implementations (`comments.py`, `stack.py`, `ci.py`, `descriptions.py`)
 - **`gh.py`** — Thin wrapper around the `gh` CLI for GraphQL and REST calls
 - **`models.py`** — Pydantic models for typed tool outputs with `next_steps` and `message` fields for agent guidance
 

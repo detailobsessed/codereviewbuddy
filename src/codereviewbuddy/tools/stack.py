@@ -8,7 +8,6 @@ from typing import TYPE_CHECKING
 from fastmcp.utilities.async_utils import call_sync_fn_in_threadpool
 
 from codereviewbuddy import gh, github_api
-from codereviewbuddy.config import Severity
 from codereviewbuddy.models import ActivityEvent, PRReviewStatusSummary, StackActivityResult, StackPR, StackReviewStatusResult
 
 if TYPE_CHECKING:
@@ -167,7 +166,7 @@ async def discover_stack(
 # Lightweight review status summarization
 # ---------------------------------------------------------------------------
 
-# Lightweight query: only first comment per thread (for severity), no full history
+# Lightweight query: only isResolved + comment existence check, no full history
 _SUMMARY_QUERY = """
 query($owner: String!, $repo: String!, $pr: Int!, $cursor: String) {
   repository(owner: $owner, name: $repo) {
@@ -180,10 +179,7 @@ query($owner: String!, $repo: String!, $pr: Int!, $cursor: String) {
           isResolved
           comments(first: 1) {
             nodes {
-              author { login }
-              body
-              path
-              createdAt
+              __typename
             }
           }
         }
@@ -192,17 +188,6 @@ query($owner: String!, $repo: String!, $pr: Int!, $cursor: String) {
   }
 }
 """
-
-
-def _classify_severity(body: str) -> Severity:
-    """Classify comment severity using emoji markers."""
-    if "\U0001f534" in body:
-        return Severity.BUG
-    if "\U0001f6a9" in body:
-        return Severity.FLAGGED
-    if "\U0001f7e1" in body:
-        return Severity.WARNING
-    return Severity.INFO
 
 
 async def _paginate_summary_threads(
@@ -238,53 +223,24 @@ async def _paginate_summary_threads(
     return raw_threads, pr_data.get("title", ""), pr_data.get("url", "")
 
 
-def _first_comment_author(node: dict[str, Any]) -> tuple[dict[str, Any], str] | None:
-    """Extract the first comment and author login from a thread node.
-
-    Returns None if the thread has no comments.
-    """
-    comments = node.get("comments", {}).get("nodes", [])
-    if not comments:
-        return None
-    first = comments[0]
-    author = (first.get("author") or {}).get("login", "unknown")
-    return first, author
-
-
-_SEVERITY_TO_FIELD: dict[Severity, str] = {
-    Severity.BUG: "bugs",
-    Severity.FLAGGED: "flagged",
-    Severity.WARNING: "warnings",
-    Severity.INFO: "info_count",
-}
+def _has_comments(node: dict[str, Any]) -> bool:
+    """Check whether a thread node has at least one comment."""
+    return bool(node.get("comments", {}).get("nodes"))
 
 
 def _count_thread_statuses(
     raw_threads: list[dict[str, Any]],
 ) -> dict[str, int]:
-    """Count resolved/unresolved threads and severity buckets for unresolved."""
-    counts: dict[str, int] = {
-        "unresolved": 0,
-        "resolved": 0,
-        "bugs": 0,
-        "flagged": 0,
-        "warnings": 0,
-        "info_count": 0,
-    }
+    """Count resolved/unresolved threads."""
+    counts: dict[str, int] = {"unresolved": 0, "resolved": 0}
 
     for node in raw_threads:
-        parsed = _first_comment_author(node)
-        if parsed is None:
+        if not _has_comments(node):
             continue
-        first, _author = parsed
-
         if node.get("isResolved", False):
             counts["resolved"] += 1
         else:
             counts["unresolved"] += 1
-            severity = _classify_severity(first.get("body", ""))
-            field = _SEVERITY_TO_FIELD.get(severity, "info_count")
-            counts[field] += 1
 
     return counts
 
@@ -308,24 +264,13 @@ async def _fetch_pr_summary(
 
 
 def _build_status_hints(
-    summaries: list[PRReviewStatusSummary],
     pr_numbers: list[int],
     total_unresolved: int,
 ) -> list[str]:
     """Build next_steps hints for a StackReviewStatusResult."""
-    next_steps: list[str] = []
     if total_unresolved == 0:
-        next_steps.append("All threads resolved! Call review_pr_descriptions(pr_numbers) to check PR quality before merging.")
-        return next_steps
-
-    critical = sum(s.bugs + s.flagged for s in summaries)
-    if critical:
-        next_steps.append(
-            f"Call triage_review_comments(pr_numbers={pr_numbers}) to see the {critical} bug/flagged item(s) that need fixes."
-        )
-    else:
-        next_steps.append(f"Call triage_review_comments(pr_numbers={pr_numbers}) to see actionable threads.")
-    return next_steps
+        return ["All threads resolved! Call review_pr_descriptions(pr_numbers) to check PR quality before merging."]
+    return [f"Call triage_review_comments(pr_numbers={pr_numbers}) to see the {total_unresolved} unresolved thread(s)."]
 
 
 async def summarize_review_status(
@@ -345,7 +290,7 @@ async def summarize_review_status(
         ctx: FastMCP context for session caching and progress.
 
     Returns:
-        Compact per-PR status with severity counts.
+        Compact per-PR status with unresolved/resolved counts.
     """
     if repo:
         owner, repo_name = github_api.parse_repo(repo)
@@ -390,7 +335,7 @@ async def summarize_review_status(
         await ctx.report_progress(total, total)
 
     total_unresolved = sum(s.unresolved for s in summaries)
-    next_steps = _build_status_hints(summaries, pr_numbers, total_unresolved)
+    next_steps = _build_status_hints(pr_numbers, total_unresolved)
 
     return StackReviewStatusResult(
         prs=summaries,
