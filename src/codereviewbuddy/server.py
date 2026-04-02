@@ -68,7 +68,7 @@ async def _get_workspace_cwd(ctx: Context | None = None) -> str | None:
     # 1. MCP roots (per-window — correct for multi-window setups)
     if ctx is not None:
         try:
-            roots = await ctx.list_roots()
+            roots = await asyncio.wait_for(ctx.list_roots(), timeout=5.0)
             if roots:
                 from urllib.parse import unquote, urlparse  # noqa: PLC0415
 

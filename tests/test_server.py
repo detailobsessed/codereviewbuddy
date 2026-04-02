@@ -164,6 +164,29 @@ class TestGetWorkspaceCwd:
 
         assert await _get_workspace_cwd(ctx) == "/git/root"
 
+    async def test_timeout_falls_back_to_env_var(self, monkeypatch: pytest.MonkeyPatch, mocker: MockerFixture):
+        import asyncio
+        from unittest.mock import AsyncMock
+
+        async def _hang() -> list:
+            await asyncio.sleep(60)
+            return []
+
+        monkeypatch.setenv("CRB_WORKSPACE", "/from/env")
+        ctx = mocker.MagicMock()
+        ctx.list_roots = AsyncMock(side_effect=_hang)
+
+        # Patch the timeout to be short so the test doesn't wait 5s
+        original_wait_for = asyncio.wait_for
+
+        async def _fast_wait_for(coro, *, timeout=None):
+            del timeout  # Use a short timeout instead of the real one
+            return await original_wait_for(coro, timeout=0.1)
+
+        mocker.patch("codereviewbuddy.server.asyncio.wait_for", side_effect=_fast_wait_for)
+        result = await _get_workspace_cwd(ctx)
+        assert result == "/from/env"
+
     async def test_unsupported_scheme_falls_through_to_git_root(self, monkeypatch: pytest.MonkeyPatch, mocker: MockerFixture):
         from unittest.mock import AsyncMock
 
