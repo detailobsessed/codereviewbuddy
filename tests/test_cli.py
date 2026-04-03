@@ -92,7 +92,7 @@ class TestCheckEnv:
 
         mocker.patch(
             "codereviewbuddy.config.load_config",
-            return_value=Config(self_improvement=SelfImprovementConfig(enabled=True, repo="owner/repo")),
+            return_value=Config(self_improvement=SelfImprovementConfig(enabled=True)),
         )
         mocker.patch("codereviewbuddy.gh.check_auth", return_value="testuser")
         check_env()

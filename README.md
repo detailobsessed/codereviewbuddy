@@ -99,8 +99,7 @@ With optional environment variables:
 
 ```bash
 uvx codereviewbuddy install windsurf \
-  --env CRB_SELF_IMPROVEMENT__ENABLED=true \
-  --env CRB_SELF_IMPROVEMENT__REPO=your-org/codereviewbuddy
+  --env CRB_SELF_IMPROVEMENT__ENABLED=true
 ```
 
 For any other client, generate the JSON config:
@@ -126,9 +125,8 @@ If you prefer manual setup, add the following to your MCP client's config JSON:
         // All CRB_* env vars are optional — zero-config works out of the box.
         // See Configuration section below for the full list.
 
-        // Self-improvement: agents file issues when they hit server gaps
-        // "CRB_SELF_IMPROVEMENT__ENABLED": "true",
-        // "CRB_SELF_IMPROVEMENT__REPO": "your-org/codereviewbuddy"
+        // Self-improvement: agents suggest Linear issues when they hit server gaps
+        // "CRB_SELF_IMPROVEMENT__ENABLED": "true"
       }
     }
   }
@@ -151,8 +149,7 @@ For local development, use `uv run --directory` to run the server from your chec
       "args": ["run", "--directory", "/path/to/codereviewbuddy", "codereviewbuddy"],
       "env": {
         // Same CRB_* env vars as above, plus dev-specific settings:
-        "CRB_SELF_IMPROVEMENT__ENABLED": "true",
-        "CRB_SELF_IMPROVEMENT__REPO": "detailobsessed/codereviewbuddy"
+        "CRB_SELF_IMPROVEMENT__ENABLED": "true"
       }
     }
   }
@@ -193,8 +190,7 @@ codereviewbuddy works **zero-config** with sensible defaults. All configuration 
 | Env var | Type | Default | Description |
 | ------- | ---- | ------- | ----------- |
 | `CRB_PR_DESCRIPTIONS__ENABLED` | bool | `true` | Whether `review_pr_descriptions` tool is available |
-| `CRB_SELF_IMPROVEMENT__ENABLED` | bool | `false` | Agents file issues when they encounter server gaps |
-| `CRB_SELF_IMPROVEMENT__REPO` | string | `""` | Repository to file issues against (e.g. `owner/repo`) |
+| `CRB_SELF_IMPROVEMENT__ENABLED` | bool | `false` | Agents suggest Linear issues when they encounter server gaps |
 
 ### Severity levels
 

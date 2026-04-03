@@ -163,7 +163,7 @@ def _print_config_summary(config: object) -> None:
 
     si = config.self_improvement
     if si.enabled:
-        print(f"  Self-improvement: enabled → {si.repo}")
+        print("  Self-improvement: enabled")
     else:
         print("  Self-improvement: disabled")
 
