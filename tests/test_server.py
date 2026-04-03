@@ -299,14 +299,9 @@ class TestRecoveryError:
         assert "rate limit" in result
 
 
+@pytest.mark.usefixtures("patch_server_context")
 class TestCancellationHandlers:
     """Ensure all tool handlers return a clean error on asyncio.CancelledError."""
-
-    @pytest.fixture(autouse=True)
-    def _patch_context(self, mocker: MockerFixture):
-        ctx = mocker.MagicMock()
-        mocker.patch("codereviewbuddy.server.get_context", return_value=ctx)
-        mocker.patch("codereviewbuddy.server._get_workspace_cwd", return_value="/tmp")  # noqa: S108
 
     async def test_reply_to_comment_cancelled(self, mocker: MockerFixture):
         mocker.patch("codereviewbuddy.server.comments.reply_to_comment", side_effect=asyncio.CancelledError)
@@ -357,6 +352,58 @@ class TestCancellationHandlers:
         mocker.patch("codereviewbuddy.server.comments.triage_review_comments", side_effect=asyncio.CancelledError)
         result = await triage_review_comments(pr_numbers=[42])
         assert result.error == "Cancelled"
+
+
+@pytest.mark.usefixtures("patch_server_context")
+class TestErrorHandlers:
+    """Ensure tool wrappers return structured errors on Exception (not just CancelledError)."""
+
+    async def test_review_pr_descriptions_error(self, mocker: MockerFixture):
+        mocker.patch("codereviewbuddy.server.descriptions.review_pr_descriptions", side_effect=RuntimeError("boom"))
+        result = await review_pr_descriptions(pr_numbers=[42])
+        assert result.error is not None
+        assert "review_pr_descriptions failed" in result.error
+
+    async def test_summarize_review_status_error(self, mocker: MockerFixture):
+        mocker.patch("codereviewbuddy.server.stack.summarize_review_status", side_effect=RuntimeError("boom"))
+        result = await summarize_review_status(pr_numbers=[42])
+        assert result.error is not None
+        assert "summarize_review_status failed" in result.error
+
+    async def test_list_recent_unresolved_error(self, mocker: MockerFixture):
+        mocker.patch("codereviewbuddy.server.stack.list_recent_unresolved", side_effect=RuntimeError("boom"))
+        result = await list_recent_unresolved(repo="o/r")
+        assert result.error is not None
+        assert "list_recent_unresolved failed" in result.error
+
+    async def test_stack_activity_error(self, mocker: MockerFixture):
+        mocker.patch("codereviewbuddy.server.stack.stack_activity", side_effect=RuntimeError("boom"))
+        result = await stack_activity(pr_numbers=[42])
+        assert result.error is not None
+        assert "stack_activity failed" in result.error
+
+    async def test_check_ci_status_error(self, mocker: MockerFixture):
+        mocker.patch("codereviewbuddy.server.call_sync_fn_in_threadpool", side_effect=RuntimeError("boom"))
+        result = await check_ci_status(pr_number=1)
+        assert result.error is not None
+        assert "check_ci_status failed" in result.error
+
+    async def test_diagnose_ci_error(self, mocker: MockerFixture):
+        mocker.patch("codereviewbuddy.server.call_sync_fn_in_threadpool", side_effect=RuntimeError("boom"))
+        result = await diagnose_ci(pr_number=1)
+        assert result.error is not None
+        assert "diagnose_ci failed" in result.error
+
+    async def test_triage_review_comments_error(self, mocker: MockerFixture):
+        mocker.patch("codereviewbuddy.server.comments.triage_review_comments", side_effect=RuntimeError("boom"))
+        result = await triage_review_comments(pr_numbers=[42])
+        assert result.error is not None
+        assert "triage_review_comments failed" in result.error
+
+    async def test_reply_to_comment_error(self, mocker: MockerFixture):
+        mocker.patch("codereviewbuddy.server.comments.reply_to_comment", side_effect=RuntimeError("boom"))
+        result = await reply_to_comment(thread_id="PRRT_abc", body="test", pr_number=1)
+        assert "reply_to_comment failed" in result
 
 
 class TestResolveThreadPrNumber:

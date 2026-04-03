@@ -198,6 +198,55 @@ class TestFetchPrSummary:
         assert summary.unresolved == 2
         assert summary.resolved == 1
 
+    async def test_paginates_multiple_pages(self, mocker: MockerFixture):
+        """Verify cursor-based pagination sums threads across pages (ISM-147)."""
+        thread_node = {
+            "isResolved": False,
+            "comments": {
+                "nodes": [{"author": {"login": "bot[bot]"}, "body": "issue", "path": "a.py", "createdAt": "2026-02-10T10:00:00Z"}],
+            },
+        }
+        page1 = {
+            "data": {
+                "repository": {
+                    "pullRequest": {
+                        "title": "big PR",
+                        "url": "https://github.com/o/r/pull/42",
+                        "reviewThreads": {
+                            "pageInfo": {"hasNextPage": True, "endCursor": "cursor_abc"},
+                            "nodes": [thread_node] * 3,
+                        },
+                    }
+                }
+            },
+        }
+        page2 = {
+            "data": {
+                "repository": {
+                    "pullRequest": {
+                        "title": "big PR",
+                        "url": "https://github.com/o/r/pull/42",
+                        "reviewThreads": {
+                            "pageInfo": {"hasNextPage": False, "endCursor": None},
+                            "nodes": [thread_node] * 2,
+                        },
+                    }
+                }
+            },
+        }
+        mock_graphql = mocker.patch(
+            "codereviewbuddy.tools.stack.github_api.graphql",
+            new_callable=AsyncMock,
+            side_effect=[page1, page2],
+        )
+
+        summary = await _fetch_pr_summary("o", "r", 42)
+        assert summary.unresolved == 5  # 3 + 2 across pages
+        assert mock_graphql.call_count == 2
+        # Verify cursor was passed on second call
+        second_call_vars = mock_graphql.call_args_list[1].kwargs.get("variables", {})
+        assert second_call_vars.get("cursor") == "cursor_abc"
+
 
 class TestSummarizeReviewStatus:
     async def test_with_explicit_pr_numbers(self, mocker: MockerFixture):
