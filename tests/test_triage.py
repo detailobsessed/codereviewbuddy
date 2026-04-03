@@ -11,9 +11,7 @@ if TYPE_CHECKING:
 
 from codereviewbuddy.models import CommentStatus, ReviewComment, ReviewThread
 from codereviewbuddy.tools.comments import (
-    _classify_action,
     _extract_title,
-    _has_followup_without_issue,
     _has_owner_reply,
     triage_review_comments,
 )
@@ -104,64 +102,6 @@ class TestHasOwnerReply:
         assert _has_owner_reply(thread, frozenset(["mybot"])) is True
 
 
-class TestHasFollowupWithoutIssue:
-    def test_followup_without_issue(self):
-        thread = _thread(
-            extra_comments=[
-                ReviewComment(author="ichoosetoaccept", body="Noted for followup"),
-            ]
-        )
-        assert _has_followup_without_issue(thread, frozenset(["ichoosetoaccept"])) is True
-
-    def test_followup_with_issue(self):
-        thread = _thread(
-            extra_comments=[
-                ReviewComment(author="ichoosetoaccept", body="Tracked for later in #42"),
-            ]
-        )
-        assert _has_followup_without_issue(thread, frozenset(["ichoosetoaccept"])) is False
-
-    def test_no_followup(self):
-        thread = _thread(
-            extra_comments=[
-                ReviewComment(author="ichoosetoaccept", body="Fixed in abc123"),
-            ]
-        )
-        assert _has_followup_without_issue(thread, frozenset(["ichoosetoaccept"])) is False
-
-    def test_non_owner_followup_ignored(self):
-        thread = _thread(
-            extra_comments=[
-                ReviewComment(author="someone_else", body="Noted for followup"),
-            ]
-        )
-        assert _has_followup_without_issue(thread, frozenset(["ichoosetoaccept"])) is False
-
-    def test_issue_ref_in_separate_reply(self):
-        """Regression: issue ref in a later comment should clear the followup flag."""
-        thread = _thread(
-            extra_comments=[
-                ReviewComment(author="ichoosetoaccept", body="Noted for followup"),
-                ReviewComment(author="ichoosetoaccept", body="Filed #99"),
-            ]
-        )
-        assert _has_followup_without_issue(thread, frozenset(["ichoosetoaccept"])) is False
-
-
-class TestClassifyAction:
-    def test_bug_needs_fix(self):
-        assert _classify_action("bug") == "fix"
-
-    def test_flagged_needs_fix(self):
-        assert _classify_action("flagged") == "fix"
-
-    def test_warning_needs_reply(self):
-        assert _classify_action("warning") == "reply"
-
-    def test_info_needs_reply(self):
-        assert _classify_action("info") == "reply"
-
-
 # ---------------------------------------------------------------------------
 # Integration tests for triage_review_comments
 # ---------------------------------------------------------------------------
@@ -177,28 +117,14 @@ class TestTriageReviewComments:
             return_value=threads,
         )
 
-    async def test_unreplied_bug_needs_fix(self, mocker: MockerFixture):
-        """Unreplied bug thread should appear with action='fix'."""
+    async def test_unreplied_thread_appears(self, mocker: MockerFixture):
+        """Unreplied thread should appear in triage."""
         bug = _thread(body="🔴 **Bug: Crash on startup**")
         self._mock_list(mocker, [bug])
 
         result = await triage_review_comments([42], repo="o/r")
         assert result.total == 1
-        assert result.needs_fix == 1
-        assert result.items[0].severity == "bug"
-        assert result.items[0].action == "fix"
         assert result.items[0].title == "Crash on startup"
-
-    async def test_unreplied_info_needs_reply(self, mocker: MockerFixture):
-        """Unreplied info thread should appear with action='reply'."""
-        info = _thread(body="📝 **Info: Consider refactoring**")
-        self._mock_list(mocker, [info])
-
-        result = await triage_review_comments([42], repo="o/r")
-        assert result.total == 1
-        assert result.needs_reply == 1
-        assert result.items[0].severity == "info"
-        assert result.items[0].action == "reply"
 
     async def test_replied_thread_excluded(self, mocker: MockerFixture):
         """Thread with an owner reply should not appear in triage."""
@@ -220,44 +146,6 @@ class TestTriageReviewComments:
         result = await triage_review_comments([42], repo="o/r")
         assert result.total == 0
 
-    async def test_followup_without_issue_flagged(self, mocker: MockerFixture):
-        """Owner reply with 'noted for followup' but no issue ref should appear as create_issue."""
-        thread = _thread(
-            extra_comments=[
-                ReviewComment(author="ichoosetoaccept", body="Noted for followup"),
-            ]
-        )
-        self._mock_list(mocker, [thread])
-
-        result = await triage_review_comments([42], repo="o/r", owner_logins=["ichoosetoaccept"])
-        assert result.total == 1
-        assert result.needs_issue == 1
-        assert result.items[0].action == "create_issue"
-
-    async def test_followup_with_issue_excluded(self, mocker: MockerFixture):
-        """Owner reply with 'noted for followup' AND issue ref should be excluded (already handled)."""
-        thread = _thread(
-            extra_comments=[
-                ReviewComment(author="ichoosetoaccept", body="Tracked for later in #42"),
-            ]
-        )
-        self._mock_list(mocker, [thread])
-
-        result = await triage_review_comments([42], repo="o/r", owner_logins=["ichoosetoaccept"])
-        assert result.total == 0
-
-    async def test_sorted_by_severity(self, mocker: MockerFixture):
-        """Items should be sorted bugs-first."""
-        info = _thread(thread_id="PRRT_info", body="📝 **Info: Minor thing**")
-        bug = _thread(thread_id="PRRT_bug", body="🔴 **Bug: Critical crash**")
-        warning = _thread(thread_id="PRRT_warn", body="🟡 **Warning: Performance**")
-        self._mock_list(mocker, [info, bug, warning])
-
-        result = await triage_review_comments([42], repo="o/r")
-        assert result.total == 3
-        severities = [item.severity for item in result.items if item.action != "create_issue"]
-        assert severities == ["bug", "warning", "info"]
-
     async def test_multiple_prs(self, mocker: MockerFixture):
         """Should triage across multiple PRs."""
         bug_42 = _thread(thread_id="PRRT_42", pr_number=42, body="🔴 **Bug: Issue A**")
@@ -274,8 +162,6 @@ class TestTriageReviewComments:
 
         result = await triage_review_comments([42, 43], repo="o/r")
         assert result.total == 2
-        assert result.needs_fix == 1
-        assert result.needs_reply == 1
         assert mock.call_count == 2
 
     async def test_empty_pr_list(self):
@@ -336,3 +222,20 @@ class TestTriageReviewComments:
 
         result = await triage_review_comments([42], repo="o/r")
         assert len(result.items[0].snippet) == 200
+
+    async def test_auto_detects_repo(self, mocker: MockerFixture):
+        """When repo is omitted, auto-detect from cwd."""
+        thread = _thread(body="**Fix this**")
+        self._mock_list(mocker, [thread])
+        mocker.patch("codereviewbuddy.tools.comments.gh.get_repo_info", return_value=("o", "r"))
+
+        result = await triage_review_comments([42])
+        assert result.total == 1
+
+    async def test_empty_result_message(self, mocker: MockerFixture):
+        """Empty triage should return a helpful message."""
+        self._mock_list(mocker, [])
+
+        result = await triage_review_comments([42], repo="o/r")
+        assert result.total == 0
+        assert "No actionable threads" in result.message
