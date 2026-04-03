@@ -24,3 +24,6 @@ MD024: false
 
 # Allow blank lines between consecutive blockquotes (used for callout boxes in README)
 MD028: false
+
+# Stop complaining about MD tables
+MD060: false

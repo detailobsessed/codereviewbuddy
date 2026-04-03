@@ -8,7 +8,7 @@ import re
 from typing import TYPE_CHECKING
 
 from codereviewbuddy import gh
-from codereviewbuddy.models import CIDiagnosisResult, CIJobFailure
+from codereviewbuddy.models import CICheckStatus, CIDiagnosisResult, CIJobFailure, CIStatusResult
 
 if TYPE_CHECKING:
     from typing import Any
@@ -249,6 +249,71 @@ def diagnose_ci(
         conclusion=conclusion,
         url=url,
         failures=failures,
+        next_steps=next_steps,
+    )
+
+
+def check_ci_status(
+    *,
+    pr_number: int,
+    repo: str | None = None,
+    cwd: str | None = None,
+) -> CIStatusResult:
+    """Check whether CI is passing for a PR.
+
+    Uses ``gh pr checks`` for a lightweight pass/fail/pending answer
+    without parsing full logs.
+
+    Args:
+        pr_number: PR number to check.
+        repo: Repository in "owner/repo" format.
+        cwd: Working directory for the gh CLI.
+
+    Returns:
+        Overall status with per-check breakdown.
+    """
+    args = ["pr", "checks", str(pr_number), "--json", "name,state,bucket,workflow"]
+    if repo:
+        args.extend(["--repo", repo])
+
+    raw = gh.run_gh(*args, cwd=cwd)
+    raw_checks: list[dict[str, str]] = json.loads(raw)
+
+    if not raw_checks:
+        return CIStatusResult(
+            overall="none",
+            next_steps=["No CI checks found — verify the PR has required status checks configured."],
+        )
+
+    checks: list[CICheckStatus] = []
+    passed = failed = pending = 0
+    for entry in raw_checks:
+        bucket = entry.get("bucket", "pending")
+        if bucket == "pass":
+            passed += 1
+        elif bucket == "fail":
+            failed += 1
+        else:
+            pending += 1
+        checks.append(CICheckStatus(name=entry.get("name", ""), status=bucket, workflow=entry.get("workflow", "")))
+
+    if failed:
+        overall = "fail"
+        next_steps = [f"Call diagnose_ci(pr_number={pr_number}) to see failure details and error lines."]
+    elif pending:
+        overall = "pending"
+        next_steps = ["Wait for pending checks to complete, then call check_ci_status() again."]
+    else:
+        overall = "pass"
+        next_steps = ["CI is green — safe to proceed with merge."]
+
+    return CIStatusResult(
+        overall=overall,
+        checks=checks,
+        total=len(checks),
+        passed=passed,
+        failed=failed,
+        pending=pending,
         next_steps=next_steps,
     )
 
