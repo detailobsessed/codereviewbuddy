@@ -13,8 +13,8 @@ An MCP server that helps your AI coding agent manage PR review comments from any
 
 ### Review comment management
 
-- **List review comments** — inline threads, PR-level reviews, and bot comments (codecov, netlify, vercel, etc.) with reviewer identification
-- **Stacked PR support** — `list_stack_review_comments` fetches comments across an entire PR stack in one call
+- **Triage review comments** — `triage_review_comments` filters to only actionable inline threads, suggests fix/reply actions
+- **Get thread details** — `get_thread` fetches full conversation history for any thread by node ID
 - **Reply to anything** — inline review threads (`PRRT_`), PR-level reviews (`PRR_`), and bot issue comments (`IC_`) all routed to the correct GitHub API
 
 ### Triage & CI diagnosis
@@ -23,10 +23,6 @@ An MCP server that helps your AI coding agent manage PR review comments from any
 - **Diagnose CI failures** — `diagnose_ci` collapses 3-5 sequential `gh` commands into one call: finds the failed run, identifies failed jobs/steps, and extracts actionable error lines
 - **Stack activity feed** — `stack_activity` shows a chronological timeline of pushes, reviews, labels, merges across all PRs in a stack with a `settled` flag for deciding when to proceed
 - **Scan merged PRs** — `list_recent_unresolved` catches late review comments on already-merged PRs
-
-### Issue tracking
-
-- **Create issues from review comments** — turn useful AI suggestions into GitHub issues with labels, PR backlinks, file/line location, and quoted comment text
 
 ### Agent experience
 
@@ -53,7 +49,7 @@ FastMCP v3 gives you terminal testing of the server with no extra code:
 fastmcp list codereviewbuddy.server:mcp
 
 # Call a tool directly from the terminal
-fastmcp call codereviewbuddy.server:mcp list_review_comments pr_number=42
+fastmcp call codereviewbuddy.server:mcp triage_review_comments pr_numbers='[42]'
 
 # Inspect server metadata
 fastmcp inspect codereviewbuddy.server:mcp
@@ -169,9 +165,8 @@ If your MCP client reports `No module named 'fastmcp.server.tasks.routing'`, the
 | Tool | Tags | Description |
 | ---- | ---- | ----------- |
 | `summarize_review_status` | query, discovery | Lightweight stack-wide overview — start here |
-| `triage_review_comments` | query | Only actionable threads with suggested actions |
-| `list_review_comments` | query | All review threads with reviewer ID, status, and auto-discovered stack |
-| `list_stack_review_comments` | query | Comments for multiple PRs in one call, grouped by PR number |
+| `triage_review_comments` | query | Only actionable inline threads with suggested actions |
+| `get_thread` | query | Full thread details by node ID — use after triage for conversation history |
 | `reply_to_comment` | command | Reply to inline threads (`PRRT_`), PR-level reviews (`PRR_`), or bot comments (`IC_`) |
 | `diagnose_ci` | query | Diagnose CI failures — finds the failed run, jobs, steps, and error lines in one call |
 | `check_ci_status` | query | Lightweight CI pass/fail/pending check for a PR — use before merging |

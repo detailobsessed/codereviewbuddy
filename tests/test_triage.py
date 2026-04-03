@@ -108,11 +108,11 @@ class TestHasOwnerReply:
 
 
 class TestTriageReviewComments:
-    """Integration tests that mock list_review_comments and verify triage logic."""
+    """Integration tests that mock _get_inline_threads and verify triage logic."""
 
     def _mock_list(self, mocker: MockerFixture, threads: list[ReviewThread]) -> AsyncMock:
         return mocker.patch(
-            "codereviewbuddy.tools.comments._collect_inline_threads_only",
+            "codereviewbuddy.tools.comments._get_inline_threads",
             new_callable=AsyncMock,
             return_value=threads,
         )
@@ -138,21 +138,13 @@ class TestTriageReviewComments:
         result = await triage_review_comments([42], repo="o/r", owner_logins=["ichoosetoaccept"])
         assert result.total == 0
 
-    async def test_pr_review_excluded(self, mocker: MockerFixture):
-        """PR-level reviews should not appear in triage."""
-        pr_review = _thread(is_pr_review=True)
-        self._mock_list(mocker, [pr_review])
-
-        result = await triage_review_comments([42], repo="o/r")
-        assert result.total == 0
-
     async def test_multiple_prs(self, mocker: MockerFixture):
         """Should triage across multiple PRs."""
         bug_42 = _thread(thread_id="PRRT_42", pr_number=42, body="🔴 **Bug: Issue A**")
         info_43 = _thread(thread_id="PRRT_43", pr_number=43, body="📝 **Info: Issue B**")
 
         mock = mocker.patch(
-            "codereviewbuddy.tools.comments._collect_inline_threads_only",
+            "codereviewbuddy.tools.comments._get_inline_threads",
             new_callable=AsyncMock,
             side_effect=[
                 [bug_42],
@@ -213,15 +205,6 @@ class TestTriageReviewComments:
             assert result.total == 1  # empty owners = no filtering
         finally:
             set_config(Config())  # Reset to defaults
-
-    async def test_snippet_truncated(self, mocker: MockerFixture):
-        """Snippet should be truncated to 200 chars."""
-        long_body = "🔴 **Bug: Long issue**\n" + "x" * 300
-        thread = _thread(body=long_body)
-        self._mock_list(mocker, [thread])
-
-        result = await triage_review_comments([42], repo="o/r")
-        assert len(result.items[0].snippet) == 200
 
     async def test_auto_detects_repo(self, mocker: MockerFixture):
         """When repo is omitted, auto-detect from cwd."""
