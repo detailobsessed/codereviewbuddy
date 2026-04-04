@@ -332,6 +332,9 @@ async def fetch_pr_summary(
         Compact review status with thread counts, reviewer states, and overall review state.
     """
     raw_threads, pr_data = await _paginate_summary_threads(owner, repo, pr_number, cwd=cwd)
+    if not pr_data:
+        msg = f"PR #{pr_number} not found in {owner}/{repo}"
+        raise ValueError(msg)
     counts = _count_thread_statuses(raw_threads)
     reviewers = _extract_reviewer_states(pr_data)
 
@@ -584,7 +587,7 @@ def _parse_timeline_events(
 
         try:
             ts = datetime.fromisoformat(ts_str)
-        except ValueError, AttributeError:
+        except (ValueError, AttributeError):
             continue
 
         events.append(
