@@ -314,13 +314,23 @@ def _compute_review_state(reviewers: list[ReviewerState]) -> str:
     return "commented"
 
 
-async def _fetch_pr_summary(
+async def fetch_pr_summary(
     owner: str,
     repo: str,
     pr_number: int,
     cwd: str | None = None,
 ) -> PRReviewStatusSummary:
-    """Fetch lightweight review status for a single PR."""
+    """Fetch lightweight review status for a single PR.
+
+    Args:
+        owner: Repository owner (user or org).
+        repo: Repository name (without owner prefix).
+        pr_number: Pull request number.
+        cwd: Working directory for git operations.
+
+    Returns:
+        Compact review status with thread counts, reviewer states, and overall review state.
+    """
     raw_threads, pr_data = await _paginate_summary_threads(owner, repo, pr_number, cwd=cwd)
     counts = _count_thread_statuses(raw_threads)
     reviewers = _extract_reviewer_states(pr_data)
@@ -400,7 +410,7 @@ async def summarize_review_status(
     for i, pr_num in enumerate(pr_numbers):
         if ctx and total:
             await ctx.report_progress(i, total)
-        summary = await _fetch_pr_summary(owner, repo_name, pr_num, cwd=cwd)
+        summary = await fetch_pr_summary(owner, repo_name, pr_num, cwd=cwd)
         summaries.append(summary)
 
     if ctx and total:
@@ -485,7 +495,7 @@ async def list_recent_unresolved(
     for i, pr in enumerate(merged_prs):
         if ctx and total:
             await ctx.report_progress(i, total)
-        summary = await _fetch_pr_summary(owner, repo_name, pr["number"], cwd=cwd)
+        summary = await fetch_pr_summary(owner, repo_name, pr["number"], cwd=cwd)
         if summary.unresolved > 0:
             summaries.append(summary)
 

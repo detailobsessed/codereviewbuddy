@@ -9,6 +9,7 @@ from __future__ import annotations
 import asyncio
 import importlib
 import importlib.util
+import json
 import logging
 import os
 from pathlib import Path
@@ -342,8 +343,21 @@ async def pr_reviews(owner: str, repo: str, pr_number: int) -> str:
     Returns lightweight review status: thread counts, reviewer states,
     and overall review state. No full comment bodies.
     """
-    summary = await stack._fetch_pr_summary(owner, repo, pr_number)
-    return summary.model_dump_json()
+    try:
+        summary = await stack.fetch_pr_summary(owner, repo, pr_number)
+        return summary.model_dump_json()
+    except asyncio.CancelledError:
+        logger.warning("pr_reviews cancelled for %s/%s#%s", owner, repo, pr_number)
+        raise
+    except Exception as exc:
+        logger.exception("pr_reviews failed for %s/%s#%s", owner, repo, pr_number)
+        error_msg = _recovery_error(
+            exc,
+            tool_name="pr_reviews",
+            pr_number=pr_number,
+            repo=f"{owner}/{repo}",
+        )
+        return json.dumps({"error": error_msg})
 
 
 @mcp.tool(tags={"query"})
