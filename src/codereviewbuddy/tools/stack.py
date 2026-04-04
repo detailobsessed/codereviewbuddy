@@ -587,7 +587,7 @@ def _parse_timeline_events(
 
         try:
             ts = datetime.fromisoformat(ts_str)
-        except (ValueError, AttributeError):
+        except (ValueError, AttributeError):  # fmt: skip
             continue
 
         events.append(
