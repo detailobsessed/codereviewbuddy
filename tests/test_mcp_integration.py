@@ -312,6 +312,43 @@ class TestStackActivityMCP:
         assert not result.is_error
 
 
+class TestResourceRegistration:
+    async def test_pr_reviews_resource_registered(self, client: Client):
+        templates = await client.list_resource_templates()
+        names = {t.name for t in templates}
+        assert "pr_reviews" in names
+
+    async def test_pr_reviews_resource_readable(self, client: Client, mocker: MockerFixture):
+        graphql_response = {
+            "data": {
+                "repository": {
+                    "pullRequest": {
+                        "title": "feat: test",
+                        "url": "https://github.com/o/r/pull/42",
+                        "latestReviews": {"nodes": []},
+                        "reviewRequests": {"nodes": []},
+                        "reviewThreads": {
+                            "pageInfo": {"hasNextPage": False, "endCursor": None},
+                            "nodes": [
+                                {
+                                    "isResolved": False,
+                                    "comments": {"nodes": [{"__typename": "PullRequestReviewComment"}]},
+                                },
+                            ],
+                        },
+                    }
+                }
+            },
+        }
+        mocker.patch(
+            "codereviewbuddy.tools.stack.github_api.graphql",
+            new_callable=AsyncMock,
+            return_value=graphql_response,
+        )
+        resources = await client.read_resource("pr://owner/repo/42/reviews")
+        assert len(resources) > 0
+
+
 class TestListRecentUnresolvedMCP:
     async def test_returns_results(self, client: Client, mocker: MockerFixture):
         from codereviewbuddy.models import StackReviewStatusResult

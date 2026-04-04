@@ -301,6 +301,22 @@ mcp.add_middleware(LoggingMiddleware(include_payloads=True, max_payload_length=5
 mcp.add_middleware(PingMiddleware(interval_ms=30_000))
 
 
+# ---------------------------------------------------------------------------
+# Resources — read-only views of PR data
+# ---------------------------------------------------------------------------
+
+
+@mcp.resource("pr://{owner}/{repo}/{pr_number}/reviews")
+async def pr_reviews(owner: str, repo: str, pr_number: int) -> str:
+    """Read-only review summary for a single PR.
+
+    Returns lightweight review status: thread counts, reviewer states,
+    and overall review state. No full comment bodies.
+    """
+    summary = await stack._fetch_pr_summary(owner, repo, pr_number)
+    return summary.model_dump_json()
+
+
 @mcp.tool(tags={"query"})
 async def get_thread(thread_id: str) -> ReviewThread | str:
     """Fetch full details for a single review thread by its node ID.
