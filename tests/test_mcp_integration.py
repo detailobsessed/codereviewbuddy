@@ -8,6 +8,7 @@ which call tool functions directly.
 from __future__ import annotations
 
 from typing import TYPE_CHECKING
+from unittest.mock import AsyncMock
 
 import pytest
 from fastmcp import Client
@@ -110,8 +111,7 @@ class TestToolRegistration:
     EXPECTED_TOOLS = frozenset({
         "check_ci_status",
         "diagnose_ci",
-        "list_review_comments",
-        "list_stack_review_comments",
+        "get_thread",
         "list_recent_unresolved",
         "stack_activity",
         "reply_to_comment",
@@ -128,7 +128,7 @@ class TestToolRegistration:
 
     async def test_tool_count(self, client: Client):
         tools = await client.list_tools()
-        assert len(tools) == 11
+        assert len(tools) == 10
 
 
 class TestPromptRegistration:
@@ -167,24 +167,18 @@ class TestPromptRegistration:
 
 
 class TestToolSchemas:
-    async def test_list_review_comments_schema(self, client: Client):
+    async def test_get_thread_schema(self, client: Client):
         tools = await client.list_tools()
-        tool = next(t for t in tools if t.name == "list_review_comments")
+        tool = next(t for t in tools if t.name == "get_thread")
         schema = tool.inputSchema
-        assert "pr_number" in schema["properties"]
-        # pr_number is optional (int | None) — not in required
-        assert "pr_number" not in schema.get("required", [])
+        assert "thread_id" in schema["properties"]
+        assert "thread_id" in schema.get("required", [])
 
-    async def test_output_schemas_present(self, client: Client):
-        """Verify that tools with typed return annotations expose output schemas."""
+    async def test_triage_schema(self, client: Client):
         tools = await client.list_tools()
-        tools_by_name = {t.name: t for t in tools}
-
-        # Tools returning Pydantic models should have outputSchema
-        for name in ("list_review_comments",):
-            tool = tools_by_name[name]
-            assert tool.outputSchema is not None, f"{name} should have an outputSchema"
-            assert tool.outputSchema.get("type") == "object", f"{name} outputSchema should be object type"
+        tool = next(t for t in tools if t.name == "triage_review_comments")
+        schema = tool.inputSchema
+        assert "pr_numbers" in schema["properties"]
 
 
 # ---------------------------------------------------------------------------
@@ -192,41 +186,26 @@ class TestToolSchemas:
 # ---------------------------------------------------------------------------
 
 
-class TestListReviewCommentsMCP:
-    async def test_returns_serialized_threads(self, client: Client, mocker: MockerFixture):
-        mocker.patch("codereviewbuddy.tools.comments.gh.graphql", return_value=SAMPLE_GRAPHQL_RESPONSE)
+class TestGetThreadMCP:
+    async def test_returns_thread(self, client: Client, mocker: MockerFixture):
+        response = {
+            "data": {
+                "node": {
+                    "__typename": "PullRequestReviewThread",
+                    "pullRequest": {"number": 42},
+                    **SAMPLE_THREAD_NODE,
+                },
+            },
+        }
         mocker.patch(
-            "codereviewbuddy.tools.comments.gh.rest",
-            side_effect=[SAMPLE_COMMITS_RESPONSE, [], []],
+            "codereviewbuddy.tools.comments.github_api.graphql",
+            new_callable=AsyncMock,
+            return_value=response,
         )
-        mocker.patch("codereviewbuddy.tools.comments.gh.get_repo_info", return_value=("owner", "repo"))
 
-        result = await client.call_tool("list_review_comments", {"pr_number": 42})
+        result = await client.call_tool("get_thread", {"thread_id": "PRRT_kwDOtest123"})
         assert not result.is_error
-        # Result comes back as text content containing the serialized list
         assert len(result.content) > 0
-
-    async def test_with_status_filter(self, client: Client, mocker: MockerFixture):
-        mocker.patch("codereviewbuddy.tools.comments.gh.graphql", return_value=SAMPLE_GRAPHQL_RESPONSE)
-        mocker.patch(
-            "codereviewbuddy.tools.comments.gh.rest",
-            side_effect=[SAMPLE_COMMITS_RESPONSE, [], []],
-        )
-        mocker.patch("codereviewbuddy.tools.comments.gh.get_repo_info", return_value=("owner", "repo"))
-
-        result = await client.call_tool("list_review_comments", {"pr_number": 42, "status": "unresolved"})
-        assert not result.is_error
-
-    async def test_with_explicit_repo(self, client: Client, mocker: MockerFixture):
-        mocker.patch("codereviewbuddy.tools.comments.gh.graphql", return_value=SAMPLE_GRAPHQL_RESPONSE)
-        mocker.patch(
-            "codereviewbuddy.tools.comments.gh.rest",
-            side_effect=[SAMPLE_COMMITS_RESPONSE, [], []],
-        )
-        mocker.patch("codereviewbuddy.tools.comments.gh.get_repo_info", return_value=("owner", "repo"))
-
-        result = await client.call_tool("list_review_comments", {"pr_number": 42, "repo": "myorg/myrepo"})
-        assert not result.is_error
 
 
 class TestReplyToCommentMCP:
@@ -240,20 +219,6 @@ class TestReplyToCommentMCP:
             {"pr_number": 42, "thread_id": "PRRT_kwDOtest123", "body": "Fixed!"},
         )
         assert not result.is_error
-
-
-class TestListStackReviewCommentsMCP:
-    async def test_returns_grouped_results(self, client: Client, mocker: MockerFixture):
-        mocker.patch("codereviewbuddy.tools.comments.gh.graphql", return_value=SAMPLE_GRAPHQL_RESPONSE)
-        mocker.patch(
-            "codereviewbuddy.tools.comments.gh.rest",
-            side_effect=[SAMPLE_COMMITS_RESPONSE, [], []] * 2,
-        )
-        mocker.patch("codereviewbuddy.tools.comments.gh.get_repo_info", return_value=("owner", "repo"))
-
-        result = await client.call_tool("list_stack_review_comments", {"pr_numbers": [42, 43]})
-        assert not result.is_error
-        assert len(result.content) > 0
 
 
 class TestShowConfigMCP:

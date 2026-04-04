@@ -12,8 +12,13 @@ if TYPE_CHECKING:
 from codereviewbuddy.models import StackPR
 from codereviewbuddy.tools.stack import (
     _build_stack,
+    _build_status_hints,
+    _count_thread_statuses,
+    _extract_actor,
+    _extract_detail,
     _fetch_merged_prs,
     _fetch_pr_summary,
+    _has_comments,
     discover_stack,
     list_recent_unresolved,
     summarize_review_status,
@@ -348,3 +353,84 @@ class TestListRecentUnresolved:
         await _fetch_merged_prs(repo="o/r", limit=100)
         url = mock_rest.call_args.args[0]
         assert "per_page=50" in url
+
+
+# -- Helper function tests ---------------------------------------------------
+
+
+class TestHasComments:
+    def test_returns_true_when_comments_exist(self):
+        node = {"comments": {"nodes": [{"__typename": "PullRequestReviewComment"}]}}
+        assert _has_comments(node) is True
+
+    def test_returns_false_for_empty_comments(self):
+        node = {"comments": {"nodes": []}}
+        assert _has_comments(node) is False
+
+    def test_returns_false_for_missing_comments(self):
+        node = {}
+        assert _has_comments(node) is False
+
+
+class TestCountThreadStatuses:
+    def test_counts_mixed(self):
+        threads = [
+            {"isResolved": False, "comments": {"nodes": [{"author": {"login": "a"}}]}},
+            {"isResolved": True, "comments": {"nodes": [{"author": {"login": "b"}}]}},
+            {"isResolved": False, "comments": {"nodes": [{"author": {"login": "c"}}]}},
+        ]
+        counts = _count_thread_statuses(threads)
+        assert counts["unresolved"] == 2
+        assert counts["resolved"] == 1
+
+    def test_skips_empty_comments(self):
+        threads = [
+            {"isResolved": False, "comments": {"nodes": []}},
+            {"isResolved": False, "comments": {"nodes": [{"author": {"login": "a"}}]}},
+        ]
+        counts = _count_thread_statuses(threads)
+        assert counts["unresolved"] == 1
+        assert counts["resolved"] == 0
+
+
+class TestBuildStatusHints:
+    def test_all_resolved(self):
+        hints = _build_status_hints([42], total_unresolved=0)
+        assert len(hints) == 1
+        assert "resolved" in hints[0].lower()
+
+    def test_has_unresolved(self):
+        hints = _build_status_hints([42, 43], total_unresolved=3)
+        assert "triage_review_comments" in hints[0]
+        assert "3" in hints[0]
+
+
+class TestExtractActor:
+    def test_from_user(self):
+        assert _extract_actor({"user": {"login": "alice"}}) == "alice"
+
+    def test_from_actor(self):
+        assert _extract_actor({"actor": {"login": "bob"}}) == "bob"
+
+    def test_from_committer(self):
+        assert _extract_actor({"committer": {"login": "carol"}}) == "carol"
+
+    def test_committer_name_fallback(self):
+        assert _extract_actor({"committer": {"name": "Dave"}}) == "Dave"
+
+    def test_empty_when_no_fields(self):
+        assert not _extract_actor({})
+
+
+class TestExtractDetail:
+    def test_review(self):
+        assert _extract_detail("review", {"state": "APPROVED"}) == "approved"
+
+    def test_labeled(self):
+        assert _extract_detail("labeled", {"label": {"name": "bug"}}) == "bug"
+
+    def test_commit(self):
+        assert _extract_detail("commit", {"message": "fix: something"}) == "fix: something"
+
+    def test_unknown_event(self):
+        assert not _extract_detail("merged", {})

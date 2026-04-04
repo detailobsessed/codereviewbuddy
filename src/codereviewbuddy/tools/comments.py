@@ -13,12 +13,10 @@ from codereviewbuddy.config import get_config
 from codereviewbuddy.models import (
     CommentStatus,
     ReviewComment,
-    ReviewSummary,
     ReviewThread,
     TriageItem,
     TriageResult,
 )
-from codereviewbuddy.tools.stack import discover_stack
 
 logger = logging.getLogger(__name__)
 
@@ -55,14 +53,6 @@ query($owner: String!, $repo: String!, $pr: Int!, $cursor: String) {
   }
 }
 """
-
-
-def _check_graphql_errors(result: dict[str, Any], context: str) -> None:
-    """Raise GhError if a GraphQL response contains errors."""
-    errors = result.get("errors")
-    if errors:
-        msg = f"GraphQL error in {context}: {errors[0].get('message', errors)}"
-        raise gh.GhError(msg)
 
 
 # -- Body stripping (issue #99) ------------------------------------------------
@@ -156,101 +146,6 @@ _REVIEW_STATE_MAP: dict[str, CommentStatus] = {
 }
 
 
-async def _get_pr_reviews(
-    owner: str,
-    repo: str,
-    pr_number: int,
-    cwd: str | None = None,  # noqa: ARG001
-) -> list[ReviewThread]:
-    """Fetch PR-level reviews (approvals, change requests, review summaries).
-
-    These appear on the PR conversation tab but are NOT inline code threads.
-    """
-    result = await github_api.rest(f"/repos/{owner}/{repo}/pulls/{pr_number}/reviews?per_page=100", paginate=True)
-    if not result:
-        return []
-
-    threads: list[ReviewThread] = []
-    for review in result:
-        login = (review.get("user") or {}).get("login", "unknown")
-        raw_body = (review.get("body") or "").strip()
-        if not raw_body:
-            continue
-
-        state = review.get("state", "COMMENTED")
-        status = _REVIEW_STATE_MAP.get(state, CommentStatus.UNRESOLVED)
-
-        threads.append(
-            ReviewThread(
-                thread_id=review.get("node_id", ""),
-                pr_number=pr_number,
-                status=status,
-                file=None,
-                line=None,
-                reviewer=login,
-                comments=[
-                    ReviewComment(
-                        author=login,
-                        body=_strip_comment_body(raw_body),
-                        created_at=review.get("submitted_at"),
-                    ),
-                ],
-                is_pr_review=True,
-            )
-        )
-    return threads
-
-
-async def _get_pr_issue_comments(
-    owner: str,
-    repo: str,
-    pr_number: int,
-    cwd: str | None = None,  # noqa: ARG001
-) -> list[ReviewThread]:
-    """Fetch regular PR comments from bots (e.g. codecov, netlify, vercel).
-
-    These are IssueComment nodes posted on the PR conversation tab — not review
-    threads or PR reviews. Without this, bot feedback like coverage reports and
-    deployment previews is invisible.
-    """
-    result = await github_api.rest(f"/repos/{owner}/{repo}/issues/{pr_number}/comments?per_page=100", paginate=True)
-    if not result:
-        return []
-
-    threads: list[ReviewThread] = []
-    for comment in result:
-        login = (comment.get("user") or {}).get("login", "unknown")
-        # Only include bot comments (login ends with [bot] or user type is Bot)
-        user_type = (comment.get("user") or {}).get("type", "")
-        is_bot = user_type == "Bot" or login.endswith("[bot]")
-        if not is_bot:
-            continue
-
-        raw_body = (comment.get("body") or "").strip()
-        if not raw_body:
-            continue
-
-        threads.append(
-            ReviewThread(
-                thread_id=comment.get("node_id", ""),
-                pr_number=pr_number,
-                status=CommentStatus.UNRESOLVED,
-                file=None,
-                line=None,
-                reviewer=login,
-                comments=[
-                    ReviewComment(
-                        author=login,
-                        body=_strip_comment_body(raw_body),
-                        created_at=comment.get("created_at"),
-                    ),
-                ],
-                is_pr_review=True,
-            )
-        )
-    return threads
-
-
 async def _fetch_raw_threads(
     owner: str,
     repo_name: str,
@@ -287,146 +182,144 @@ async def _fetch_raw_threads(
     return raw_threads
 
 
-async def _collect_all_threads(
+async def _get_inline_threads(
     owner: str,
     repo_name: str,
     pr_number: int,
-    cwd: str | None,
-    ctx: Context | None,
-) -> list[ReviewThread]:
-    """Fetch inline threads, PR-level reviews, and bot comments."""
-    raw_threads = await _fetch_raw_threads(owner, repo_name, pr_number, cwd, ctx)
-    threads = _parse_threads(raw_threads, pr_number)
-
-    # Include PR-level reviews (approvals, review summaries)
-    pr_reviews = await _get_pr_reviews(owner, repo_name, pr_number, cwd=cwd)
-    threads.extend(pr_reviews)
-
-    # Include regular PR comments from bots (e.g. codecov, netlify, vercel)
-    bot_comments = await _get_pr_issue_comments(owner, repo_name, pr_number, cwd=cwd)
-    threads.extend(bot_comments)
-
-    return threads
-
-
-async def _collect_inline_threads_only(  # noqa: PLR0913, PLR0917
-    owner: str,
-    repo_name: str,
-    pr_number: int,
-    status: str | None,
-    cwd: str | None,
-    ctx: Context | None,
-) -> list[ReviewThread]:
-    """Lightweight thread fetch — inline threads only, no staleness, no PR reviews, no bot comments.
-
-    Skips commit fetch, compare API (staleness), PR-level reviews, bot comments,
-    and stack discovery.  Suitable for callers that only need thread status,
-    comment bodies, and reviewer identification (e.g. triage).
-    """
-    raw_threads = await _fetch_raw_threads(owner, repo_name, pr_number, cwd, ctx)
-    threads = _parse_threads(raw_threads, pr_number)
-
-    if status:
-        target = CommentStatus(status)
-        threads = [t for t in threads if t.status == target]
-
-    return threads
-
-
-async def list_review_comments(
-    pr_number: int,
-    repo: str | None = None,
-    status: str | None = None,
     cwd: str | None = None,
     ctx: Context | None = None,
-) -> ReviewSummary:
-    """List all review threads for a PR.
+) -> list[ReviewThread]:
+    """Fetch only inline review threads (PRRT_) for a PR."""
+    raw = await _fetch_raw_threads(owner, repo_name, pr_number, cwd, ctx)
+    return _parse_threads(raw, pr_number)
+
+
+# GraphQL query to fetch a single thread/review/comment by node ID
+_THREAD_BY_ID_QUERY = """
+query($id: ID!) {
+  node(id: $id) {
+    ... on PullRequestReviewThread {
+      __typename
+      id
+      isResolved
+      pullRequest { number }
+      comments(first: 50) {
+        nodes {
+          author { login }
+          body
+          createdAt
+          path
+          line
+          url
+        }
+      }
+    }
+    ... on PullRequestReview {
+      __typename
+      id
+      state
+      body
+      author { login }
+      submittedAt
+      url
+      pullRequest { number }
+    }
+    ... on IssueComment {
+      __typename
+      id
+      body
+      author { login }
+      createdAt
+      url
+      issue { number }
+    }
+  }
+}
+"""
+
+
+def _node_to_review_thread(node: dict[str, Any], thread_id: str) -> ReviewThread:
+    """Convert a GraphQL node response into a ReviewThread model."""
+    typename = node.get("__typename", "")
+
+    pr_number = (node.get("pullRequest") or {}).get("number", 0)
+
+    if typename == "PullRequestReviewThread":
+        # Inline review thread — reuse existing parser
+        threads = _parse_threads([node], pr_number=pr_number)
+        if not threads:
+            msg = f"Thread {thread_id} has no comments."
+            raise gh.GhError(msg)
+        return threads[0]
+
+    if typename == "PullRequestReview":
+        login = (node.get("author") or {}).get("login", "unknown")
+        raw_body = (node.get("body") or "").strip()
+        state = node.get("state", "COMMENTED")
+        status = _REVIEW_STATE_MAP.get(state, CommentStatus.UNRESOLVED)
+        return ReviewThread(
+            thread_id=thread_id,
+            pr_number=pr_number,
+            status=status,
+            file=None,
+            line=None,
+            reviewer=login,
+            comments=[
+                ReviewComment(
+                    author=login,
+                    body=_strip_comment_body(raw_body) if raw_body else "",
+                    created_at=node.get("submittedAt"),
+                    url=node.get("url", ""),
+                ),
+            ],
+            is_pr_review=True,
+        )
+
+    if typename == "IssueComment":
+        login = (node.get("author") or {}).get("login", "unknown")
+        raw_body = (node.get("body") or "").strip()
+        return ReviewThread(
+            thread_id=thread_id,
+            pr_number=(node.get("issue") or {}).get("number", 0),
+            status=CommentStatus.UNRESOLVED,
+            file=None,
+            line=None,
+            reviewer=login,
+            comments=[
+                ReviewComment(
+                    author=login,
+                    body=_strip_comment_body(raw_body) if raw_body else "",
+                    created_at=node.get("createdAt"),
+                    url=node.get("url", ""),
+                ),
+            ],
+            is_pr_review=True,
+        )
+
+    msg = f"Unexpected node type {typename!r} for thread {thread_id}."
+    raise gh.GhError(msg)
+
+
+async def get_thread(thread_id: str) -> ReviewThread:
+    """Fetch full details for a single review thread by its GraphQL node ID.
+
+    Supports all thread types: inline review threads (PRRT_), PR-level reviews
+    (PRR_), and issue comments (IC_). Uses GitHub's ``node(id:)`` interface.
 
     Args:
-        pr_number: The PR number to fetch comments for.
-        repo: Repository in "owner/repo" format. Auto-detected if not provided.
-        status: Filter by "resolved" or "unresolved". Returns all if not set.
-        cwd: Working directory for git operations.
-        ctx: FastMCP context for progress reporting. Injected by server tools.
+        thread_id: The GraphQL node ID to fetch.
 
     Returns:
-        ReviewSummary with threads and stack info.
+        Full ReviewThread with all comments.
     """
-    if repo:
-        owner, repo_name = github_api.parse_repo(repo)
-    else:
-        owner, repo_name = await call_sync_fn_in_threadpool(gh.get_repo_info, cwd=cwd)
+    result = await github_api.graphql(_THREAD_BY_ID_QUERY, variables={"id": thread_id})
 
-    threads = await _collect_all_threads(owner, repo_name, pr_number, cwd, ctx)
+    node = result.get("data", {}).get("node")
+    if not node:
+        msg = f"Thread {thread_id} not found or not accessible."
+        raise gh.GhError(msg)
 
-    # Filter threads by status if requested
-    if status:
-        target = CommentStatus(status)
-        threads = [t for t in threads if t.status == target]
-
-    if ctx:
-        await ctx.info(f"Found {len(threads)} review threads for PR #{pr_number}")
-
-    # Discover PR stack (cached per session) — best-effort, don't fail the request
-    try:
-        full_repo = f"{owner}/{repo_name}"
-        stack_prs = await discover_stack(pr_number, repo=full_repo, cwd=cwd, ctx=ctx)
-    except Exception:
-        stack_prs = []
-
-    # Build next_steps and message based on review state
-    next_steps: list[str] = []
-    message = ""
-    unresolved = [t for t in threads if t.status == CommentStatus.UNRESOLVED]
-
-    if not threads:
-        message = f"No review threads found on PR #{pr_number}."
-    elif not unresolved:
-        message = f"All {len(threads)} review threads on PR #{pr_number} are resolved."
-    elif stack_prs and len(stack_prs) > 1:
-        pr_nums = [p.pr_number for p in stack_prs]
-        next_steps.append(f"Call triage_review_comments(pr_numbers={pr_nums}) for actionable threads across the stack.")
-    else:
-        next_steps.append(f"Call triage_review_comments(pr_numbers=[{pr_number}]) for actionable-only view.")
-
-    return ReviewSummary(
-        threads=threads,
-        stack=stack_prs,
-        next_steps=next_steps,
-        message=message,
-    )
-
-
-async def list_stack_review_comments(
-    pr_numbers: list[int],
-    repo: str | None = None,
-    status: str | None = None,
-    cwd: str | None = None,
-    ctx: Context | None = None,
-) -> dict[int, ReviewSummary]:
-    """List review threads for multiple PRs in a stack, grouped by PR number.
-
-    Collapses N tool calls into 1 for the common stacked-PR review workflow.
-
-    Args:
-        pr_numbers: List of PR numbers to fetch comments for.
-        repo: Repository in "owner/repo" format. Auto-detected if not provided.
-        status: Filter by "resolved" or "unresolved". Returns all if not set.
-        cwd: Working directory for git operations.
-        ctx: FastMCP context for progress reporting. Injected by server tools.
-
-    Returns:
-        Dict mapping each PR number to its ReviewSummary.
-    """
-    results: dict[int, ReviewSummary] = {}
-    total = len(pr_numbers)
-    for i, pr_number in enumerate(pr_numbers):
-        if ctx and total:
-            await ctx.report_progress(progress=i, total=total)
-        results[pr_number] = await list_review_comments(pr_number, repo=repo, status=status, cwd=cwd, ctx=ctx)
-    if ctx and total:
-        await ctx.report_progress(progress=total, total=total)
-    return results
+    return _node_to_review_thread(node, thread_id)
 
 
 async def reply_to_comment(
@@ -546,7 +439,6 @@ def _thread_to_triage_item(thread: ReviewThread) -> TriageItem:
         line=thread.line,
         reviewer=thread.reviewer,
         title=_extract_title(body),
-        snippet=body[:200],
         comment_url=first.url if first else "",
     )
 
@@ -558,7 +450,8 @@ def _build_triage_hints(
     if not all_items:
         return [], "No actionable threads — all threads have owner replies or are resolved."
     n = len(all_items)
-    return [f"Read the {n} unresolved thread(s), fix what needs fixing, and reply with reply_to_comment()."], ""
+    hint = f"Call get_thread(thread_id) on the {n} thread(s), fix what needs fixing, and reply with reply_to_comment()."
+    return [hint], ""
 
 
 async def triage_review_comments(
@@ -568,11 +461,11 @@ async def triage_review_comments(
     cwd: str | None = None,
     ctx: Context | None = None,
 ) -> TriageResult:
-    """Return only unresolved threads that need attention — no noise, no full bodies.
+    """Return only unresolved inline review threads that need attention — no noise, no full bodies.
 
-    Filters:
-    - Unresolved inline threads only (excludes PR-level reviews).
-    - Excludes threads that already have an owner reply.
+    Fetches threads and filters to unresolved inline threads (PRRT_) without owner
+    replies. PR-level reviews (PRR_) and bot issue comments (IC_) are excluded as
+    non-actionable. Use ``get_thread`` to fetch full details for individual threads.
 
     Args:
         pr_numbers: PR numbers to triage.
@@ -602,10 +495,10 @@ async def triage_review_comments(
         if ctx and total:
             await ctx.report_progress(i, total)
 
-        threads = await _collect_inline_threads_only(owner, repo_name, pr_number, status="unresolved", cwd=cwd, ctx=ctx)
+        threads = await _get_inline_threads(owner, repo_name, pr_number, cwd=cwd, ctx=ctx)
 
         for thread in threads:
-            if thread.is_pr_review:
+            if thread.status != CommentStatus.UNRESOLVED:
                 continue
             if _has_owner_reply(thread, owners):
                 continue

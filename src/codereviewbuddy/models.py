@@ -46,16 +46,6 @@ class StackPR(BaseModel):
     url: str = Field(description="PR URL")
 
 
-class ReviewSummary(BaseModel):
-    """Review threads plus stack info for a PR."""
-
-    threads: list[ReviewThread] = Field(default_factory=list, description="All review threads on the PR")
-    stack: list[StackPR] = Field(default_factory=list, description="Other PRs in the same stack, discovered via branch chain")
-    next_steps: list[str] = Field(default_factory=list, description="Suggested next actions based on the review state")
-    message: str = Field(default="", description="Human-readable summary when results are empty or noteworthy")
-    error: str | None = Field(default=None, description="Error message if the request failed")
-
-
 class PRReviewStatusSummary(BaseModel):
     """Lightweight review status for a single PR — no full comment bodies."""
 
@@ -107,7 +97,6 @@ class TriageItem(BaseModel):
     line: int | None = Field(default=None, description="Line number in the file")
     reviewer: str = Field(description="GitHub login of the user or bot that posted this thread")
     title: str = Field(default="", description="Short title extracted from the comment (first bold text)")
-    snippet: str = Field(default="", description="First 200 chars of the comment body for context")
     comment_url: str = Field(default="", description="Direct URL to the comment on GitHub for user navigation")
 
 

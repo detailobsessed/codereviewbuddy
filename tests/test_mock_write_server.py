@@ -13,15 +13,10 @@ from helpers import mock_write_server
 
 
 class TestMockWriteServerTools:
-    async def test_list_review_comments(self):
-        result = await mock_write_server.list_review_comments(42)
+    async def test_get_thread(self):
+        result = await mock_write_server.get_thread("PRRT_test1")
         data = json.loads(result)
-        assert "threads" in data
-
-    async def test_list_review_comments_with_params(self):
-        result = await mock_write_server.list_review_comments(42, repo="owner/repo", status="unresolved")
-        data = json.loads(result)
-        assert "threads" in data
+        assert "thread_id" in data
 
     def test_reply_to_comment(self):
         result = mock_write_server.reply_to_comment(42, "PRRT_test1", "Fixed")

@@ -12,7 +12,7 @@ import importlib.util
 import logging
 import os
 from pathlib import Path
-from typing import TYPE_CHECKING, Annotated, Literal
+from typing import TYPE_CHECKING, Annotated
 
 from fastmcp import FastMCP
 from fastmcp.server.dependencies import get_context
@@ -31,7 +31,7 @@ from codereviewbuddy.models import (
     CIStatusResult,
     ConfigInfo,
     PRDescriptionReviewResult,
-    ReviewSummary,
+    ReviewThread,
     StackActivityResult,
     StackReviewStatusResult,
     TriageResult,
@@ -187,11 +187,10 @@ from any AI reviewer that uses GitHub's PR review infrastructure.
 
 ## Stack discovery
 
-`list_review_comments` automatically discovers the full PR stack by walking the branch
-chain (works with Graphite, Git Town, or manual stacking). The `stack` field in the
-response lists all PRs in order, bottom-to-top. This is cached per session — the first
-call fetches, subsequent calls reuse. Use `list_stack_review_comments` with the
-discovered PR numbers to get full thread details across the stack.
+`summarize_review_status` and `triage_review_comments` automatically discover the full
+PR stack by walking the branch chain (works with Graphite, git-spice, or manual stacking).
+Omit `pr_numbers` to auto-discover. Use `get_thread(thread_id)` to fetch full details
+for a specific thread.
 
 ## Review workflow — step by step
 
@@ -200,13 +199,12 @@ Follow this sequence when reviewing or responding to AI review comments:
 1. **Summarize** — `summarize_review_status()` (omit `pr_numbers` → auto-discover stack).
    Check which PRs have unresolved threads.
 2. **Triage** — `triage_review_comments(pr_numbers)` with the discovered PR numbers.
-   Returns only unresolved threads that still need attention.
-3. **Read and act** — read each thread's snippet and full context. Fix what needs
-   fixing, then reply with `reply_to_comment` explaining the change and commit hash.
-4. **Verify** — `summarize_review_status()` again to confirm all threads are addressed.
-
-For full thread details, fall back to `list_review_comments` for a specific PR — but
-prefer the triage workflow above.
+   Returns only unresolved threads that still need attention (titles + metadata).
+3. **Read** — `get_thread(thread_id)` for each thread that needs action.
+   Returns full comment body and conversation history.
+4. **Fix and reply** — implement fixes, then `reply_to_comment` explaining the change
+   and commit hash.
+5. **Verify** — `summarize_review_status()` again to confirm all threads are addressed.
 
 ## Responding to review comments
 
@@ -302,72 +300,29 @@ mcp.add_middleware(PingMiddleware(interval_ms=30_000))
 
 
 @mcp.tool(tags={"query"})
-async def list_review_comments(
-    pr_number: int | None = None,
-    repo: str | None = None,
-    status: Literal["resolved", "unresolved"] | None = None,
-) -> ReviewSummary:
-    """List all review threads for a PR with reviewer identification.
+async def get_thread(thread_id: str) -> ReviewThread | str:
+    """Fetch full details for a single review thread by its node ID.
 
-    After fetching, present a summary to the user:
-    1. Group comments by file for readability.
-    2. Show unresolved count as a quick summary line.
+    Use this after ``triage_review_comments`` to read the full comment body
+    and conversation history for threads that need attention.
+
+    Supports all thread types: inline review threads (PRRT_), PR-level
+    reviews (PRR_), and bot comments (IC_).
 
     Args:
-        pr_number: The PR number to fetch comments for. Auto-detected from current branch if omitted.
-        repo: Repository in "owner/repo" format. Auto-detected from git remote if not provided.
-        status: Filter by "resolved" or "unresolved". Returns all if not set.
+        thread_id: The node ID (PRRT_..., PRR_..., or IC_...) to fetch.
 
     Returns:
-        List of review threads with thread_id, file, line, reviewer, status, and comments.
+        Full thread with all comments, status, file/line info.
     """
     try:
-        ctx = get_context()
-        cwd = await _get_workspace_cwd(ctx)
-        _check_auto_detect_prerequisites(cwd, has_pr=pr_number is not None, has_repo=repo is not None)
-        pr_number = _resolve_pr_number(pr_number, cwd=cwd)
-        return await comments.list_review_comments(pr_number, repo=repo, status=status, cwd=cwd, ctx=ctx)
+        return await comments.get_thread(thread_id)
     except Exception as exc:
-        logger.exception("list_review_comments failed for PR #%s", pr_number)
-        return ReviewSummary(threads=[], error=_recovery_error(exc, tool_name="list_review_comments", pr_number=pr_number, repo=repo))
+        logger.exception("get_thread failed for %s", thread_id)
+        return _recovery_error(exc, tool_name="get_thread")
     except asyncio.CancelledError:
-        logger.warning("list_review_comments cancelled for PR #%s", pr_number)
-        return ReviewSummary(threads=[], error="Cancelled")
-
-
-@mcp.tool(tags={"query"})
-async def list_stack_review_comments(
-    pr_numbers: list[int],
-    repo: str | None = None,
-    status: Literal["resolved", "unresolved"] | None = None,
-) -> dict[int, ReviewSummary]:
-    """List review threads for multiple PRs in a stack, grouped by PR number.
-
-    Collapses N tool calls into 1 for the common stacked-PR review workflow.
-    Gives the agent a full picture of the review state before deciding what to fix.
-
-    After fetching, present a per-PR summary grouped by file.
-
-    Args:
-        pr_numbers: List of PR numbers to fetch comments for.
-        repo: Repository in "owner/repo" format. Auto-detected from git remote if not provided.
-        status: Filter by "resolved" or "unresolved". Returns all if not set.
-
-    Returns:
-        Dict mapping each PR number to its list of review threads.
-    """
-    try:
-        ctx = get_context()
-        cwd = await _get_workspace_cwd(ctx)
-        _check_auto_detect_prerequisites(cwd, has_pr=True, has_repo=repo is not None)
-        return await comments.list_stack_review_comments(pr_numbers, repo=repo, status=status, cwd=cwd, ctx=ctx)
-    except Exception as exc:
-        logger.exception("list_stack_review_comments failed")
-        error_msg = _recovery_error(exc, tool_name="list_stack_review_comments", repo=repo)
-        return {pr: ReviewSummary(threads=[], error=error_msg) for pr in pr_numbers}
-    except asyncio.CancelledError:
-        logger.warning("list_stack_review_comments cancelled")
-        return {pr: ReviewSummary(threads=[], error="Cancelled") for pr in pr_numbers}
+        logger.warning("get_thread cancelled for %s", thread_id)
+        return "Cancelled"
 
 
 @mcp.tool(tags={"command"})
@@ -441,10 +396,9 @@ async def summarize_review_status(
     """Get a lightweight stack-wide review status overview.
 
     Much fewer tokens than full thread data — use this to quickly scan which PRs
-    need attention before diving into details with ``list_review_comments``.
+    need attention before diving into details with ``triage_review_comments``.
 
-    When ``pr_numbers`` is omitted, auto-discovers the stack from the current branch
-    using the same branch-chain walking as ``list_review_comments``.
+    When ``pr_numbers`` is omitted, auto-discovers the stack from the current branch.
 
     Args:
         pr_numbers: PR numbers to summarize. Auto-discovers stack if omitted.
@@ -538,9 +492,11 @@ async def triage_review_comments(
     repo: str | None = None,
     owner_logins: list[str] | None = None,
 ) -> TriageResult:
-    """Show only unresolved review threads that need attention — no noise, no full bodies.
+    """Show only unresolved inline review threads that need attention — titles and metadata only.
 
-    Filters out PR-level reviews, already-replied threads, and resolved threads.
+    Returns actionable inline threads (PRRT_) only. PR-level reviews and bot issue
+    comments are excluded as non-actionable. Filters out already-replied and resolved
+    threads. Use ``get_thread`` for full details.
 
     Args:
         pr_numbers: PR numbers to triage (use stack from ``summarize_review_status``).
@@ -687,8 +643,8 @@ You are doing a full review pass on the current PR stack. Follow these steps in 
 2. **Triage** — call `triage_review_comments(pr_numbers)` with the discovered PR numbers.
    This gives you only unresolved threads that need attention.
 
-3. **Fix and reply** — for each thread:
-   - Read the snippet and file/line context.
+3. **Read and fix** — for each thread:
+   - Call `get_thread(thread_id)` to read the full comment and conversation.
    - If a code fix is needed, implement it.
    - Reply with `reply_to_comment` explaining what you did and the commit hash.
 

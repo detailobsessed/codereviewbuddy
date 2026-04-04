@@ -16,10 +16,19 @@ from codereviewbuddy.server import (
     _get_workspace_cwd,
     _recovery_error,
     _resolve_pr_number,
+    _resolve_thread_pr_number,
+    check_ci_status,
     check_fastmcp_runtime,
     check_prerequisites,
     diagnose_ci,
+    get_thread,
+    list_recent_unresolved,
     reply_to_comment,
+    review_pr_descriptions,
+    show_config,
+    stack_activity,
+    summarize_review_status,
+    triage_review_comments,
 )
 
 
@@ -308,3 +317,72 @@ class TestCancellationHandlers:
         mocker.patch("codereviewbuddy.server.call_sync_fn_in_threadpool", side_effect=asyncio.CancelledError)
         result = await diagnose_ci(pr_number=1)
         assert result.error == "Cancelled"
+
+    async def test_get_thread_cancelled(self, mocker: MockerFixture):
+        mocker.patch("codereviewbuddy.server.comments.get_thread", side_effect=asyncio.CancelledError)
+        result = await get_thread(thread_id="PRRT_abc")
+        assert result == "Cancelled"
+
+    async def test_get_thread_error(self, mocker: MockerFixture):
+        mocker.patch("codereviewbuddy.server.comments.get_thread", side_effect=RuntimeError("boom"))
+        result = await get_thread(thread_id="PRRT_abc")
+        assert "get_thread failed" in result
+
+    async def test_review_pr_descriptions_cancelled(self, mocker: MockerFixture):
+        mocker.patch("codereviewbuddy.server.descriptions.review_pr_descriptions", side_effect=asyncio.CancelledError)
+        result = await review_pr_descriptions(pr_numbers=[42])
+        assert result.error == "Cancelled"
+
+    async def test_summarize_review_status_cancelled(self, mocker: MockerFixture):
+        mocker.patch("codereviewbuddy.server.stack.summarize_review_status", side_effect=asyncio.CancelledError)
+        result = await summarize_review_status(pr_numbers=[42])
+        assert result.error == "Cancelled"
+
+    async def test_list_recent_unresolved_cancelled(self, mocker: MockerFixture):
+        mocker.patch("codereviewbuddy.server.stack.list_recent_unresolved", side_effect=asyncio.CancelledError)
+        result = await list_recent_unresolved(repo="o/r")
+        assert result.error == "Cancelled"
+
+    async def test_stack_activity_cancelled(self, mocker: MockerFixture):
+        mocker.patch("codereviewbuddy.server.stack.stack_activity", side_effect=asyncio.CancelledError)
+        result = await stack_activity(pr_numbers=[42])
+        assert result.error == "Cancelled"
+
+    async def test_check_ci_status_cancelled(self, mocker: MockerFixture):
+        mocker.patch("codereviewbuddy.server.call_sync_fn_in_threadpool", side_effect=asyncio.CancelledError)
+        result = await check_ci_status(pr_number=1)
+        assert result.error == "Cancelled"
+
+    async def test_triage_review_comments_cancelled(self, mocker: MockerFixture):
+        mocker.patch("codereviewbuddy.server.comments.triage_review_comments", side_effect=asyncio.CancelledError)
+        result = await triage_review_comments(pr_numbers=[42])
+        assert result.error == "Cancelled"
+
+
+class TestResolveThreadPrNumber:
+    """Tests for _resolve_thread_pr_number — PRRT_ vs PRR_/IC_ routing."""
+
+    def test_prrt_returns_pr_number_as_is(self):
+        assert _resolve_thread_pr_number("PRRT_abc", 42, "/tmp", has_repo=True) == 42  # noqa: S108
+
+    def test_prrt_returns_none_when_none(self):
+        assert _resolve_thread_pr_number("PRRT_abc", None, "/tmp", has_repo=True) is None  # noqa: S108
+
+    def test_prr_resolves_pr_number(self, mocker: MockerFixture):
+        mocker.patch("codereviewbuddy.server.gh.get_current_pr_number", return_value=99)
+        result = _resolve_thread_pr_number("PRR_abc", None, "/tmp", has_repo=True)  # noqa: S108
+        assert result == 99
+
+
+class TestShowConfigSelfImprovement:
+    """Test show_config with self-improvement enabled."""
+
+    def test_self_improvement_enabled(self, mocker: MockerFixture):
+        from codereviewbuddy.config import Config, SelfImprovementConfig, set_config
+
+        set_config(Config(self_improvement=SelfImprovementConfig(enabled=True)))
+        try:
+            result = show_config()
+            assert "enabled" in result.explanation
+        finally:
+            set_config(Config())

@@ -15,10 +15,10 @@ mcp = FastMCP("mock-write-server")
 
 
 @mcp.tool
-async def list_review_comments(pr_number: int, repo: str | None = None, status: str | None = None) -> str:  # noqa: ARG001
-    """Simulate listing review comments (read operation, ~100ms gh call)."""
+async def get_thread(thread_id: str) -> str:  # noqa: ARG001
+    """Simulate fetching a thread (read operation, ~100ms gh call)."""
     await asyncio.sleep(0.1)
-    return '{"threads": [{"thread_id": "PRRT_test1", "status": "unresolved"}]}'
+    return '{"thread_id": "PRRT_test1", "status": "unresolved", "comments": []}'
 
 
 @mcp.tool
