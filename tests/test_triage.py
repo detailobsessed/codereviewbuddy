@@ -222,3 +222,84 @@ class TestTriageReviewComments:
         result = await triage_review_comments([42], repo="o/r")
         assert result.total == 0
         assert "No actionable threads" in result.message
+
+
+# ---------------------------------------------------------------------------
+# Narrow integration test — mocks at API boundary only (#147)
+# ---------------------------------------------------------------------------
+
+GRAPHQL_RESPONSE_WITH_THREADS = {
+    "data": {
+        "repository": {
+            "pullRequest": {
+                "title": "Test PR",
+                "url": "https://github.com/o/r/pull/42",
+                "reviewThreads": {
+                    "pageInfo": {"hasNextPage": False, "endCursor": None},
+                    "nodes": [
+                        {
+                            "id": "PRRT_inline1",
+                            "isResolved": False,
+                            "comments": {
+                                "nodes": [
+                                    {
+                                        "author": {"login": "ai-reviewer[bot]"},
+                                        "body": "**Bug: null check missing**\nDetails.",
+                                        "createdAt": "2026-02-06T10:00:00Z",
+                                        "path": "src/main.py",
+                                        "line": 10,
+                                    }
+                                ]
+                            },
+                        },
+                        {
+                            "id": "PRRT_resolved",
+                            "isResolved": True,
+                            "comments": {
+                                "nodes": [
+                                    {
+                                        "author": {"login": "ai-reviewer[bot]"},
+                                        "body": "**Info: looks good**",
+                                        "createdAt": "2026-02-06T10:00:00Z",
+                                        "path": "src/ok.py",
+                                        "line": 1,
+                                    }
+                                ]
+                            },
+                        },
+                    ],
+                },
+            }
+        }
+    },
+}
+
+
+class TestTriageNarrowIntegration:
+    """Integration test that mocks only at the API boundary (ISM-147).
+
+    Exercises the real pipeline: triage → _get_inline_threads → _fetch_raw_threads
+    + _parse_threads, with only inline review threads.
+    """
+
+    async def test_real_pipeline_filters_to_unresolved_inline(self, mocker: MockerFixture):
+        mocker.patch(
+            "codereviewbuddy.tools.comments.github_api.graphql",
+            new_callable=AsyncMock,
+            return_value=GRAPHQL_RESPONSE_WITH_THREADS,
+        )
+
+        result = await triage_review_comments([42], repo="o/r", owner_logins=[])
+
+        # Only 1 unresolved inline thread — resolved one is filtered out
+        assert result.total == 1
+
+        ids = {item.thread_id for item in result.items}
+        assert "PRRT_inline1" in ids  # unresolved inline
+        assert "PRRT_resolved" not in ids  # resolved — filtered out
+
+        # Verify title was extracted from bold text
+        inline = result.items[0]
+        assert inline.title == "null check missing"
+        assert inline.file == "src/main.py"
+        assert inline.line == 10
