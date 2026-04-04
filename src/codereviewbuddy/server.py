@@ -175,6 +175,8 @@ async def check_gh_cli(server: FastMCP) -> AsyncIterator[dict[str, object] | Non
     set_config(config)
     if config.self_improvement.enabled:
         server.instructions = _BASE_INSTRUCTIONS + _SELF_IMPROVEMENT_INSTRUCTIONS
+    else:
+        server.instructions = _BASE_INSTRUCTIONS
     try:
         yield {}
     finally:
