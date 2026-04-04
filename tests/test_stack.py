@@ -9,13 +9,15 @@ if TYPE_CHECKING:
     from pytest_mock import MockerFixture
 
 
-from codereviewbuddy.models import StackPR
+from codereviewbuddy.models import ReviewerState, StackPR
 from codereviewbuddy.tools.stack import (
     _build_stack,
     _build_status_hints,
+    _compute_review_state,
     _count_thread_statuses,
     _extract_actor,
     _extract_detail,
+    _extract_reviewer_states,
     _fetch_merged_prs,
     _fetch_pr_summary,
     _has_comments,
@@ -138,6 +140,12 @@ SAMPLE_SUMMARY_GRAPHQL_RESPONSE = {
             "pullRequest": {
                 "title": "feat: test",
                 "url": "https://github.com/o/r/pull/42",
+                "latestReviews": {
+                    "nodes": [
+                        {"author": {"login": "ai-reviewer-a[bot]"}, "state": "CHANGES_REQUESTED"},
+                    ],
+                },
+                "reviewRequests": {"nodes": []},
                 "reviewThreads": {
                     "pageInfo": {"hasNextPage": False, "endCursor": None},
                     "nodes": [
@@ -197,6 +205,10 @@ class TestFetchPrSummary:
         assert summary.title == "feat: test"
         assert summary.unresolved == 2
         assert summary.resolved == 1
+        assert summary.review_state == "changes_requested"
+        assert len(summary.reviewers) == 1
+        assert summary.reviewers[0].reviewer == "ai-reviewer-a[bot]"
+        assert summary.reviewers[0].state == "changes_requested"
 
     async def test_paginates_multiple_pages(self, mocker: MockerFixture):
         """Verify cursor-based pagination sums threads across pages (ISM-147)."""
@@ -212,6 +224,8 @@ class TestFetchPrSummary:
                     "pullRequest": {
                         "title": "big PR",
                         "url": "https://github.com/o/r/pull/42",
+                        "latestReviews": {"nodes": []},
+                        "reviewRequests": {"nodes": []},
                         "reviewThreads": {
                             "pageInfo": {"hasNextPage": True, "endCursor": "cursor_abc"},
                             "nodes": [thread_node] * 3,
@@ -226,6 +240,8 @@ class TestFetchPrSummary:
                     "pullRequest": {
                         "title": "big PR",
                         "url": "https://github.com/o/r/pull/42",
+                        "latestReviews": {"nodes": []},
+                        "reviewRequests": {"nodes": []},
                         "reviewThreads": {
                             "pageInfo": {"hasNextPage": False, "endCursor": None},
                             "nodes": [thread_node] * 2,
@@ -313,6 +329,8 @@ SAMPLE_CLEAN_GRAPHQL_RESPONSE = {
             "pullRequest": {
                 "title": "build: copier update",
                 "url": "https://github.com/o/r/pull/176",
+                "latestReviews": {"nodes": []},
+                "reviewRequests": {"nodes": []},
                 "reviewThreads": {
                     "pageInfo": {"hasNextPage": False, "endCursor": None},
                     "nodes": [],
@@ -405,6 +423,124 @@ class TestListRecentUnresolved:
 
 
 # -- Helper function tests ---------------------------------------------------
+
+
+class TestExtractReviewerStates:
+    def test_from_latest_reviews(self):
+        pr_data = {
+            "latestReviews": {
+                "nodes": [
+                    {"author": {"login": "alice"}, "state": "APPROVED"},
+                    {"author": {"login": "bob"}, "state": "CHANGES_REQUESTED"},
+                ],
+            },
+            "reviewRequests": {"nodes": []},
+        }
+        result = _extract_reviewer_states(pr_data)
+        assert len(result) == 2
+        by_login = {r.reviewer: r.state for r in result}
+        assert by_login["alice"] == "approved"
+        assert by_login["bob"] == "changes_requested"
+
+    def test_pending_request_overrides_prior_review(self):
+        pr_data = {
+            "latestReviews": {
+                "nodes": [
+                    {"author": {"login": "alice"}, "state": "APPROVED"},
+                ],
+            },
+            "reviewRequests": {
+                "nodes": [
+                    {"requestedReviewer": {"login": "alice"}},
+                ],
+            },
+        }
+        result = _extract_reviewer_states(pr_data)
+        assert len(result) == 1
+        assert result[0].state == "waiting"
+
+    def test_team_reviewer_uses_name(self):
+        pr_data = {
+            "latestReviews": {"nodes": []},
+            "reviewRequests": {
+                "nodes": [
+                    {"requestedReviewer": {"name": "core-team"}},
+                ],
+            },
+        }
+        result = _extract_reviewer_states(pr_data)
+        assert len(result) == 1
+        assert result[0].reviewer == "core-team"
+        assert result[0].state == "waiting"
+
+    def test_empty_data(self):
+        assert _extract_reviewer_states({}) == []
+
+    def test_missing_author_skipped(self):
+        pr_data = {
+            "latestReviews": {
+                "nodes": [
+                    {"author": None, "state": "APPROVED"},
+                    {"author": {"login": "bob"}, "state": "COMMENTED"},
+                ],
+            },
+            "reviewRequests": {"nodes": []},
+        }
+        result = _extract_reviewer_states(pr_data)
+        assert len(result) == 1
+        assert result[0].reviewer == "bob"
+
+    def test_sorted_by_login(self):
+        pr_data = {
+            "latestReviews": {
+                "nodes": [
+                    {"author": {"login": "zoe"}, "state": "APPROVED"},
+                    {"author": {"login": "alice"}, "state": "COMMENTED"},
+                ],
+            },
+            "reviewRequests": {"nodes": []},
+        }
+        result = _extract_reviewer_states(pr_data)
+        assert [r.reviewer for r in result] == ["alice", "zoe"]
+
+
+class TestComputeReviewState:
+    def test_no_reviewers(self):
+        assert _compute_review_state([]) == "none"
+
+    def test_all_approved(self):
+        reviewers = [ReviewerState(reviewer="a", state="approved"), ReviewerState(reviewer="b", state="approved")]
+        assert _compute_review_state(reviewers) == "approved"
+
+    def test_changes_requested_takes_priority(self):
+        reviewers = [
+            ReviewerState(reviewer="a", state="approved"),
+            ReviewerState(reviewer="b", state="changes_requested"),
+        ]
+        assert _compute_review_state(reviewers) == "changes_requested"
+
+    def test_waiting_when_pending(self):
+        reviewers = [ReviewerState(reviewer="a", state="approved"), ReviewerState(reviewer="b", state="waiting")]
+        assert _compute_review_state(reviewers) == "waiting"
+
+    def test_changes_requested_beats_waiting(self):
+        reviewers = [
+            ReviewerState(reviewer="a", state="changes_requested"),
+            ReviewerState(reviewer="b", state="waiting"),
+        ]
+        assert _compute_review_state(reviewers) == "changes_requested"
+
+    def test_commented_only(self):
+        reviewers = [ReviewerState(reviewer="a", state="commented")]
+        assert _compute_review_state(reviewers) == "commented"
+
+    def test_mixed_approved_and_commented(self):
+        reviewers = [ReviewerState(reviewer="a", state="approved"), ReviewerState(reviewer="b", state="commented")]
+        assert _compute_review_state(reviewers) == "commented"
+
+    def test_dismissed_only(self):
+        reviewers = [ReviewerState(reviewer="a", state="dismissed")]
+        assert _compute_review_state(reviewers) == "commented"
 
 
 class TestHasComments:

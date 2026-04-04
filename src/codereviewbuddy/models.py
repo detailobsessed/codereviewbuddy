@@ -46,6 +46,13 @@ class StackPR(BaseModel):
     url: str = Field(description="PR URL")
 
 
+class ReviewerState(BaseModel):
+    """Review state for a single reviewer on a PR."""
+
+    reviewer: str = Field(description="GitHub login of the reviewer")
+    state: str = Field(description="Review state: 'approved', 'changes_requested', 'commented', 'dismissed', 'waiting'")
+
+
 class PRReviewStatusSummary(BaseModel):
     """Lightweight review status for a single PR — no full comment bodies."""
 
@@ -54,6 +61,11 @@ class PRReviewStatusSummary(BaseModel):
     url: str = Field(description="PR URL")
     unresolved: int = Field(default=0, description="Number of unresolved threads")
     resolved: int = Field(default=0, description="Number of resolved threads")
+    review_state: str = Field(
+        default="none",
+        description="Overall review state: 'approved', 'changes_requested', 'waiting', 'commented', 'none'",
+    )
+    reviewers: list[ReviewerState] = Field(default_factory=list, description="Per-reviewer state from GitHub's reviewer API")
 
 
 class StackReviewStatusResult(BaseModel):

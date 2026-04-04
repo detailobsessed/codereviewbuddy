@@ -8,7 +8,14 @@ from typing import TYPE_CHECKING
 from fastmcp.utilities.async_utils import call_sync_fn_in_threadpool
 
 from codereviewbuddy import gh, github_api
-from codereviewbuddy.models import ActivityEvent, PRReviewStatusSummary, StackActivityResult, StackPR, StackReviewStatusResult
+from codereviewbuddy.models import (
+    ActivityEvent,
+    PRReviewStatusSummary,
+    ReviewerState,
+    StackActivityResult,
+    StackPR,
+    StackReviewStatusResult,
+)
 
 if TYPE_CHECKING:
     from typing import Any
@@ -166,13 +173,29 @@ async def discover_stack(
 # Lightweight review status summarization
 # ---------------------------------------------------------------------------
 
-# Lightweight query: only isResolved + comment existence check, no full history
+# Lightweight query: thread counts + reviewer state, no full comment history
 _SUMMARY_QUERY = """
 query($owner: String!, $repo: String!, $pr: Int!, $cursor: String) {
   repository(owner: $owner, name: $repo) {
     pullRequest(number: $pr) {
       title
       url
+      latestReviews(first: 20) {
+        nodes {
+          author { login }
+          state
+        }
+      }
+      reviewRequests(first: 20) {
+        nodes {
+          requestedReviewer {
+            ... on User { login }
+            ... on Team { name }
+            ... on Mannequin { login }
+            ... on Bot { login }
+          }
+        }
+      }
       reviewThreads(first: 100, after: $cursor) {
         pageInfo { hasNextPage endCursor }
         nodes {
@@ -195,11 +218,11 @@ async def _paginate_summary_threads(
     repo: str,
     pr_number: int,
     cwd: str | None = None,  # noqa: ARG001
-) -> tuple[list[dict[str, Any]], str, str]:
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     """Paginate through review threads via the lightweight summary query.
 
     Returns:
-        (raw_thread_nodes, pr_title, pr_url)
+        (raw_thread_nodes, pr_data) — pr_data from the last page (contains title, url, reviewer info).
     """
     raw_threads: list[dict[str, Any]] = []
     cursor = None
@@ -220,7 +243,7 @@ async def _paginate_summary_threads(
         else:
             break
 
-    return raw_threads, pr_data.get("title", ""), pr_data.get("url", "")
+    return raw_threads, pr_data
 
 
 def _has_comments(node: dict[str, Any]) -> bool:
@@ -245,6 +268,52 @@ def _count_thread_statuses(
     return counts
 
 
+_REVIEW_STATE_MAP: dict[str, str] = {
+    "APPROVED": "approved",
+    "CHANGES_REQUESTED": "changes_requested",
+    "COMMENTED": "commented",
+    "DISMISSED": "dismissed",
+}
+
+
+def _extract_reviewer_states(pr_data: dict[str, Any]) -> list[ReviewerState]:
+    """Extract per-reviewer states from latestReviews and reviewRequests."""
+    reviewers: dict[str, str] = {}
+
+    # Latest reviews — each entry is the most recent review from a reviewer
+    for node in (pr_data.get("latestReviews") or {}).get("nodes") or []:
+        login = (node.get("author") or {}).get("login", "")
+        state = _REVIEW_STATE_MAP.get(node.get("state", ""), "commented")
+        if login:
+            reviewers[login] = state
+
+    # Pending review requests override prior reviews (re-requested after review)
+    for node in (pr_data.get("reviewRequests") or {}).get("nodes") or []:
+        rr = node.get("requestedReviewer") or {}
+        login = rr.get("login") or rr.get("name") or ""
+        if login:
+            reviewers[login] = "waiting"
+
+    return [ReviewerState(reviewer=login, state=state) for login, state in sorted(reviewers.items())]
+
+
+def _compute_review_state(reviewers: list[ReviewerState]) -> str:
+    """Derive overall review state from per-reviewer states."""
+    if not reviewers:
+        return "none"
+
+    states = {r.state for r in reviewers}
+
+    if "changes_requested" in states:
+        return "changes_requested"
+    if "waiting" in states:
+        return "waiting"
+    if states == {"approved"}:
+        return "approved"
+    # Mix of commented/dismissed/approved but not all approved
+    return "commented"
+
+
 async def _fetch_pr_summary(
     owner: str,
     repo: str,
@@ -252,13 +321,16 @@ async def _fetch_pr_summary(
     cwd: str | None = None,
 ) -> PRReviewStatusSummary:
     """Fetch lightweight review status for a single PR."""
-    raw_threads, title, url = await _paginate_summary_threads(owner, repo, pr_number, cwd=cwd)
+    raw_threads, pr_data = await _paginate_summary_threads(owner, repo, pr_number, cwd=cwd)
     counts = _count_thread_statuses(raw_threads)
+    reviewers = _extract_reviewer_states(pr_data)
 
     return PRReviewStatusSummary(
         pr_number=pr_number,
-        title=title,
-        url=url,
+        title=pr_data.get("title", ""),
+        url=pr_data.get("url", ""),
+        review_state=_compute_review_state(reviewers),
+        reviewers=reviewers,
         **counts,
     )
 
