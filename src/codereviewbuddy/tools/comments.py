@@ -423,6 +423,26 @@ def _extract_title(body: str) -> str:
     return match.group(1).strip() if match else ""
 
 
+_FIX_PATTERN = re.compile(r"(\U0001f534|\U0001f6a9|bug|critical|breaking|must fix|security)", re.IGNORECASE)
+_ACKNOWLEDGE_PATTERN = re.compile(r"(\U0001f4dd|\U0001f7e1|info|note|nit|style|nitpick|minor|consider)", re.IGNORECASE)
+
+
+def _classify_action(thread: ReviewThread) -> str:
+    """Classify the suggested action for a triage item based on comment content.
+
+    Returns:
+        "fix" — clear code change needed (bug/critical markers).
+        "acknowledge" — informational, just reply (info/nit/style markers).
+        "ambiguous" — unclear intent, needs user input.
+    """
+    body = thread.comments[0].body if thread.comments else ""
+    if _FIX_PATTERN.search(body):
+        return "fix"
+    if _ACKNOWLEDGE_PATTERN.search(body):
+        return "acknowledge"
+    return "ambiguous"
+
+
 def _has_owner_reply(thread: ReviewThread, owner_logins: frozenset[str]) -> bool:
     """Check if any comment in the thread is from the repo owner / agent."""
     return any(c.author in owner_logins for c in thread.comments)
@@ -440,6 +460,7 @@ def _thread_to_triage_item(thread: ReviewThread) -> TriageItem:
         reviewer=thread.reviewer,
         title=_extract_title(body),
         comment_url=first.url if first else "",
+        action=_classify_action(thread),
     )
 
 

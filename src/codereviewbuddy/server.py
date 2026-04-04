@@ -295,6 +295,35 @@ def _recovery_error(  # noqa: PLR0911
     return " ".join(parts)
 
 
+async def _elicit_ambiguous_items(result: TriageResult, ctx: Context | None) -> None:
+    """Ask the user what to do with ambiguous triage items via MCP elicitation.
+
+    Falls back gracefully when the client doesn't support elicitation —
+    items stay ``action="ambiguous"`` and the agent decides based on instructions.
+    """
+    if ctx is None:
+        return
+
+    from fastmcp.server.elicitation import AcceptedElicitation  # noqa: PLC0415
+
+    for item in result.items:
+        if item.action != "ambiguous":
+            continue
+        location = f"{item.file}:{item.line}" if item.file else "PR-level"
+        prompt = f"Ambiguous review comment at {location}"
+        if item.title:
+            prompt += f" — '{item.title}'"
+        prompt += "\nWhat should we do?"
+        try:
+            response = await ctx.elicit(prompt, ["fix", "acknowledge", "create_issue", "skip"])
+            if isinstance(response, AcceptedElicitation):
+                item.action = str(response.data)
+            else:
+                item.action = "skip"
+        except Exception:
+            logger.debug("Elicitation not supported by client, keeping action=ambiguous", exc_info=True)
+
+
 mcp.add_middleware(ErrorHandlingMiddleware(include_traceback=True, transform_errors=True))
 mcp.add_middleware(TimingMiddleware())
 mcp.add_middleware(LoggingMiddleware(include_payloads=True, max_payload_length=500))
@@ -529,13 +558,16 @@ async def triage_review_comments(
         ctx = get_context()
         cwd = await _get_workspace_cwd(ctx)
         _check_auto_detect_prerequisites(cwd, has_pr=True, has_repo=repo is not None)
-        return await comments.triage_review_comments(pr_numbers, repo=repo, owner_logins=owner_logins, cwd=cwd, ctx=ctx)
+        result = await comments.triage_review_comments(pr_numbers, repo=repo, owner_logins=owner_logins, cwd=cwd, ctx=ctx)
     except Exception as exc:
         logger.exception("triage_review_comments failed")
         return TriageResult(error=_recovery_error(exc, tool_name="triage_review_comments", repo=repo))
     except asyncio.CancelledError:
         logger.warning("triage_review_comments cancelled")
         return TriageResult(error="Cancelled")
+    else:
+        await _elicit_ambiguous_items(result, ctx)
+        return result
 
 
 @mcp.tool(tags={"query"})
