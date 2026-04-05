@@ -310,7 +310,7 @@ async def _elicit_ambiguous_items(result: TriageResult, ctx: Context | None) -> 
     for item in result.items:
         if item.action != "ambiguous":
             continue
-        location = f"{item.file}:{item.line}" if item.file else "PR-level"
+        location = f"{item.file}:{item.line}" if item.file and item.line is not None else (item.file or "PR-level")
         prompt = f"Ambiguous review comment at {location}"
         if item.title:
             prompt += f" — '{item.title}'"
@@ -573,15 +573,14 @@ async def triage_review_comments(
         cwd = await _get_workspace_cwd(ctx)
         _check_auto_detect_prerequisites(cwd, has_pr=True, has_repo=repo is not None)
         result = await comments.triage_review_comments(pr_numbers, repo=repo, owner_logins=owner_logins, cwd=cwd, ctx=ctx)
+        await _elicit_ambiguous_items(result, ctx)
+        return result  # noqa: TRY300 — intentionally inside try to catch elicitation errors
     except Exception as exc:
         logger.exception("triage_review_comments failed")
         return TriageResult(error=_recovery_error(exc, tool_name="triage_review_comments", repo=repo))
     except asyncio.CancelledError:
         logger.warning("triage_review_comments cancelled")
         return TriageResult(error="Cancelled")
-    else:
-        await _elicit_ambiguous_items(result, ctx)
-        return result
 
 
 @mcp.tool(tags={"query"})
