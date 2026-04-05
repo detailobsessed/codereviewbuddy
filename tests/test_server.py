@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from typing import TYPE_CHECKING
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -404,6 +405,69 @@ class TestErrorHandlers:
         mocker.patch("codereviewbuddy.server.comments.reply_to_comment", side_effect=RuntimeError("boom"))
         result = await reply_to_comment(thread_id="PRRT_abc", body="test", pr_number=1)
         assert "reply_to_comment failed" in result
+
+
+@pytest.mark.usefixtures("patch_server_context")
+class TestElicitAmbiguousItems:
+    """Tests for _elicit_ambiguous_items — elicitation flow with fallback."""
+
+    async def test_elicit_updates_ambiguous_action(self, mocker: MockerFixture):
+        from fastmcp.server.elicitation import AcceptedElicitation
+
+        from codereviewbuddy.models import TriageItem, TriageResult
+        from codereviewbuddy.server import _elicit_ambiguous_items
+
+        ctx = mocker.MagicMock()
+        accepted = AcceptedElicitation(data="fix")
+        ctx.elicit = AsyncMock(return_value=accepted)
+
+        result = TriageResult(
+            items=[TriageItem(thread_id="PRRT_1", pr_number=42, reviewer="bot", action="ambiguous", file="a.py", line=1)],
+            total=1,
+        )
+        await _elicit_ambiguous_items(result, ctx)
+        assert result.items[0].action == "fix"
+
+    async def test_elicit_skips_non_ambiguous(self, mocker: MockerFixture):
+        from codereviewbuddy.models import TriageItem, TriageResult
+        from codereviewbuddy.server import _elicit_ambiguous_items
+
+        ctx = mocker.MagicMock()
+        ctx.elicit = AsyncMock()
+
+        result = TriageResult(
+            items=[TriageItem(thread_id="PRRT_1", pr_number=42, reviewer="bot", action="fix")],
+            total=1,
+        )
+        await _elicit_ambiguous_items(result, ctx)
+        ctx.elicit.assert_not_called()
+        assert result.items[0].action == "fix"
+
+    async def test_elicit_fallback_on_unsupported_client(self, mocker: MockerFixture):
+        from codereviewbuddy.models import TriageItem, TriageResult
+        from codereviewbuddy.server import _elicit_ambiguous_items
+
+        ctx = mocker.MagicMock()
+        ctx.elicit = AsyncMock(side_effect=RuntimeError("Elicitation not supported"))
+
+        result = TriageResult(
+            items=[TriageItem(thread_id="PRRT_1", pr_number=42, reviewer="bot", action="ambiguous")],
+            total=1,
+        )
+        await _elicit_ambiguous_items(result, ctx)
+        # Should stay "ambiguous" — graceful fallback
+        assert result.items[0].action == "ambiguous"
+
+    async def test_elicit_noop_without_ctx(self):
+        from codereviewbuddy.models import TriageItem, TriageResult
+        from codereviewbuddy.server import _elicit_ambiguous_items
+
+        result = TriageResult(
+            items=[TriageItem(thread_id="PRRT_1", pr_number=42, reviewer="bot", action="ambiguous")],
+            total=1,
+        )
+        await _elicit_ambiguous_items(result, None)
+        assert result.items[0].action == "ambiguous"
 
 
 class TestResolveThreadPrNumber:

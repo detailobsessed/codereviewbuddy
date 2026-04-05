@@ -19,9 +19,9 @@ from codereviewbuddy.tools.stack import (
     _extract_detail,
     _extract_reviewer_states,
     _fetch_merged_prs,
-    _fetch_pr_summary,
     _has_comments,
     discover_stack,
+    fetch_pr_summary,
     list_recent_unresolved,
     summarize_review_status,
 )
@@ -200,7 +200,7 @@ class TestFetchPrSummary:
     async def test_counts_threads(self, mocker: MockerFixture):
         mocker.patch("codereviewbuddy.tools.stack.github_api.graphql", new_callable=AsyncMock, return_value=SAMPLE_SUMMARY_GRAPHQL_RESPONSE)
 
-        summary = await _fetch_pr_summary("o", "r", 42)
+        summary = await fetch_pr_summary("o", "r", 42)
         assert summary.pr_number == 42
         assert summary.title == "feat: test"
         assert summary.unresolved == 2
@@ -256,7 +256,7 @@ class TestFetchPrSummary:
             side_effect=[page1, page2],
         )
 
-        summary = await _fetch_pr_summary("o", "r", 42)
+        summary = await fetch_pr_summary("o", "r", 42)
         assert summary.unresolved == 5  # 3 + 2 across pages
         assert mock_graphql.call_count == 2
         # Verify cursor was passed on second call

@@ -9,6 +9,7 @@ from __future__ import annotations
 import asyncio
 import importlib
 import importlib.util
+import json
 import logging
 import os
 from pathlib import Path
@@ -295,10 +296,68 @@ def _recovery_error(  # noqa: PLR0911
     return " ".join(parts)
 
 
+async def _elicit_ambiguous_items(result: TriageResult, ctx: Context | None) -> None:
+    """Ask the user what to do with ambiguous triage items via MCP elicitation.
+
+    Falls back gracefully when the client doesn't support elicitation —
+    items stay ``action="ambiguous"`` and the agent decides based on instructions.
+    """
+    if ctx is None:
+        return
+
+    from fastmcp.server.elicitation import AcceptedElicitation  # noqa: PLC0415
+
+    for item in result.items:
+        if item.action != "ambiguous":
+            continue
+        location = f"{item.file}:{item.line}" if item.file else "PR-level"
+        prompt = f"Ambiguous review comment at {location}"
+        if item.title:
+            prompt += f" — '{item.title}'"
+        prompt += "\nWhat should we do?"
+        try:
+            response = await ctx.elicit(prompt, ["fix", "acknowledge", "create_issue", "skip"])
+            if isinstance(response, AcceptedElicitation):
+                item.action = str(response.data)
+            else:
+                item.action = "skip"
+        except Exception:
+            logger.debug("Elicitation not supported by client, keeping action=ambiguous", exc_info=True)
+
+
 mcp.add_middleware(ErrorHandlingMiddleware(include_traceback=True, transform_errors=True))
 mcp.add_middleware(TimingMiddleware())
 mcp.add_middleware(LoggingMiddleware(include_payloads=True, max_payload_length=500))
 mcp.add_middleware(PingMiddleware(interval_ms=30_000))
+
+
+# ---------------------------------------------------------------------------
+# Resources — read-only views of PR data
+# ---------------------------------------------------------------------------
+
+
+@mcp.resource("pr://{owner}/{repo}/{pr_number}/reviews")
+async def pr_reviews(owner: str, repo: str, pr_number: int) -> str:
+    """Read-only review summary for a single PR.
+
+    Returns lightweight review status: thread counts, reviewer states,
+    and overall review state. No full comment bodies.
+    """
+    try:
+        summary = await stack.fetch_pr_summary(owner, repo, pr_number)
+        return summary.model_dump_json()
+    except asyncio.CancelledError:
+        logger.warning("pr_reviews cancelled for %s/%s#%s", owner, repo, pr_number)
+        raise
+    except Exception as exc:
+        logger.exception("pr_reviews failed for %s/%s#%s", owner, repo, pr_number)
+        error_msg = _recovery_error(
+            exc,
+            tool_name="pr_reviews",
+            pr_number=pr_number,
+            repo=f"{owner}/{repo}",
+        )
+        return json.dumps({"error": error_msg})
 
 
 @mcp.tool(tags={"query"})
@@ -513,13 +572,16 @@ async def triage_review_comments(
         ctx = get_context()
         cwd = await _get_workspace_cwd(ctx)
         _check_auto_detect_prerequisites(cwd, has_pr=True, has_repo=repo is not None)
-        return await comments.triage_review_comments(pr_numbers, repo=repo, owner_logins=owner_logins, cwd=cwd, ctx=ctx)
+        result = await comments.triage_review_comments(pr_numbers, repo=repo, owner_logins=owner_logins, cwd=cwd, ctx=ctx)
     except Exception as exc:
         logger.exception("triage_review_comments failed")
         return TriageResult(error=_recovery_error(exc, tool_name="triage_review_comments", repo=repo))
     except asyncio.CancelledError:
         logger.warning("triage_review_comments cancelled")
         return TriageResult(error="Cancelled")
+    else:
+        await _elicit_ambiguous_items(result, ctx)
+        return result
 
 
 @mcp.tool(tags={"query"})

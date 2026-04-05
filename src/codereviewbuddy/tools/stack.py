@@ -222,7 +222,9 @@ async def _paginate_summary_threads(
     """Paginate through review threads via the lightweight summary query.
 
     Returns:
-        (raw_thread_nodes, pr_data) — pr_data from the last page (contains title, url, reviewer info).
+        (raw_thread_nodes, pr_data) — pr_data from the final page.  Non-paginated fields
+        (title, url, latestReviews, reviewRequests) are identical on every page, so any
+        page's pr_data is safe to use.
     """
     raw_threads: list[dict[str, Any]] = []
     cursor = None
@@ -310,18 +312,34 @@ def _compute_review_state(reviewers: list[ReviewerState]) -> str:
         return "waiting"
     if states == {"approved"}:
         return "approved"
-    # Mix of commented/dismissed/approved but not all approved
+    # Any other mix (commented, dismissed, partial approval) — treat as non-blocking feedback
     return "commented"
 
 
-async def _fetch_pr_summary(
+async def fetch_pr_summary(
     owner: str,
     repo: str,
     pr_number: int,
     cwd: str | None = None,
 ) -> PRReviewStatusSummary:
-    """Fetch lightweight review status for a single PR."""
+    """Fetch lightweight review status for a single PR.
+
+    Args:
+        owner: Repository owner (user or org).
+        repo: Repository name (without owner prefix).
+        pr_number: Pull request number.
+        cwd: Working directory for git operations.
+
+    Returns:
+        Compact review status with thread counts, reviewer states, and overall review state.
+
+    Raises:
+        ValueError: If the PR does not exist or the GraphQL response contains no PR data.
+    """
     raw_threads, pr_data = await _paginate_summary_threads(owner, repo, pr_number, cwd=cwd)
+    if not pr_data:
+        msg = f"PR #{pr_number} not found in {owner}/{repo}"
+        raise ValueError(msg)
     counts = _count_thread_statuses(raw_threads)
     reviewers = _extract_reviewer_states(pr_data)
 
@@ -343,6 +361,31 @@ def _build_status_hints(
     if total_unresolved == 0:
         return ["All threads resolved! Call review_pr_descriptions(pr_numbers) to check PR quality before merging."]
     return [f"Call triage_review_comments(pr_numbers={pr_numbers}) to see the {total_unresolved} unresolved thread(s)."]
+
+
+async def _resolve_stack_pr_numbers[T](
+    error_cls: type[T],
+    full_repo: str,
+    repo_explicit: bool,
+    cwd: str | None,
+    ctx: Context | None,
+) -> list[int] | T:
+    """Auto-discover stack PR numbers, returning *error_cls(error=...)* on repo mismatch."""
+    if repo_explicit:
+        try:
+            cwd_owner, cwd_repo = await call_sync_fn_in_threadpool(gh.get_repo_info, cwd=cwd)
+            cwd_full = f"{cwd_owner}/{cwd_repo}"
+        except gh.GhError:
+            cwd_full = None
+        if cwd_full is None or cwd_full.lower() != full_repo.lower():
+            return error_cls(
+                error=f"Auto-discovery unavailable: working directory is {cwd_full or 'unknown'}, "
+                f"but target repo is {full_repo}. Pass pr_numbers explicitly.",
+            )
+
+    current_pr = await call_sync_fn_in_threadpool(gh.get_current_pr_number, cwd=cwd)
+    stack_prs = await discover_stack(current_pr, repo=full_repo, cwd=cwd, ctx=ctx)
+    return [p.pr_number for p in stack_prs]
 
 
 async def summarize_review_status(
@@ -372,24 +415,10 @@ async def summarize_review_status(
 
     # Auto-discover stack if no PR numbers provided
     if pr_numbers is None:
-        # Guard: auto-discovery uses `gh pr view` which reads the current branch.
-        # If `repo` was explicitly provided, verify it matches the cwd repo —
-        # otherwise we'd detect a PR from the wrong repo (#115).
-        if repo:
-            try:
-                cwd_owner, cwd_repo = await call_sync_fn_in_threadpool(gh.get_repo_info, cwd=cwd)
-                cwd_full = f"{cwd_owner}/{cwd_repo}"
-            except gh.GhError:
-                cwd_full = None
-            if cwd_full is None or cwd_full.lower() != full_repo.lower():
-                return StackReviewStatusResult(
-                    error=f"Auto-discovery unavailable: working directory is {cwd_full or 'unknown'}, "
-                    f"but target repo is {full_repo}. Pass pr_numbers explicitly.",
-                )
-
-        current_pr = await call_sync_fn_in_threadpool(gh.get_current_pr_number, cwd=cwd)
-        stack_prs = await discover_stack(current_pr, repo=full_repo, cwd=cwd, ctx=ctx)
-        pr_numbers = [p.pr_number for p in stack_prs]
+        resolved = await _resolve_stack_pr_numbers(StackReviewStatusResult, full_repo, repo_explicit=bool(repo), cwd=cwd, ctx=ctx)
+        if isinstance(resolved, StackReviewStatusResult):
+            return resolved
+        pr_numbers = resolved
 
     if not pr_numbers:
         return StackReviewStatusResult(error="No PRs to summarize")
@@ -400,14 +429,18 @@ async def summarize_review_status(
     for i, pr_num in enumerate(pr_numbers):
         if ctx and total:
             await ctx.report_progress(i, total)
-        summary = await _fetch_pr_summary(owner, repo_name, pr_num, cwd=cwd)
+        try:
+            summary = await fetch_pr_summary(owner, repo_name, pr_num, cwd=cwd)
+        except ValueError:
+            logger.warning("PR #%d not found in %s/%s, skipping", pr_num, owner, repo_name)
+            continue
         summaries.append(summary)
 
     if ctx and total:
         await ctx.report_progress(total, total)
 
     total_unresolved = sum(s.unresolved for s in summaries)
-    next_steps = _build_status_hints(pr_numbers, total_unresolved)
+    next_steps = _build_status_hints([s.pr_number for s in summaries], total_unresolved)
 
     return StackReviewStatusResult(
         prs=summaries,
@@ -485,7 +518,11 @@ async def list_recent_unresolved(
     for i, pr in enumerate(merged_prs):
         if ctx and total:
             await ctx.report_progress(i, total)
-        summary = await _fetch_pr_summary(owner, repo_name, pr["number"], cwd=cwd)
+        try:
+            summary = await fetch_pr_summary(owner, repo_name, pr["number"], cwd=cwd)
+        except ValueError:
+            logger.warning("PR #%d not found in %s/%s, skipping", pr["number"], owner, repo_name)
+            continue
         if summary.unresolved > 0:
             summaries.append(summary)
 
@@ -574,7 +611,7 @@ def _parse_timeline_events(
 
         try:
             ts = datetime.fromisoformat(ts_str)
-        except ValueError, AttributeError:
+        except (ValueError, AttributeError):  # fmt: skip
             continue
 
         events.append(
@@ -588,30 +625,6 @@ def _parse_timeline_events(
         )
 
     return events
-
-
-async def _resolve_pr_numbers(
-    full_repo: str,
-    repo_explicit: bool,
-    cwd: str | None,
-    ctx: Context | None,
-) -> list[int] | StackActivityResult:
-    """Auto-discover stack PR numbers, returning error result on repo mismatch."""
-    if repo_explicit:
-        try:
-            cwd_owner, cwd_repo = await call_sync_fn_in_threadpool(gh.get_repo_info, cwd=cwd)
-            cwd_full = f"{cwd_owner}/{cwd_repo}"
-        except gh.GhError:
-            cwd_full = None
-        if cwd_full is None or cwd_full.lower() != full_repo.lower():
-            return StackActivityResult(
-                error=f"Auto-discovery unavailable: working directory is {cwd_full or 'unknown'}, "
-                f"but target repo is {full_repo}. Pass pr_numbers explicitly.",
-            )
-
-    current_pr = await call_sync_fn_in_threadpool(gh.get_current_pr_number, cwd=cwd)
-    stack_prs = await discover_stack(current_pr, repo=full_repo, cwd=cwd, ctx=ctx)
-    return [p.pr_number for p in stack_prs]
 
 
 async def stack_activity(
@@ -645,7 +658,7 @@ async def stack_activity(
 
     # Auto-discover stack if needed
     if pr_numbers is None:
-        resolved = await _resolve_pr_numbers(full_repo, repo_explicit=bool(repo), cwd=cwd, ctx=ctx)
+        resolved = await _resolve_stack_pr_numbers(StackActivityResult, full_repo, repo_explicit=bool(repo), cwd=cwd, ctx=ctx)
         if isinstance(resolved, StackActivityResult):
             return resolved
         pr_numbers = resolved

@@ -110,6 +110,10 @@ class TriageItem(BaseModel):
     reviewer: str = Field(description="GitHub login of the user or bot that posted this thread")
     title: str = Field(default="", description="Short title extracted from the comment (first bold text)")
     comment_url: str = Field(default="", description="Direct URL to the comment on GitHub for user navigation")
+    action: str = Field(
+        default="fix",
+        description="Suggested action: 'fix' (code change needed), 'acknowledge' (informational), 'ambiguous' (unclear)",
+    )
 
 
 class ActivityEvent(BaseModel):
