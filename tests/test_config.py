@@ -49,7 +49,7 @@ class TestLoadConfigFromEnv:
         assert config.pr_descriptions.enabled is False
 
     def test_owner_logins_from_env(self, monkeypatch: pytest.MonkeyPatch):
-        monkeypatch.setenv("CRB_OWNER_LOGINS", '["alice","bob"]')
+        monkeypatch.setenv("CRB_OWNER_LOGINS", "alice,bob")
         config = load_config()
         assert config.owner_logins == ["alice", "bob"]
 

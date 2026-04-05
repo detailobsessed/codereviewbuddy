@@ -13,13 +13,12 @@ An MCP server that helps your AI coding agent manage PR review comments from any
 
 ### Review comment management
 
-- **Triage review comments** — `triage_review_comments` filters to only actionable inline threads, suggests fix/reply actions
+- **Triage review comments** — `triage_review_comments` filters to only actionable inline threads, suggests fix/reply actions, and includes direct GitHub URLs for each comment
 - **Get thread details** — `get_thread` fetches full conversation history for any thread by node ID
 - **Reply to anything** — inline review threads (`PRRT_`), PR-level reviews (`PRR_`), and bot issue comments (`IC_`) all routed to the correct GitHub API
 
-### Triage & CI diagnosis
+### CI & stack diagnosis
 
-- **Triage review comments** — `triage_review_comments` filters to only actionable threads, suggests fix/reply actions, and includes direct GitHub URLs for each comment
 - **Diagnose CI failures** — `diagnose_ci` collapses 3-5 sequential `gh` commands into one call: finds the failed run, identifies failed jobs/steps, and extracts actionable error lines
 - **Stack activity feed** — `stack_activity` shows a chronological timeline of pushes, reviews, labels, merges across all PRs in a stack with a `settled` flag for deciding when to proceed
 - **Scan merged PRs** — `list_recent_unresolved` catches late review comments on already-merged PRs
@@ -37,7 +36,6 @@ An MCP server that helps your AI coding agent manage PR review comments from any
 - **Typed output schemas** — all tools return Pydantic models with JSON Schema, giving MCP clients structured data instead of raw strings
 - **Progress reporting** — long-running operations report progress via FastMCP context (visible in MCP clients that support it)
 - **Production middleware** — ErrorHandling (transforms exceptions to clean MCP errors with tracebacks), Timing (logs execution duration for every tool call), and Logging (request/response payloads for debugging)
-- **Update checker** — `check_for_updates` compares the running version against PyPI and suggests upgrade commands
 - **Zero config auth** — uses `gh` CLI, no PAT tokens or `.env` files
 
 ### CLI testing (free with FastMCP v3)
@@ -175,6 +173,20 @@ If your MCP client reports `No module named 'fastmcp.server.tasks.routing'`, the
 | `review_pr_descriptions` | query | Analyze PR descriptions for quality issues (empty body, boilerplate, missing linked issues) |
 | `show_config` | discovery | Show active configuration with human-readable explanation |
 
+## MCP Resources
+
+| Resource | Description |
+| -------- | ----------- |
+| `pr://{owner}/{repo}/{pr_number}/reviews` | Read-only review summary for a single PR |
+
+## MCP Prompts
+
+| Prompt | Description |
+| ------ | ----------- |
+| `review_stack` | Full review pass workflow — summarize, triage, fix, reply, verify |
+| `pr_review_checklist` | Pre-merge quality checklist (review threads, PR hygiene, CI, tests) |
+| `ship_stack` | Pre-merge sanity check workflow before merging a PR stack |
+
 ## Configuration
 
 codereviewbuddy works **zero-config** with sensible defaults. All configuration is via `CRB_*` environment variables in the `"env"` block of your MCP client config — no config files needed. Nested settings use `__` (double underscore) as a delimiter. See the [dev setup](#from-source-development) above for a fully-commented example.
@@ -185,6 +197,7 @@ codereviewbuddy works **zero-config** with sensible defaults. All configuration 
 | ------- | ---- | ------- | ----------- |
 | `CRB_PR_DESCRIPTIONS__ENABLED` | bool | `true` | Whether `review_pr_descriptions` tool is available |
 | `CRB_SELF_IMPROVEMENT__ENABLED` | bool | `false` | Agents suggest Linear issues when they encounter server gaps |
+| `CRB_OWNER_LOGINS` | comma-separated | `[]` | GitHub usernames considered "ours" for triage filtering (e.g. `alice,bob`) |
 
 ## Typical workflow
 
