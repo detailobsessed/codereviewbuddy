@@ -112,7 +112,8 @@ class TriageItem(BaseModel):
     comment_url: str = Field(default="", description="Direct URL to the comment on GitHub for user navigation")
     action: str = Field(
         default="fix",
-        description="Suggested action: 'fix' (code change needed), 'acknowledge' (informational), 'ambiguous' (unclear)",
+        description="Suggested action: 'fix' (code change needed), 'acknowledge' (informational), "
+        "'create_issue' (track separately), 'skip' (no action), 'ambiguous' (unclear — needs user input)",
     )
 
 

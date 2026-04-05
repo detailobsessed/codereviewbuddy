@@ -423,8 +423,10 @@ def _extract_title(body: str) -> str:
     return match.group(1).strip() if match else ""
 
 
-_FIX_PATTERN = re.compile(r"(\U0001f534|\U0001f6a9|bug|critical|breaking|must fix|security)", re.IGNORECASE)
-_ACKNOWLEDGE_PATTERN = re.compile(r"(\U0001f4dd|\U0001f7e1|info|note|nit|style|nitpick|minor|consider)", re.IGNORECASE)
+_FIX_PATTERN = re.compile(r"(\U0001f534|\U0001f6a9|\bbug\b|\bcritical\b|\bbreaking\b|\bmust fix\b|\bsecurity\b)", re.IGNORECASE)
+_ACKNOWLEDGE_PATTERN = re.compile(
+    r"(\U0001f4dd|\U0001f7e1|\binfo\b|\bnote\b|\bnit\b|\bstyle\b|\bnitpick\b|\bminor\b|\bconsider\b)", re.IGNORECASE
+)
 
 
 def _classify_action(thread: ReviewThread) -> str:
