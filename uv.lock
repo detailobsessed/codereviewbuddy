@@ -232,7 +232,7 @@ wheels = [
 
 [[package]]
 name = "codereviewbuddy"
-version = "0.35.2"
+version = "0.36.0"
 source = { editable = "." }
 dependencies = [
     { name = "fastmcp" },
