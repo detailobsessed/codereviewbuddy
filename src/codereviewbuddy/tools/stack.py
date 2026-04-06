@@ -361,20 +361,23 @@ def _build_status_hints(
     Returns:
         (hints, focus_pr, total_unresolved)
     """
+    if not summaries:
+        return ["No PR data available — check that the PR numbers are valid."], None, 0
+
     total_unresolved = sum(s.unresolved for s in summaries)
     if total_unresolved == 0:
         return ["All threads resolved! Call review_pr_descriptions(pr_numbers) to check PR quality before merging."], None, 0
 
-    # Bottom-most PR with unresolved threads (summaries are already bottom-to-top)
+    # Pick the first PR with unresolved threads (summaries are bottom-to-top for auto-discovered stacks)
     focus = next(s for s in summaries if s.unresolved > 0)
     remaining = sum(1 for s in summaries if s.unresolved > 0) - 1
 
     hints = [
-        f"Focus on PR #{focus.pr_number} ({focus.unresolved} unresolved) — bottom of the stack, resolve it first.",
+        f"Focus on PR #{focus.pr_number} ({focus.unresolved} unresolved) — earliest in the list, resolve it first.",
         f"Call triage_review_comments(pr_numbers=[{focus.pr_number}]) to see its unresolved threads.",
     ]
     if remaining > 0:
-        hints.append(f"{remaining} more PR(s) above also have unresolved threads — work bottom-up after this one.")
+        hints.append(f"{remaining} more PR(s) also have unresolved threads — work through them in order after this one.")
 
     return hints, focus.pr_number, total_unresolved
 
