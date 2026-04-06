@@ -200,14 +200,16 @@ for a specific thread.
 Follow this sequence when reviewing or responding to AI review comments:
 
 1. **Summarize** — `summarize_review_status()` (omit `pr_numbers` → auto-discover stack).
-   Check which PRs have unresolved threads.
-2. **Triage** — `triage_review_comments(pr_numbers)` with the discovered PR numbers.
-   Returns only unresolved threads that still need attention (titles + metadata).
+   Check `focus_pr` — this is the bottom-most PR with unresolved threads.
+2. **Triage** — `triage_review_comments(pr_numbers=[focus_pr])` with the focus PR only.
+   Work bottom-up: resolve the lowest PR in the stack first, then move up.
+   Only triage one PR at a time to keep context focused.
 3. **Read** — `get_thread(thread_id)` for each thread that needs action.
    Returns full comment body and conversation history.
 4. **Fix and reply** — implement fixes, then `reply_to_comment` explaining the change
    and commit hash.
-5. **Verify** — `summarize_review_status()` again to confirm all threads are addressed.
+5. **Verify** — `summarize_review_status()` again to confirm threads are addressed.
+   If `focus_pr` is set, repeat from step 2 with the new focus PR.
 
 ## Responding to review comments
 
@@ -701,19 +703,21 @@ def review_stack() -> str:
 You are doing a full review pass on the current PR stack. Follow these steps in order:
 
 1. **Summarize status** — call `summarize_review_status()` (no args = auto-discover stack).
-   Note which PRs have unresolved threads.
+   Check `focus_pr` — this is the bottom-most PR with unresolved threads.
 
-2. **Triage** — call `triage_review_comments(pr_numbers)` with the discovered PR numbers.
-   This gives you only unresolved threads that need attention.
+2. **Triage bottom-up** — call `triage_review_comments(pr_numbers=[focus_pr])` with the
+   focus PR only. Work on one PR at a time — resolve it fully before moving to the next.
 
-3. **Read and fix** — for each thread:
+3. **Read and fix** — for each thread in the focus PR:
    - Call `get_thread(thread_id)` to read the full comment and conversation.
    - If a code fix is needed, implement it.
    - Reply with `reply_to_comment` explaining what you did and the commit hash.
 
-4. **Verify descriptions** — call `review_pr_descriptions(pr_numbers)` and fix any missing elements.
+4. **Check progress** — call `summarize_review_status()` again.
+   If `focus_pr` is set, repeat from step 2 with the new focus PR.
+   Once all threads are resolved, continue to step 5.
 
-5. **Final check** — call `summarize_review_status()` again to confirm all threads are addressed.
+5. **Verify descriptions** — call `review_pr_descriptions(pr_numbers)` and fix any missing elements.
 """
 
 

@@ -354,13 +354,29 @@ async def fetch_pr_summary(
 
 
 def _build_status_hints(
-    pr_numbers: list[int],
-    total_unresolved: int,
-) -> list[str]:
-    """Build next_steps hints for a StackReviewStatusResult."""
+    summaries: list[PRReviewStatusSummary],
+) -> tuple[list[str], int | None]:
+    """Build next_steps hints and identify focus PR for a StackReviewStatusResult.
+
+    Returns:
+        (hints, focus_pr) — focus_pr is the bottom-most PR with unresolved threads, or None.
+    """
+    total_unresolved = sum(s.unresolved for s in summaries)
     if total_unresolved == 0:
-        return ["All threads resolved! Call review_pr_descriptions(pr_numbers) to check PR quality before merging."]
-    return [f"Call triage_review_comments(pr_numbers={pr_numbers}) to see the {total_unresolved} unresolved thread(s)."]
+        return ["All threads resolved! Call review_pr_descriptions(pr_numbers) to check PR quality before merging."], None
+
+    # Bottom-most PR with unresolved threads (summaries are already bottom-to-top)
+    focus = next(s for s in summaries if s.unresolved > 0)
+    remaining = sum(1 for s in summaries if s.unresolved > 0) - 1
+
+    hints = [
+        f"Focus on PR #{focus.pr_number} ({focus.unresolved} unresolved) — bottom of the stack, resolve it first.",
+        f"Call triage_review_comments(pr_numbers=[{focus.pr_number}]) to see its unresolved threads.",
+    ]
+    if remaining > 0:
+        hints.append(f"{remaining} more PR(s) above also have unresolved threads — work bottom-up after this one.")
+
+    return hints, focus.pr_number
 
 
 async def _resolve_stack_pr_numbers[T](
@@ -440,11 +456,12 @@ async def summarize_review_status(
         await ctx.report_progress(total, total)
 
     total_unresolved = sum(s.unresolved for s in summaries)
-    next_steps = _build_status_hints([s.pr_number for s in summaries], total_unresolved)
+    next_steps, focus_pr = _build_status_hints(summaries)
 
     return StackReviewStatusResult(
         prs=summaries,
         total_unresolved=total_unresolved,
+        focus_pr=focus_pr,
         next_steps=next_steps,
     )
 
