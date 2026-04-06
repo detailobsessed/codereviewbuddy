@@ -73,6 +73,7 @@ class StackReviewStatusResult(BaseModel):
 
     prs: list[PRReviewStatusSummary] = Field(default_factory=list, description="Per-PR review status, bottom to top")
     total_unresolved: int = Field(default=0, description="Total unresolved threads across the stack")
+    focus_pr: int | None = Field(default=None, description="Bottom-most PR with unresolved threads — work on this one next")
     next_steps: list[str] = Field(default_factory=list, description="Suggested next actions based on the stack state")
     error: str | None = Field(default=None, description="Error message if the request failed")
 
