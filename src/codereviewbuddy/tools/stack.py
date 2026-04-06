@@ -355,15 +355,15 @@ async def fetch_pr_summary(
 
 def _build_status_hints(
     summaries: list[PRReviewStatusSummary],
-) -> tuple[list[str], int | None]:
+) -> tuple[list[str], int | None, int]:
     """Build next_steps hints and identify focus PR for a StackReviewStatusResult.
 
     Returns:
-        (hints, focus_pr) — focus_pr is the bottom-most PR with unresolved threads, or None.
+        (hints, focus_pr, total_unresolved)
     """
     total_unresolved = sum(s.unresolved for s in summaries)
     if total_unresolved == 0:
-        return ["All threads resolved! Call review_pr_descriptions(pr_numbers) to check PR quality before merging."], None
+        return ["All threads resolved! Call review_pr_descriptions(pr_numbers) to check PR quality before merging."], None, 0
 
     # Bottom-most PR with unresolved threads (summaries are already bottom-to-top)
     focus = next(s for s in summaries if s.unresolved > 0)
@@ -376,7 +376,7 @@ def _build_status_hints(
     if remaining > 0:
         hints.append(f"{remaining} more PR(s) above also have unresolved threads — work bottom-up after this one.")
 
-    return hints, focus.pr_number
+    return hints, focus.pr_number, total_unresolved
 
 
 async def _resolve_stack_pr_numbers[T](
@@ -455,8 +455,7 @@ async def summarize_review_status(
     if ctx and total:
         await ctx.report_progress(total, total)
 
-    total_unresolved = sum(s.unresolved for s in summaries)
-    next_steps, focus_pr = _build_status_hints(summaries)
+    next_steps, focus_pr, total_unresolved = _build_status_hints(summaries)
 
     return StackReviewStatusResult(
         prs=summaries,
@@ -548,6 +547,8 @@ async def list_recent_unresolved(
 
     total_unresolved = sum(s.unresolved for s in summaries)
 
+    # focus_pr and next_steps intentionally omitted — merged PRs don't have
+    # stack ordering semantics, so bottom-up guidance doesn't apply here.
     return StackReviewStatusResult(
         prs=summaries,
         total_unresolved=total_unresolved,

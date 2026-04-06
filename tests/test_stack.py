@@ -591,27 +591,27 @@ def _make_summary(pr_number: int, unresolved: int = 0, resolved: int = 0) -> PRR
 class TestBuildStatusHints:
     def test_all_resolved(self):
         summaries = [_make_summary(42, resolved=2), _make_summary(43, resolved=1)]
-        hints, focus_pr = _build_status_hints(summaries)
+        hints, focus_pr, _total = _build_status_hints(summaries)
         assert len(hints) == 1
         assert "resolved" in hints[0].lower()
         assert focus_pr is None
 
     def test_has_unresolved(self):
         summaries = [_make_summary(42, unresolved=3), _make_summary(43)]
-        hints, focus_pr = _build_status_hints(summaries)
+        hints, focus_pr, _total = _build_status_hints(summaries)
         assert focus_pr == 42
         assert "triage_review_comments" in hints[1]
         assert "42" in hints[1]
 
     def test_focus_pr_is_bottommost(self):
         summaries = [_make_summary(10, unresolved=1), _make_summary(11, unresolved=5), _make_summary(12, unresolved=2)]
-        hints, focus_pr = _build_status_hints(summaries)
+        hints, focus_pr, _total = _build_status_hints(summaries)
         assert focus_pr == 10
         assert "10" in hints[0]
 
     def test_remaining_count(self):
         summaries = [_make_summary(10, unresolved=1), _make_summary(11, unresolved=5), _make_summary(12, unresolved=2)]
-        hints, _focus_pr = _build_status_hints(summaries)
+        hints, _focus_pr, _total = _build_status_hints(summaries)
         assert any("2 more PR(s)" in h for h in hints)
 
 
