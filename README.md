@@ -118,9 +118,27 @@ If you prefer manual setup, add the following to your MCP client's config JSON:
       "env": {
         // All CRB_* env vars are optional — zero-config works out of the box.
         // See Configuration section below for the full list.
+      }
+    }
+  }
+}
+```
 
-        // Self-improvement: agents suggest Linear issues when they hit server gaps
-        // "CRB_SELF_IMPROVEMENT__ENABLED": "true"
+All options enabled:
+
+```jsonc
+{
+  "mcpServers": {
+    "codereviewbuddy": {
+      "command": "uvx",
+      "args": ["codereviewbuddy@latest"],
+      "env": {
+        // GitHub logins considered "ours" for triage filtering (comma-separated)
+        "CRB_OWNER_LOGINS": "alice,bob",
+        // Enable PR description quality checks
+        "CRB_PR_DESCRIPTIONS__ENABLED": "true",
+        // Agents suggest Linear issues when they hit server gaps
+        "CRB_SELF_IMPROVEMENT__ENABLED": "true"
       }
     }
   }
