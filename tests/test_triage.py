@@ -11,7 +11,6 @@ if TYPE_CHECKING:
 
 from codereviewbuddy.models import CommentStatus, ReviewComment, ReviewThread
 from codereviewbuddy.tools.comments import (
-    _classify_action,
     _extract_title,
     _has_owner_reply,
     triage_review_comments,
@@ -71,40 +70,6 @@ class TestExtractTitle:
 
     def test_no_bold(self):
         assert not _extract_title("No bold text here")
-
-
-class TestClassifyAction:
-    def test_bug_marker_returns_fix(self):
-        assert _classify_action(_thread(body="🔴 **Bug: Missing null check**")) == "fix"
-
-    def test_critical_keyword_returns_fix(self):
-        assert _classify_action(_thread(body="**Critical: This will crash in production**")) == "fix"
-
-    def test_flagged_marker_returns_fix(self):
-        assert _classify_action(_thread(body="🚩 **Flagged: Security issue**")) == "fix"
-
-    def test_info_marker_returns_acknowledge(self):
-        assert _classify_action(_thread(body="📝 **Info: Consider using a constant**")) == "acknowledge"
-
-    def test_nit_keyword_returns_acknowledge(self):
-        assert _classify_action(_thread(body="**Nit: trailing whitespace**")) == "acknowledge"
-
-    def test_style_keyword_returns_acknowledge(self):
-        assert _classify_action(_thread(body="Style suggestion: use snake_case here")) == "acknowledge"
-
-    def test_consider_keyword_returns_acknowledge(self):
-        assert _classify_action(_thread(body="Consider extracting this into a helper")) == "acknowledge"
-
-    def test_vague_comment_returns_ambiguous(self):
-        assert _classify_action(_thread(body="This could be improved")) == "ambiguous"
-
-    def test_empty_body_returns_ambiguous(self):
-        assert _classify_action(_thread(body="")) == "ambiguous"
-
-    def test_no_comments_returns_ambiguous(self):
-        thread = _thread()
-        thread.comments = []
-        assert _classify_action(thread) == "ambiguous"
 
 
 class TestHasOwnerReply:
@@ -338,5 +303,3 @@ class TestTriageNarrowIntegration:
         assert inline.title == "null check missing"
         assert inline.file == "src/main.py"
         assert inline.line == 10
-        # "Bug" keyword → action should be "fix"
-        assert inline.action == "fix"

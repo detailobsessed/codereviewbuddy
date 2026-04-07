@@ -13,7 +13,7 @@ An MCP server that helps your AI coding agent manage PR review comments from any
 
 ### Review comment management
 
-- **Triage review comments** — `triage_review_comments` filters to only actionable inline threads, suggests fix/reply actions, and includes direct GitHub URLs for each comment
+- **Triage review comments** — `triage_review_comments` filters to only actionable inline threads and includes direct GitHub URLs for each comment
 - **Get thread details** — `get_thread` fetches full conversation history for any thread by node ID
 - **Reply to anything** — inline review threads (`PRRT_`), PR-level reviews (`PRR_`), and bot issue comments (`IC_`) all routed to the correct GitHub API
 
@@ -181,7 +181,7 @@ If your MCP client reports `No module named 'fastmcp.server.tasks.routing'`, the
 | Tool | Tags | Description |
 | ---- | ---- | ----------- |
 | `summarize_review_status` | query, discovery | Lightweight stack-wide overview — start here |
-| `triage_review_comments` | query | Only actionable inline threads with suggested actions |
+| `triage_review_comments` | query | Only actionable inline threads needing attention |
 | `get_thread` | query | Full thread details by node ID — use after triage for conversation history |
 | `reply_to_comment` | command | Reply to inline threads (`PRRT_`), PR-level reviews (`PRR_`), or bot comments (`IC_`) |
 | `diagnose_ci` | query | Diagnose CI failures — finds the failed run, jobs, steps, and error lines in one call |
@@ -221,7 +221,7 @@ codereviewbuddy works **zero-config** with sensible defaults. All configuration 
 
 ```
 1. summarize_review_status()                     # Stack-wide overview — start here
-2. triage_review_comments(pr_numbers=[42, 43])   # Only actionable threads with suggested actions
+2. triage_review_comments(pr_numbers=[42, 43])   # Only actionable threads needing attention
 3. # Fix bugs flagged by triage, then:
 4. reply_to_comment(42, thread_id, "Fixed in ...")  # Reply explaining the fix
 5. diagnose_ci(pr_number=42)                     # If CI fails, diagnose in one call
