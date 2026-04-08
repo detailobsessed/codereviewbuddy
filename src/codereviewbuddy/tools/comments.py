@@ -37,6 +37,7 @@ query($owner: String!, $repo: String!, $pr: Int!, $cursor: String) {
         nodes {
           id
           isResolved
+          isOutdated
           comments(first: 10) {
             nodes {
               author { login }
@@ -132,6 +133,7 @@ def _parse_threads(raw_threads: list[dict[str, Any]], pr_number: int) -> list[Re
                 line=first_comment.get("line"),
                 reviewer=author,
                 comments=comments,
+                is_outdated=node.get("isOutdated", False),
             )
         )
     return threads
@@ -440,6 +442,7 @@ def _thread_to_triage_item(thread: ReviewThread) -> TriageItem:
         reviewer=thread.reviewer,
         title=_extract_title(body),
         comment_url=first.url if first else "",
+        is_outdated=thread.is_outdated,
     )
 
 

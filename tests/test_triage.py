@@ -30,6 +30,7 @@ def _thread(
     file: str = "src/main.py",
     line: int = 10,
     is_pr_review: bool = False,
+    is_outdated: bool = False,
     extra_comments: list[ReviewComment] | None = None,
 ) -> ReviewThread:
     comments = [
@@ -50,6 +51,7 @@ def _thread(
         reviewer=reviewer,
         comments=comments,
         is_pr_review=is_pr_review,
+        is_outdated=is_outdated,
     )
 
 
@@ -215,6 +217,18 @@ class TestTriageReviewComments:
         result = await triage_review_comments([42])
         assert result.total == 1
 
+    async def test_outdated_thread_included_but_flagged(self, mocker: MockerFixture):
+        """Outdated threads should appear in triage with is_outdated=True."""
+        outdated = _thread(thread_id="PRRT_old", is_outdated=True, body="**Bug: stale issue**")
+        fresh = _thread(thread_id="PRRT_new", is_outdated=False, body="**Bug: fresh issue**")
+        self._mock_list(mocker, [outdated, fresh])
+
+        result = await triage_review_comments([42], repo="o/r")
+        assert result.total == 2
+        by_id = {item.thread_id: item for item in result.items}
+        assert by_id["PRRT_old"].is_outdated is True
+        assert by_id["PRRT_new"].is_outdated is False
+
     async def test_empty_result_message(self, mocker: MockerFixture):
         """Empty triage should return a helpful message."""
         self._mock_list(mocker, [])
@@ -240,6 +254,7 @@ GRAPHQL_RESPONSE_WITH_THREADS = {
                         {
                             "id": "PRRT_inline1",
                             "isResolved": False,
+                            "isOutdated": True,
                             "comments": {
                                 "nodes": [
                                     {
@@ -298,8 +313,9 @@ class TestTriageNarrowIntegration:
         assert "PRRT_inline1" in ids  # unresolved inline
         assert "PRRT_resolved" not in ids  # resolved — filtered out
 
-        # Verify title was extracted from bold text
+        # Verify title and is_outdated were extracted
         inline = result.items[0]
         assert inline.title == "null check missing"
         assert inline.file == "src/main.py"
         assert inline.line == 10
+        assert inline.is_outdated is True

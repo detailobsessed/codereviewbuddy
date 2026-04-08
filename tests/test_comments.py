@@ -27,6 +27,7 @@ from codereviewbuddy.tools.comments import (
 SAMPLE_THREAD_NODE = {
     "id": "PRRT_kwDOtest123",
     "isResolved": False,
+    "isOutdated": True,
     "comments": {
         "nodes": [
             {
@@ -134,6 +135,30 @@ class TestParseThreads:
         node = {"id": "PRRT_empty", "isResolved": False, "comments": {"nodes": []}}
         threads = _parse_threads([node], pr_number=42)
         assert len(threads) == 0
+
+    def test_surfaces_is_outdated(self):
+        threads = _parse_threads([SAMPLE_THREAD_NODE], pr_number=42)
+        assert threads[0].is_outdated is True
+
+    def test_defaults_is_outdated_false(self):
+        """Missing isOutdated in GraphQL response defaults to False."""
+        node = {
+            "id": "PRRT_no_outdated",
+            "isResolved": False,
+            "comments": {
+                "nodes": [
+                    {
+                        "author": {"login": "bot"},
+                        "body": "test",
+                        "createdAt": "2026-02-06T10:00:00Z",
+                        "path": "f.py",
+                        "line": 1,
+                    }
+                ]
+            },
+        }
+        threads = _parse_threads([node], pr_number=42)
+        assert threads[0].is_outdated is False
 
     def test_resolved_status(self):
         threads = _parse_threads([SAMPLE_RESOLVED_THREAD], pr_number=42)
