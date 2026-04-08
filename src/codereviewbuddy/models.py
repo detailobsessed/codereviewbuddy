@@ -35,6 +35,7 @@ class ReviewThread(BaseModel):
     reviewer: str = Field(description="GitHub login of the user or bot that posted the first comment")
     comments: list[ReviewComment] = Field(default_factory=list, description="Comments in this thread")
     is_pr_review: bool = Field(default=False, description="True for PR-level reviews (PRR_ IDs) — not resolvable via resolveReviewThread")
+    is_outdated: bool = Field(default=False, description="True when the diff has changed since the comment was posted")
 
 
 class StackPR(BaseModel):
@@ -111,6 +112,7 @@ class TriageItem(BaseModel):
     reviewer: str = Field(description="GitHub login of the user or bot that posted this thread")
     title: str = Field(default="", description="Short title extracted from the comment (first bold text)")
     comment_url: str = Field(default="", description="Direct URL to the comment on GitHub for user navigation")
+    is_outdated: bool = Field(default=False, description="True when the diff changed since comment was posted — consider deprioritizing")
 
 
 class ActivityEvent(BaseModel):
