@@ -202,6 +202,7 @@ class TestNodeToReviewThread:
         assert thread.reviewer == "ai-reviewer-a[bot]"
         assert thread.file == "src/codereviewbuddy/gh.py"
         assert thread.status == "unresolved"
+        assert thread.is_outdated is True
         assert len(thread.comments) == 1
 
     def test_pr_review(self):

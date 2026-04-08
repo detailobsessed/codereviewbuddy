@@ -204,6 +204,7 @@ query($id: ID!) {
       __typename
       id
       isResolved
+      isOutdated
       pullRequest { number }
       comments(first: 50) {
         nodes {
